@@ -1,0 +1,8 @@
+// Divisione e resto: a, b interi con a >= 0 e b > 0; q = 0 e r = 0 all'ingresso.
+// Uscita: q = a/b, r = a%b, a = 0. Il dividendo viene spostato in r via __mn_move_int (stack locale).
+procedure __mn_divmod_nonneg(int a, int b, int q, int r)
+    call __mn_move_int(r, a)
+    from r >= b loop
+        r -= b
+        q += 1
+    until r < b

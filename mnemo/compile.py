@@ -1,0 +1,58 @@
+"""C → .kairos: parse, lower, emit, prelude lib/."""
+
+from __future__ import annotations
+
+from mnemo.c_lower import (
+    infer_auto_lib_files,
+    infer_lib_files_from_calls,
+    lower_file_to_program,
+)
+from mnemo.c_parse import parse_c
+from mnemo.emit_kairos import emit_program
+from mnemo.errors import MnemoCompileError
+from mnemo.prelude import lib_procedure_index, load_prelude_kairos, parse_mnemo_main_argc
+
+
+def _merge_lib_lists(a: list[str], b: list[str]) -> list[str]:
+    """Concatena senza duplicati, preservando l’ordine (prima `a`, poi nuovi da `b`)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in a + b:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def compile_c_to_kairos(path: str, *, main_argc: int | None = None) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+    except OSError as e:
+        raise MnemoCompileError(f"file non trovato o non leggibile: {path}") from e
+    ast = parse_c(path)
+    proc_index = lib_procedure_index()
+    lib_names = _merge_lib_lists(
+        infer_auto_lib_files(ast),
+        infer_lib_files_from_calls(ast, proc_index),
+    )
+    try:
+        prelude = load_prelude_kairos(lib_names)
+    except FileNotFoundError as e:
+        raise MnemoCompileError(str(e)) from e
+    argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
+    if argc_use < 0:
+        raise MnemoCompileError("main_argc deve essere >= 0")
+    prog = lower_file_to_program(ast, main_argc=argc_use)
+    body = emit_program(prog)
+    return (prelude + body) if prelude else body
+
+
+def write_kairos_next_to_c(c_path: str, content: str) -> str:
+    """Scrive `stem.kairos` nella stessa directory di `c_path`. Ritorna il path scritto."""
+    from pathlib import Path
+
+    p = Path(c_path).resolve()
+    out = p.with_suffix(".kairos")
+    out.write_text(content, encoding="utf-8")
+    return str(out)

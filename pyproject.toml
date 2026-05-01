@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mnemo"
+version = "0.1.0"
+description = "Mnemo: IR e toolchain verso Kairos (C-like → .kairos)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pycparser>=2.22",
+]
+
+[project.scripts]
+mnemo = "mnemo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mnemo*"]

@@ -1,0 +1,7 @@
+// Sposta il valore di src in dst (src azzerato) usando uno stack locale come "garbage" / condotto.
+// Utile per preservare la reversibilità quando si deve copiare senza sommare.
+procedure __mn_move_int(int dst, int src)
+    local stack __mn_g = nil
+    push(src, __mn_g)
+    pop(dst, __mn_g)
+    delocal stack __mn_g = nil

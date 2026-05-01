@@ -1,0 +1,7 @@
+// Resto: a >= 0, b > 0, r = 0 all'ingresso. Uscita: r = a % b, a = 0.
+// Stesso schema di sottrazioni ripetute di divmod, senza tracciare il quoziente.
+procedure __mn_mod_nonneg(int a, int b, int r)
+    call __mn_move_int(r, a)
+    from r >= b loop
+        r -= b
+    until r < b
