@@ -24,7 +24,9 @@ def _merge_lib_lists(a: list[str], b: list[str]) -> list[str]:
     return out
 
 
-def compile_c_to_kairos(path: str, *, main_argc: int | None = None) -> str:
+def compile_c_to_kairos(
+    path: str, *, main_argc: int | None = None, ptr_pool_size: int = 4
+) -> str:
     try:
         with open(path, encoding="utf-8") as f:
             src = f.read()
@@ -37,13 +39,13 @@ def compile_c_to_kairos(path: str, *, main_argc: int | None = None) -> str:
         infer_lib_files_from_calls(ast, proc_index),
     )
     try:
-        prelude = load_prelude_kairos(lib_names)
+        prelude = load_prelude_kairos(lib_names, ptr_pool_size=ptr_pool_size)
     except FileNotFoundError as e:
         raise MnemoCompileError(str(e)) from e
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")
-    prog = lower_file_to_program(ast, main_argc=argc_use)
+    prog = lower_file_to_program(ast, main_argc=argc_use, ptr_pool_size=ptr_pool_size)
     body = emit_program(prog)
     return (prelude + body) if prelude else body
 

@@ -124,15 +124,37 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
 
 
 def _emit_main(fn: Function) -> str:
+    """
+    Tutti gli interi di procedura: `local int … = 0`; in coda `push` (azzera) e `delocal int … = 0`.
+    Le variabili solo per `continue` sono `__mn_lc*` (IR): non compaiono qui, solo nei blocchi
+    `local`/`delocal` annidati — niente omonimia con `__mn_e*` in testa al main.
+    """
     lines: list[str] = ["procedure main()"]
-    for typ, name in fn.locals:
-        if typ == "stack":
-            lines.append(f"    stack {name}")
-        else:
-            lines.append(f"    int {name}")
+    stacks = [(t, n) for t, n in fn.locals if t == "stack"]
+    stack_names = {n for _t, n in stacks}
+    ints = [(t, n) for t, n in fn.locals if t == "int"]
+    hist = "__mn_hist"
+
+    if len(ints) > 0 and hist not in stack_names:
+        lines.append(f"    stack {hist}")
+    for typ, name in stacks:
+        lines.append(f"    stack {name}")
+
+    if len(ints) > 0:
+        for _t, name in ints:
+            lines.append(f"    local int {name} = 0")
+        body_indent = "        "
+    else:
+        body_indent = "    "
+
     for b in fn.blocks:
         for ins in b.instrs:
-            _emit_instr(lines, ins, "    ")
+            _emit_instr(lines, ins, body_indent)
+
+    for _t, name in reversed(ints):
+        lines.append(f"    push({name}, {hist})")
+        lines.append(f"    delocal int {name} = 0")
+
     return "\n".join(lines)
 
 

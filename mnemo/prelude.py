@@ -8,6 +8,16 @@ import re
 from pathlib import Path
 
 from mnemo.errors import MnemoCompileError
+from mnemo.ptr_pool_kairos import emit_ptr_pool_kairos
+
+# Procedure emesse a compile-time (vedi `emit_ptr_pool_kairos`); il file `ptr_pool.kairos` in lib può essere solo un stub.
+_VPTR_LIB = "ptr_pool.kairos"
+_VPTR_PROCS = (
+    "__mn_pool_alloc",
+    "__mn_pool_store",
+    "__mn_pool_load",
+    "__mn_pool_free",
+)
 
 _PROC_HEAD = re.compile(
     r"^\s*procedure\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(",
@@ -37,6 +47,8 @@ def lib_procedure_index() -> dict[str, str]:
                     f"procedura Kairos {name!r} definita due volte: {prev} e {path.name}"
                 )
             index[name] = path.name
+    for name in _VPTR_PROCS:
+        index.setdefault(name, _VPTR_LIB)
     return index
 
 
@@ -53,13 +65,18 @@ def parse_mnemo_main_argc(source: str) -> int:
     return 0
 
 
-def load_prelude_kairos(lib_filenames: list[str]) -> str:
+def load_prelude_kairos(
+    lib_filenames: list[str], *, ptr_pool_size: int = 4
+) -> str:
     """Legge i file dalla cartella lib e li concatena (testo grezzo, senza main)."""
     if not lib_filenames:
         return ""
     root = lib_dir()
     chunks: list[str] = []
     for lf in lib_filenames:
+        if lf == _VPTR_LIB:
+            chunks.append(emit_ptr_pool_kairos(ptr_pool_size).rstrip())
+            continue
         path = root / lf
         if not path.is_file():
             raise FileNotFoundError(f"libreria Kairos non trovata: {path}")

@@ -1,0 +1,2 @@
+// Stub: le procedure `__mn_pool_*` non sono lette da questo file.
+// Il preambolo le emette a compile-time da `mnemo/ptr_pool_kairos.py` (N = `--ptr-pool-size`).

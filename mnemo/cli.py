@@ -82,6 +82,13 @@ def main(argv: list[str] | None = None) -> None:
         metavar="N",
         help="sovrascrive // mnemo-main-argc (default da sorgente: 0 se manca la direttiva; N>=0)",
     )
+    p_c.add_argument(
+        "--ptr-pool-size",
+        type=int,
+        default=4,
+        metavar="N",
+        help="celle pool malloc/free (__mn_mem0..__mn_mem{N-1}); default 4, max 256",
+    )
     p_c.set_defaults(handler=_cmd_compile)
 
     p_r = sub.add_parser(
@@ -101,6 +108,13 @@ def main(argv: list[str] | None = None) -> None:
         metavar="N",
         help="come per compile: sovrascrive argc (senza flag: 0 o valore // mnemo-main-argc)",
     )
+    p_r.add_argument(
+        "--ptr-pool-size",
+        type=int,
+        default=4,
+        metavar="N",
+        help="come per compile: dimensione pool puntatori",
+    )
     p_r.set_defaults(handler=_cmd_run)
 
     args = parser.parse_args(argv)
@@ -117,7 +131,11 @@ def _cmd_emit_kairos(_args: argparse.Namespace) -> None:
 
 def _cmd_compile(args: argparse.Namespace) -> None:
     try:
-        out = compile_c_to_kairos(args.input, main_argc=args.main_argc)
+        out = compile_c_to_kairos(
+            args.input,
+            main_argc=args.main_argc,
+            ptr_pool_size=args.ptr_pool_size,
+        )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
         sys.exit(1)
@@ -137,7 +155,11 @@ def _cmd_compile(args: argparse.Namespace) -> None:
 
 def _cmd_run(args: argparse.Namespace) -> None:
     try:
-        out = compile_c_to_kairos(args.input, main_argc=args.main_argc)
+        out = compile_c_to_kairos(
+            args.input,
+            main_argc=args.main_argc,
+            ptr_pool_size=args.ptr_pool_size,
+        )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
         sys.exit(1)
