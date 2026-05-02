@@ -1,0 +1,28 @@
+procedure main()
+    stack __mn_hist
+    local int __mn_mem0 = 0
+    local int __mn_mem1 = 0
+    local int __mn_mem2 = 0
+    local int __mn_mem3 = 0
+    local int __mn_mem4 = 0
+    local int __mn_mem5 = 0
+    local int __mn_exit = 0
+        // generato da Mnemo da C
+        __mn_mem0 += 7
+        __mn_mem1 += 0
+        show(__mn_mem0)
+        // return
+    push(__mn_exit, __mn_hist)
+    delocal int __mn_exit = 0
+    push(__mn_mem5, __mn_hist)
+    delocal int __mn_mem5 = 0
+    push(__mn_mem4, __mn_hist)
+    delocal int __mn_mem4 = 0
+    push(__mn_mem3, __mn_hist)
+    delocal int __mn_mem3 = 0
+    push(__mn_mem2, __mn_hist)
+    delocal int __mn_mem2 = 0
+    push(__mn_mem1, __mn_hist)
+    delocal int __mn_mem1 = 0
+    push(__mn_mem0, __mn_hist)
+    delocal int __mn_mem0 = 0

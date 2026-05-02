@@ -7,6 +7,7 @@ from mnemo.c_lower import (
     infer_lib_files_from_calls,
     lower_file_to_program,
 )
+from mnemo.layout_collect import compute_program_mem_layout
 from mnemo.c_parse import parse_c
 from mnemo.emit_kairos import emit_program
 from mnemo.errors import MnemoCompileError
@@ -38,14 +39,24 @@ def compile_c_to_kairos(
         infer_auto_lib_files(ast),
         infer_lib_files_from_calls(ast, proc_index),
     )
-    try:
-        prelude = load_prelude_kairos(lib_names, ptr_pool_size=ptr_pool_size)
-    except FileNotFoundError as e:
-        raise MnemoCompileError(str(e)) from e
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")
-    prog = lower_file_to_program(ast, main_argc=argc_use, ptr_pool_size=ptr_pool_size)
+    layout = compute_program_mem_layout(ast, ptr_pool_size)
+    try:
+        prelude = load_prelude_kairos(
+            lib_names,
+            ptr_pool_size=ptr_pool_size,
+            total_mem_cells=layout.total_cells,
+        )
+    except FileNotFoundError as e:
+        raise MnemoCompileError(str(e)) from e
+    prog = lower_file_to_program(
+        ast,
+        main_argc=argc_use,
+        ptr_pool_size=ptr_pool_size,
+        layout=layout,
+    )
     body = emit_program(prog)
     return (prelude + body) if prelude else body
 

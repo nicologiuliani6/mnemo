@@ -131,6 +131,13 @@ class IReturn:
 
 
 @dataclass
+class IShow:
+    """Kairos `show(var)` — stampa `var: <int>` (usato per exit code da mnemo run)."""
+
+    var: str
+
+
+@dataclass
 class IComment:
     text: str
 
@@ -181,6 +188,7 @@ Instr = Union[
     IBranch,
     IJump,
     IReturn,
+    IShow,
     IComment,
     IIfKairos,
     IFromUntilKairos,

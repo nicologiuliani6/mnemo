@@ -66,16 +66,23 @@ def parse_mnemo_main_argc(source: str) -> int:
 
 
 def load_prelude_kairos(
-    lib_filenames: list[str], *, ptr_pool_size: int = 4
+    lib_filenames: list[str],
+    *,
+    ptr_pool_size: int = 4,
+    total_mem_cells: int | None = None,
 ) -> str:
-    """Legge i file dalla cartella lib e li concatena (testo grezzo, senza main)."""
+    """
+    Se `total_mem_cells` è impostato, genera `__mn_pool_*` con quella N (stack+heap);
+    altrimenti usa `ptr_pool_size` (solo heap, comportamento legacy).
+    """
     if not lib_filenames:
         return ""
+    pool_n = total_mem_cells if total_mem_cells is not None else ptr_pool_size
     root = lib_dir()
     chunks: list[str] = []
     for lf in lib_filenames:
         if lf == _VPTR_LIB:
-            chunks.append(emit_ptr_pool_kairos(ptr_pool_size).rstrip())
+            chunks.append(emit_ptr_pool_kairos(pool_n).rstrip())
             continue
         path = root / lf
         if not path.is_file():

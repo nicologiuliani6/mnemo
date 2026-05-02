@@ -18,6 +18,7 @@ from mnemo.ir import (
     IJump,
     ILabel,
     IReturn,
+    IShow,
     IStoreRev,
     ISubEq,
     ISwap,
@@ -60,6 +61,8 @@ def _dump_instr(i: Instr, prefix: str = "") -> str:
         return f"{prefix}  jmp {i.label}"
     if isinstance(i, IReturn):
         return f"{prefix}  return"
+    if isinstance(i, IShow):
+        return f"{prefix}  show {i.var}"
     if isinstance(i, IIfKairos):
         lines = [f"{prefix}  if_kairos {i.lhs} {i.op} {i.rhs}"]
         p2 = prefix + "    "

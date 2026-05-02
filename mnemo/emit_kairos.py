@@ -22,6 +22,7 @@ from mnemo.ir import (
     ILabel,
     ILocalBlock,
     IReturn,
+    IShow,
     IStoreRev,
     ISubEq,
     ISwap,
@@ -90,6 +91,9 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     if isinstance(ins, IReturn):
         lines.append(f"{indent}// return")
         return
+    if isinstance(ins, IShow):
+        lines.append(f"{indent}show({ins.var})")
+        return
     if isinstance(ins, IIfKairos):
         rhs = ins.rhs
         lines.append(f"{indent}if {ins.lhs} {ins.op} {rhs} then")
@@ -121,6 +125,19 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         lines.append(f"{indent}delocal int {ins.var} = 0")
         return
     raise TypeError(ins)
+
+
+def _is_unified_mem_local(name: str) -> bool:
+    """
+    Celle `__mn_memN` del registro globale Mnemo. La VM `push(v, hist)` azzera `v`;
+    nelle procedure utente queste celle sono spesso alias dei parametri del chiamante,
+    quindi l'epilogo non deve fare push sulla cella di ritorno (si usa `delocal int x x`).
+    """
+
+    if not name.startswith("__mn_mem"):
+        return False
+    suffix = name[8:]
+    return bool(suffix) and suffix.isdigit()
 
 
 def _emit_main(fn: Function) -> str:
@@ -159,16 +176,44 @@ def _emit_main(fn: Function) -> str:
 
 
 def _emit_procedure(fn: Function) -> str:
+    """
+    Integer locals: `local int … = 0` (non `int …` a livello procedura: `DECL` →
+    NULL in VM, `+=` / PUSHEQ falliscono). Chiusura: `push` azzera prima di
+    `delocal int … = 0` (la VM rifiuta LOCAL aperte a END_PROC).
+
+    Per `__mn_memN`: niente `push` (non azzerare valori visti dal chiamante);
+    `delocal int x x` — il valore atteso è letto da `x` e coincide col corrente.
+    """
     params = ", ".join(f"int {name}" for _t, name in fn.params)
     lines: list[str] = [f"procedure {fn.name}({params})"]
-    for typ, name in fn.locals:
-        if typ == "stack":
-            lines.append(f"    stack {name}")
-        else:
-            lines.append(f"    int {name}")
+    stacks = [(t, n) for t, n in fn.locals if t == "stack"]
+    stack_names = {n for _t, n in stacks}
+    ints = [(t, n) for t, n in fn.locals if t == "int"]
+    hist = "__mn_hist"
+
+    if len(ints) > 0 and hist not in stack_names:
+        lines.append(f"    stack {hist}")
+    for _typ, name in stacks:
+        lines.append(f"    stack {name}")
+
+    if len(ints) > 0:
+        for _t, name in ints:
+            lines.append(f"    local int {name} = 0")
+        body_indent = "        "
+    else:
+        body_indent = "    "
+
     for b in fn.blocks:
         for ins in b.instrs:
-            _emit_instr(lines, ins, "    ")
+            _emit_instr(lines, ins, body_indent)
+
+    for _t, name in reversed(ints):
+        if _is_unified_mem_local(name):
+            lines.append(f"    delocal int {name} {name}")
+        else:
+            lines.append(f"    push({name}, {hist})")
+            lines.append(f"    delocal int {name} = 0")
+
     return "\n".join(lines)
 
 
