@@ -38,7 +38,10 @@ from mnemo.ir import (
     IHistPush,
     IIfKairos,
     ILocalBlock,
+    IPar,
     IReturn,
+    ISrecv,
+    ISsend,
     IShow,
     ISubEq,
     IXorEq,
@@ -59,6 +62,109 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_pool_free",
     }
 )
+
+# ABI C “pthread” / π-calculus: lowering diretto (non sono procedure Kairos).
+PTHREAD_ABI_NAMES = frozenset(
+    {
+        "pthread_mutex_init",
+        "pthread_mutex_lock",
+        "pthread_mutex_unlock",
+        "pthread_mutex_destroy",
+        "mnemo_pthread_parallel2",
+        "mnemo_pthread_start",
+        "mnemo_pthread_start1",
+        "mnemo_pthread_parallel_with",
+        "mnemo_pthread_parallel_with1",
+    }
+)
+
+PTHREAD_ABI_TWO_REGION_PAR = frozenset(
+    {
+        "mnemo_pthread_parallel2",
+        "mnemo_pthread_parallel_with",
+        "mnemo_pthread_parallel_with1",
+    }
+)
+
+
+def _func_body_uses_two_region_parallel(ast: c.FileAST, fname: str) -> bool:
+    """Il corpo di `fname` contiene un ABI PAR a due rami che richiede due finestre __mn_mem."""
+    for ext in ast.ext:
+        if not isinstance(ext, c.FuncDef) or ext.decl.name != fname:
+            continue
+        stack: list[c.Node | None] = [ext.body]
+        while stack:
+            n = stack.pop()
+            if n is None:
+                continue
+            if isinstance(n, c.FuncCall) and isinstance(n.name, c.ID):
+                if n.name.name in PTHREAD_ABI_TWO_REGION_PAR:
+                    return True
+            for _na, ch in n.children():
+                if isinstance(ch, list):
+                    stack.extend(ch)
+                elif ch is not None:
+                    stack.append(ch)
+        return False
+    return False
+
+
+def infer_parallel_region1_workers(ast: c.FileAST) -> frozenset[str]:
+    """
+    Worker che usa la finestra memoria «regione 1» (S..2S-1): secondo argomento di
+    `mnemo_pthread_parallel2`, primo argomento di `parallel_with` / `parallel_with1`.
+    """
+    out: set[str] = set()
+    stack: list[c.Node | None] = [ast]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if isinstance(n, c.FuncCall) and isinstance(n.name, c.ID):
+            nm = n.name.name
+            el = n.args
+            exprs = list(el.exprs) if el is not None else []
+            if nm == "mnemo_pthread_parallel2" and len(exprs) >= 2:
+                a1 = exprs[1]
+                if isinstance(a1, c.ID):
+                    out.add(a1.name)
+            elif nm in (
+                "mnemo_pthread_parallel_with",
+                "mnemo_pthread_parallel_with1",
+            ) and exprs:
+                a0 = exprs[0]
+                if isinstance(a0, c.ID):
+                    out.add(a0.name)
+        for _na, ch in n.children():
+            if isinstance(ch, list):
+                stack.extend(ch)
+            elif ch is not None:
+                stack.append(ch)
+    return frozenset(out)
+
+
+def _func_reads_partition1_file_vars(
+    ast: c.FileAST, fname: str, par1: frozenset[str]
+) -> bool:
+    if not par1:
+        return False
+    fdef = _get_funcdef(ast, fname)
+    if fdef is None or fdef.body is None:
+        return False
+    stack: list[c.Node | None] = [fdef.body]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if isinstance(n, c.ID) and n.name in par1:
+            return True
+        for _na, ch in n.children():
+            if isinstance(ch, list):
+                stack.extend(ch)
+            elif ch is not None:
+                stack.append(ch)
+    return False
+
 
 # Contatore pool; le celle sono `__mn_mem0` … `__mn_mem{N-1}` con N = `ctx.ptr_pool_size`.
 _PTR_POOL_CTR = "__mn_pool_ctr"
@@ -298,6 +404,8 @@ class _Ctx:
     mem_layout: ProgramMemLayout | None = None
     fn_name: str = "main"
     total_mem_cells: int = 4
+    """Celle `__mn_mem*` dichiarate nel frame (>= layout.total_cells se due partizioni par)."""
+    physical_mem_cells: int = 4
     heap_base: int = 0
     mem_phys: dict[str, str] = field(default_factory=dict)
     slot_index: dict[str, int] = field(default_factory=dict)
@@ -307,6 +415,10 @@ class _Ctx:
     file_ast: c.FileAST | None = None
     """Ordine dei parametri formali (nomi storage) per snapshot tra due chiamate in `f()+g()`."""
     param_storage_order: tuple[str, ...] = ()
+    channel_kairos: dict[str, str] = field(default_factory=dict)
+    channel_decl_order: list[str] = field(default_factory=list)
+    # Mutex `pthread_mutex_t` a livello file (nomi C ordinati) → formali Kairos `channel` in coda.
+    file_scope_mutex_names: tuple[str, ...] = ()
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -327,6 +439,31 @@ class _Ctx:
 def _ptr_pool_mem_names(ctx: _Ctx) -> tuple[str, ...]:
     n = ctx.total_mem_cells if ctx.mem_layout is not None else ctx.ptr_pool_size
     return tuple(f"__mn_mem{i}" for i in range(n))
+
+
+def _parallel_branch_mem_actuals(ctx: _Ctx, *, left: bool) -> list[str]:
+    """
+    Argomenti `call f(__mn_mem*, …)` per un ramo PAR a due worker.
+    - Indici in `layout.parallel_file_shared_slots`: stesso actual `__mn_mem{i}` (memoria file-scope condivisa).
+    - Altrimenti: ramo sinistro `__mn_mem{i}`, destro `__mn_mem{S+i}` (finestre disgiunte).
+    """
+    if ctx.mem_layout is None:
+        raise MnemoCompileError("layout memoria mancante (parallel)")
+    s = ctx.mem_layout.total_cells
+    shared = ctx.mem_layout.parallel_file_shared_slots
+    base = 0 if left else s
+    out: list[str] = []
+    for i in range(s):
+        if i in shared:
+            out.append(f"__mn_mem{i}")
+        else:
+            out.append(f"__mn_mem{base + i}")
+    if 2 * s > ctx.physical_mem_cells:
+        raise MnemoCompileError(
+            "partizioni memoria parallele: celle fisiche insufficienti "
+            f"(serve physical_mem_cells >= {2 * s})"
+        )
+    return out
 
 
 def _pool_call_slot_arg(
@@ -350,8 +487,24 @@ def _pool_call_slot_arg(
 
 
 def _phys(ctx: _Ctx, logical: str) -> str:
-    """Nome Kairos per una variabile logica (cella __mn_mem{idx})."""
-    return ctx.mem_phys.get(logical, logical)
+    """
+    Nome Kairos per una variabile logica (cella __mn_mem{idx}).
+    Variabili file-scope `("__file__", name)`: `__mn_p1_*` nel worker regione-1
+    usano il formale `__mn_mem{idx}`; in main e nel resto usano `__mn_mem{S+idx}`.
+    """
+    hit = ctx.mem_phys.get(logical)
+    if hit is not None:
+        return hit
+    key = ("__file__", logical)
+    if ctx.mem_layout is not None and key in ctx.mem_layout.slot_of:
+        idx = ctx.mem_layout.slot_of[key]
+        s = ctx.mem_layout.total_cells
+        if logical in ctx.mem_layout.file_scope_partition1:
+            if ctx.fn_name in ctx.mem_layout.parallel_region1_workers:
+                return f"__mn_mem{idx}"
+            return f"__mn_mem{s + idx}"
+        return f"__mn_mem{idx}"
+    return logical
 
 
 def _sizeof_return_bytes(fd: c.FuncDecl, mini: _Ctx) -> int:
@@ -562,6 +715,369 @@ def _scalar_decl_name(node: c.Decl, td: dict[str, c.Node]) -> str | None:
     if t.declname is None:
         return None
     return str(t.declname)
+
+
+def _immediate_named_scalar_typedef(decl: c.Decl) -> str | None:
+    """Es. `typedef int pthread_mutex_t` + `pthread_mutex_t m` → `pthread_mutex_t`."""
+    if not isinstance(decl.type, c.TypeDecl) or decl.type.declname is None:
+        return None
+    inner = decl.type.type
+    if isinstance(inner, c.IdentifierType) and len(inner.names) == 1:
+        return inner.names[0]
+    return None
+
+
+def collect_file_scope_mutex_names(ast: c.FileAST) -> tuple[str, ...]:
+    """Nomi C di `pthread_mutex_t` a livello file (un canale Kairos condiviso tra worker)."""
+    out: list[str] = []
+    for ext in ast.ext:
+        if isinstance(ext, (c.FuncDef, c.Typedef)):
+            continue
+        if not isinstance(ext, c.Decl):
+            continue
+        if isinstance(ext.type, c.FuncDecl):
+            continue
+        if _immediate_named_scalar_typedef(ext) != "pthread_mutex_t":
+            continue
+        if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
+            continue
+        out.append(str(ext.type.declname))
+    return tuple(sorted(out))
+
+
+def _file_scope_channel_actuals(ctx: _Ctx) -> list[str]:
+    return [ctx.channel_kairos[m] for m in ctx.file_scope_mutex_names]
+
+
+def _pthread_mutex_ptr_name(arg: c.Node) -> str:
+    if isinstance(arg, c.UnaryOp) and arg.op == "&" and isinstance(arg.expr, c.ID):
+        return arg.expr.name
+    raise MnemoCompileError("pthread_mutex_*: atteso &mutex (variabile pthread_mutex_t)")
+
+
+def _pthread_assign_worker_first_scalar_arg(
+    fname: str,
+    arg_expr: c.Node,
+    ctx: _Ctx,
+    *,
+    mem_partition_index: int = 0,
+) -> list[Instr]:
+    """
+    Marshalling del primo argomento scalare verso lo slot __mn_mem del worker
+    (start1 / parallel_with1). `mem_partition_index` 0 = base 0; 1 = seconda
+    partizione (`__mn_mem{S+idx}`) quando il worker gira nel ramo PAR isolato.
+    """
+    if ctx.file_ast is None or ctx.mem_layout is None:
+        raise MnemoCompileError("worker con argomento scalare: contesto senza layout o AST")
+    fdef = _get_funcdef(ctx.file_ast, fname)
+    if fdef is None:
+        raise MnemoCompileError(f"worker con argomento scalare: {fname!r} non è definita nel file")
+    fd = fdef.decl.type
+    if not isinstance(fd, c.FuncDecl):
+        raise MnemoCompileError("worker con argomento scalare: firma worker non valida")
+    pm = _Ctx()
+    pm.typedef_map = dict(ctx.typedef_map)
+    pm.struct_specs = dict(ctx.struct_specs)
+    pm.union_specs = dict(ctx.union_specs)
+    pm.enum_constants = dict(ctx.enum_constants)
+    pm.array_param_names = set()
+    param_names = _func_param_storage_names(fd, ctx.typedef_map, pm)
+    if len(param_names) != 1:
+        raise MnemoCompileError(
+            "worker con argomento scalare: serve esattamente un parametro scalare "
+            "(es. `void t(int x)`; niente struct/void)"
+        )
+    log = param_names[0]
+    key = (fname, log)
+    if key not in ctx.mem_layout.slot_of:
+        raise MnemoCompileError("worker con argomento scalare: slot parametro mancante nel layout")
+    idx = ctx.mem_layout.slot_of[key]
+    s = ctx.mem_layout.total_cells
+    phys = mem_partition_index * s + idx
+    dst = f"__mn_mem{phys}"
+    return _lower_assign(dst, arg_expr, ctx)
+
+
+def _pthread_worker_has_no_params(fname: str, ctx: _Ctx) -> bool:
+    if ctx.file_ast is None:
+        return False
+    fdef = _get_funcdef(ctx.file_ast, fname)
+    if fdef is None:
+        return False
+    fd = fdef.decl.type
+    if not isinstance(fd, c.FuncDecl):
+        return False
+    pm = _Ctx()
+    pm.typedef_map = dict(ctx.typedef_map)
+    pm.struct_specs = dict(ctx.struct_specs)
+    pm.union_specs = dict(ctx.union_specs)
+    pm.enum_constants = dict(ctx.enum_constants)
+    pm.array_param_names = set()
+    names = _func_param_storage_names(fd, ctx.typedef_map, pm)
+    return len(names) == 0
+
+
+def _pthread_worker_has_single_scalar_param(fname: str, ctx: _Ctx) -> bool:
+    """True se `void f(int x)` (esattamente un parametro scalare/storage)."""
+    if ctx.file_ast is None:
+        return False
+    fdef = _get_funcdef(ctx.file_ast, fname)
+    if fdef is None:
+        return False
+    fd = fdef.decl.type
+    if not isinstance(fd, c.FuncDecl):
+        return False
+    pm = _Ctx()
+    pm.typedef_map = dict(ctx.typedef_map)
+    pm.struct_specs = dict(ctx.struct_specs)
+    pm.union_specs = dict(ctx.union_specs)
+    pm.enum_constants = dict(ctx.enum_constants)
+    pm.array_param_names = set()
+    names = _func_param_storage_names(fd, ctx.typedef_map, pm)
+    return len(names) == 1
+
+
+def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
+    """Ritorna istruzioni se è una chiamata ABI pthread/π; altrimenti None."""
+    if not isinstance(node.name, c.ID):
+        return None
+    nm = node.name.name
+    if nm not in PTHREAD_ABI_NAMES:
+        return None
+    el = node.args
+    exprs = list(el.exprs) if el is not None else []
+
+    if nm == "mnemo_pthread_start":
+        if ctx.mem_layout is None:
+            raise MnemoCompileError("mnemo_pthread_start: layout memoria mancante")
+        if len(exprs) != 1:
+            raise MnemoCompileError(
+                "mnemo_pthread_start(void (*f)(void)): atteso 1 argomento (nome funzione)"
+            )
+        a0 = exprs[0]
+        if not isinstance(a0, c.ID):
+            raise MnemoCompileError("mnemo_pthread_start: passare il nome della funzione")
+        f0 = a0.name
+        if f0 not in ctx.defined_user_functions:
+            raise MnemoCompileError(
+                "mnemo_pthread_start: la funzione deve essere definita nel file"
+            )
+        if not _pthread_worker_has_no_params(f0, ctx):
+            raise MnemoCompileError(
+                "mnemo_pthread_start: il worker deve essere `void f(void)` (nessun parametro)"
+            )
+        mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
+        chx = _file_scope_channel_actuals(ctx)
+        return [IPar([[ICall(f0, mem_args + chx)]])]
+
+    if nm == "mnemo_pthread_start1":
+        if ctx.mem_layout is None:
+            raise MnemoCompileError("mnemo_pthread_start1: layout memoria mancante")
+        if len(exprs) != 2:
+            raise MnemoCompileError(
+                "mnemo_pthread_start1(void (*f)(void), int arg): servono 2 argomenti"
+            )
+        a0, a1 = exprs[0], exprs[1]
+        if not isinstance(a0, c.ID):
+            raise MnemoCompileError("mnemo_pthread_start1: passare il nome della funzione come primo argomento")
+        f0 = a0.name
+        if f0 not in ctx.defined_user_functions:
+            raise MnemoCompileError(
+                "mnemo_pthread_start1: la funzione deve essere definita nel file"
+            )
+        pre = _pthread_assign_worker_first_scalar_arg(f0, a1, ctx)
+        mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
+        chx = _file_scope_channel_actuals(ctx)
+        ctx.use_hist = True
+        return pre + [IPar([[ICall(f0, mem_args + chx)]])]
+
+    if nm == "mnemo_pthread_parallel_with":
+        if ctx.mem_layout is None:
+            raise MnemoCompileError("mnemo_pthread_parallel_with: layout memoria mancante")
+        if len(exprs) != 2:
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with(void (*worker)(void), void (*cont)(void)): "
+                "servono 2 argomenti"
+            )
+        a0, a1 = exprs[0], exprs[1]
+        if not isinstance(a0, c.ID) or not isinstance(a1, c.ID):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with: passare i nomi delle funzioni (void (*)(void))"
+            )
+        f_work, f_cont = a0.name, a1.name
+        if f_work not in ctx.defined_user_functions or f_cont not in ctx.defined_user_functions:
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with: worker e continuazione devono essere definite nel file"
+            )
+        if not _pthread_worker_has_no_params(f_work, ctx):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with: il worker deve essere `void f(void)`"
+            )
+        if not _pthread_worker_has_no_params(f_cont, ctx):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with: la continuazione deve essere `void g(void)`"
+            )
+        chx = _file_scope_channel_actuals(ctx)
+        return [
+            IPar(
+                [
+                    [ICall(f_work, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
+                    [ICall(f_cont, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
+                ]
+            )
+        ]
+
+    if nm == "mnemo_pthread_parallel_with1":
+        if ctx.mem_layout is None:
+            raise MnemoCompileError("mnemo_pthread_parallel_with1: layout memoria mancante")
+        if len(exprs) != 3:
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with1(void (*w)(T), arg, void (*cont)(void)): "
+                "servono 3 argomenti"
+            )
+        a0, a1, a2 = exprs[0], exprs[1], exprs[2]
+        if not isinstance(a0, c.ID) or not isinstance(a2, c.ID):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with1: worker e continuazione come nomi di funzione"
+            )
+        f_work, f_cont = a0.name, a2.name
+        if f_work not in ctx.defined_user_functions or f_cont not in ctx.defined_user_functions:
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with1: worker e continuazione devono essere definite nel file"
+            )
+        if not _pthread_worker_has_no_params(f_cont, ctx):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel_with1: la continuazione deve essere `void g(void)`"
+            )
+        pre = _pthread_assign_worker_first_scalar_arg(
+            f_work, a1, ctx, mem_partition_index=1
+        )
+        ctx.use_hist = True
+        chx = _file_scope_channel_actuals(ctx)
+        return pre + [
+            IPar(
+                [
+                    [ICall(f_work, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
+                    [ICall(f_cont, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
+                ]
+            )
+        ]
+
+    if nm == "mnemo_pthread_parallel2":
+        if ctx.mem_layout is None:
+            raise MnemoCompileError("mnemo_pthread_parallel2: layout memoria mancante")
+        if len(exprs) not in (2, 4):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel2: attesi 2 argomenti (f, g entrambi void(void)) "
+                "oppure 4 (f, g void(int), arg_f, arg_g)"
+            )
+        a0, a1 = exprs[0], exprs[1]
+        if not isinstance(a0, c.ID) or not isinstance(a1, c.ID):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel2: i primi due argomenti devono essere nomi di funzione"
+            )
+        f0, f1 = a0.name, a1.name
+        if f0 not in ctx.defined_user_functions or f1 not in ctx.defined_user_functions:
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel2: entrambe le funzioni devono essere definite nel file"
+            )
+        if len(exprs) == 2:
+            if not _pthread_worker_has_no_params(f0, ctx) or not _pthread_worker_has_no_params(
+                f1, ctx
+            ):
+                raise MnemoCompileError(
+                    "mnemo_pthread_parallel2(f,g): servono `void f(void)` e `void g(void)` "
+                    "(oppure 4 argomenti con `void f(int)` / `void g(int)`)"
+                )
+            chx = _file_scope_channel_actuals(ctx)
+            return [
+                IPar(
+                    [
+                        [ICall(f0, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
+                        [ICall(f1, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
+                    ]
+                )
+            ]
+        if not _pthread_worker_has_single_scalar_param(
+            f0, ctx
+        ) or not _pthread_worker_has_single_scalar_param(f1, ctx):
+            raise MnemoCompileError(
+                "mnemo_pthread_parallel2(f,g,a,b): f e g devono avere esattamente un parametro "
+                "scalare (es. void worker(int n))"
+            )
+        a2, a3 = exprs[2], exprs[3]
+        pre0 = _pthread_assign_worker_first_scalar_arg(
+            f0, a2, ctx, mem_partition_index=0
+        )
+        pre1 = _pthread_assign_worker_first_scalar_arg(
+            f1, a3, ctx, mem_partition_index=1
+        )
+        ctx.use_hist = True
+        chx = _file_scope_channel_actuals(ctx)
+        return pre0 + pre1 + [
+            IPar(
+                [
+                    [ICall(f0, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
+                    [ICall(f1, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
+                ]
+            )
+        ]
+
+    if nm == "pthread_mutex_init":
+        if len(exprs) != 2:
+            raise MnemoCompileError("pthread_mutex_init: attesi 2 argomenti")
+        vn = _pthread_mutex_ptr_name(exprs[0])
+        if vn not in ctx.channel_kairos:
+            raise MnemoCompileError(f"pthread_mutex_init: {vn!r} non è un pthread_mutex_t")
+        ch = ctx.channel_kairos[vn]
+        tok = ctx.fresh_temp()
+        ctx.use_hist = True
+        return [
+            IComment("pthread_mutex_init → token su canale (mutex libero)"),
+            IConst(tok, 1),
+            ISsend(ch, [tok]),
+        ]
+
+    if nm == "pthread_mutex_lock":
+        if len(exprs) != 1:
+            raise MnemoCompileError("pthread_mutex_lock: atteso 1 argomento")
+        vn = _pthread_mutex_ptr_name(exprs[0])
+        if vn not in ctx.channel_kairos:
+            raise MnemoCompileError(f"pthread_mutex_lock: {vn!r} non è un pthread_mutex_t")
+        ch = ctx.channel_kairos[vn]
+        t = ctx.fresh_temp()
+        ctx.use_hist = True
+        return [
+            IComment("pthread_mutex_lock → srecv token (π-style)"),
+            ISrecv([t], ch),
+        ]
+
+    if nm == "pthread_mutex_unlock":
+        if len(exprs) != 1:
+            raise MnemoCompileError("pthread_mutex_unlock: atteso 1 argomento")
+        vn = _pthread_mutex_ptr_name(exprs[0])
+        if vn not in ctx.channel_kairos:
+            raise MnemoCompileError(f"pthread_mutex_unlock: {vn!r} non è un pthread_mutex_t")
+        ch = ctx.channel_kairos[vn]
+        tok = ctx.fresh_temp()
+        ctx.use_hist = True
+        return [IConst(tok, 1), ISsend(ch, [tok])]
+
+    if nm == "pthread_mutex_destroy":
+        if len(exprs) != 1:
+            raise MnemoCompileError("pthread_mutex_destroy: atteso 1 argomento")
+        vn = _pthread_mutex_ptr_name(exprs[0])
+        if vn not in ctx.channel_kairos:
+            raise MnemoCompileError(f"pthread_mutex_destroy: {vn!r} non è un pthread_mutex_t")
+        ch = ctx.channel_kairos[vn]
+        t = ctx.fresh_temp()
+        ctx.use_hist = True
+        return [
+            IComment("pthread_mutex_destroy: svuota token residuo sul canale (prima del delocal)"),
+            ISrecv([t], ch),
+        ]
+
+    return None
 
 
 def _scalar_array_param_name(node: c.Decl, td: dict[str, c.Node]) -> str | None:
@@ -1782,7 +2298,8 @@ def _lower_funccall_with_ret(
                             _lower_assign(dst, c.ID(rphys, coord), ctx)
                         )
             ctx.use_hist = True
-            return pre_uc + [ICall(name, mem_args)] + post_uc
+            chx = _file_scope_channel_actuals(ctx)
+            return pre_uc + [ICall(name, mem_args + chx)] + post_uc
 
     if wants and ret_sink is None:
         raise MnemoCompileError(f"{name} restituisce un valore: uso interno errato")
@@ -2632,6 +3149,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             varname = str(node.type.declname)
             if (
                 varname in ctx.int_locals
+                or varname in ctx.channel_kairos
                 or varname in ctx.array_info
                 or varname in ctx.struct_tag_of_var
                 or varname in ctx.union_tag_of_var
@@ -2655,6 +3173,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             varname = str(node.type.declname)
             if (
                 varname in ctx.int_locals
+                or varname in ctx.channel_kairos
                 or varname in ctx.array_info
                 or varname in ctx.struct_tag_of_var
                 or varname in ctx.union_tag_of_var
@@ -2703,6 +3222,27 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 "array: inizializzatore `{ … }` oppure nessuno (non un singolo valore)"
             )
 
+        imm = _immediate_named_scalar_typedef(node)
+        if imm == "pthread_mutex_t":
+            if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
+                raise MnemoCompileError("pthread_mutex_t: nome variabile mancante")
+            name = str(node.type.declname)
+            if (
+                name in ctx.int_locals
+                or name in ctx.channel_kairos
+                or name in ctx.array_info
+                or name in ctx.struct_tag_of_var
+                or name in ctx.union_tag_of_var
+            ):
+                raise MnemoCompileError(f"ridichiarazione: {name}")
+            kai = f"__mn_mtx_{name}"
+            ctx.channel_kairos[name] = kai
+            ctx.channel_decl_order.append(name)
+            ctx.var_types[name] = node.type
+            if node.init is not None:
+                raise MnemoCompileError("pthread_mutex_t: niente inizializzatore")
+            return []
+
         td = ctx.typedef_map
         name = _scalar_decl_name(node, td)
         if name is None:
@@ -2716,6 +3256,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             name = pn
         if (
             name in ctx.int_locals
+            or name in ctx.channel_kairos
             or name in ctx.array_info
             or name in ctx.struct_tag_of_var
             or name in ctx.union_tag_of_var
@@ -2870,6 +3411,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
     if isinstance(node, c.FuncCall):
         if not isinstance(node.name, c.ID):
             raise MnemoCompileError("callee non è un identificatore")
+        pthread_ins = _lower_pthread_mnemo_call(node, ctx)
+        if pthread_ins is not None:
+            return pthread_ins
         nm = node.name.name
         if ctx.proc_returns_int.get(nm, False):
             if (
@@ -2939,14 +3483,8 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             ei, op, temps = _eval_expr(node.expr, ctx)
             ctx.use_hist = True
             out: list[Instr] = list(ei)
-            if isinstance(op, Var):
-                out.append(IShow(op.name))
-                for tmp in reversed(temps):
-                    out.append(IHistPush(ctx.scratch, tmp))
-                if temps:
-                    ctx.use_scratch = True
-                out.append(IReturn())
-                return out
+            # Sempre `__mn_exit` + show: così `mnemo run` può usare il valore come exit code
+            # (prima: show sul solo temporaneo es. __mn_e2, il parser non lo vedeva).
             out.extend(
                 [
                     IHistPush(ctx.hist, "__mn_exit"),
@@ -3104,10 +3642,35 @@ def infer_lib_files_from_calls(
     return head + tail
 
 
+def _register_file_scope_struct_union_tags(
+    ctx: _Ctx, file_ast: c.FileAST
+) -> None:
+    """
+    In main le dichiarazioni file-scope popolano struct_tag_of_var / union_tag_of_var;
+    nelle procedure utente va ripetuto, altrimenti `mps.client_done` non risolve `mps`.
+    """
+    for ext in file_ast.ext:
+        if not isinstance(ext, c.Decl):
+            continue
+        if isinstance(ext.type, c.FuncDecl):
+            continue
+        if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
+            continue
+        vn = str(ext.type.declname)
+        ut = _union_tag_for_decl_type(ext.type, ctx)
+        if ut is not None:
+            ctx.union_tag_of_var[vn] = ut
+        st_tag = _struct_tag_for_decl_type(ext.type, ctx)
+        if st_tag is not None:
+            ctx.struct_tag_of_var[vn] = st_tag
+
+
 def _locals_list(ctx: _Ctx) -> list[tuple[str, str]]:
     locals_list: list[tuple[str, str]] = []
     for n in ctx.decl_order:
         locals_list.append(("int", n))
+    for logical in ctx.channel_decl_order:
+        locals_list.append(("channel", ctx.channel_kairos[logical]))
     for n in sorted(
         (x for x in ctx.int_locals if x.startswith("__mn_e") and x[6:].isdigit()),
         key=lambda s: int(s[6:]),
@@ -3125,13 +3688,16 @@ def _lower_user_function(
     callable_names: frozenset[str],
     proc_returns_int: dict[str, bool],
     *,
+    defined_user_functions: frozenset[str],
     layout: ProgramMemLayout,
     file_ast: c.FileAST,
     ptr_pool_size: int,
+    physical_mem_cells: int,
     file_td: dict[str, c.Node],
     file_specs: dict[str, list[tuple[str, c.Node]]],
     file_unions: dict[str, list[tuple[str, c.Node]]],
     file_enums: dict[str, int],
+    file_scope_mutex_names: tuple[str, ...] = (),
 ) -> Function:
     name = fdef.decl.name
     fd = fdef.decl.type
@@ -3160,11 +3726,25 @@ def _lower_user_function(
         mem_layout=layout,
         file_ast=file_ast,
         total_mem_cells=layout.total_cells,
+        physical_mem_cells=physical_mem_cells,
         heap_base=layout.heap_base,
+        defined_user_functions=defined_user_functions,
     )
     _bind_ctx_layout(ctx, layout, name)
+    ctx.file_scope_mutex_names = file_scope_mutex_names
+    for m in file_scope_mutex_names:
+        ctx.channel_kairos[m] = f"__mn_mtx_{m}"
+    for (fk, n), _ in layout.slot_of.items():
+        if fk == "__file__":
+            ctx.int_locals.add(n)
+    _register_file_scope_struct_union_tags(ctx, file_ast)
     for i in range(layout.total_cells):
         ctx.int_locals.add(f"__mn_mem{i}")
+    if physical_mem_cells > layout.total_cells:
+        for i in range(layout.total_cells, physical_mem_cells):
+            n = f"__mn_mem{i}"
+            ctx.int_locals.add(n)
+            ctx.decl_order.append(n)
     param_order = [f"__mn_mem{i}" for i in range(layout.total_cells)]
 
     pm = _Ctx()
@@ -3191,9 +3771,10 @@ def _lower_user_function(
 
     instrs = _lower_compound_block_items(list(body.block_items or []), ctx)
 
+    ch_formals = [("channel", ctx.channel_kairos[m]) for m in ctx.file_scope_mutex_names]
     return Function(
         name=name,
-        params=[("int", p) for p in param_order],
+        params=[("int", p) for p in param_order] + ch_formals,
         locals=_locals_list(ctx),
         blocks=[Block("entry", [IComment(f"funzione C {name}")] + instrs)],
     )
@@ -3205,6 +3786,7 @@ def lower_file_to_program(
     main_argc: int = 0,
     ptr_pool_size: int = 4,
     layout: ProgramMemLayout | None = None,
+    physical_mem_cells: int | None = None,
 ) -> Program:
     if not (1 <= ptr_pool_size <= PTR_POOL_MAX):
         raise MnemoCompileError(
@@ -3227,28 +3809,67 @@ def lower_file_to_program(
         collect_file_typedefs_structs_unions_enums(ast)
     )
     proc_returns_int = _merge_proc_returns_int(ast, file_td)
-    callable_names = _all_callable_names(ast)
+    du = frozenset(
+        ext.decl.name
+        for ext in ast.ext
+        if isinstance(ext, c.FuncDef) and ext.decl.name and ext.decl.name != "main"
+    )
+    callable_names = _all_callable_names(ast) | PTHREAD_ABI_NAMES
+    fs_mutexes = collect_file_scope_mutex_names(ast)
 
     if layout is None:
         layout = compute_program_mem_layout(ast, ptr_pool_size)
+    phys = physical_mem_cells if physical_mem_cells is not None else layout.total_cells
+    if phys < layout.total_cells:
+        raise MnemoCompileError(
+            f"physical_mem_cells ({phys}) < layout.total_cells ({layout.total_cells})"
+        )
 
     user_fns: list[Function] = []
     for ext in ast.ext:
         if isinstance(ext, c.FuncDef) and ext.decl.name != "main":
+            fname = ext.decl.name or ""
+            needs_par_body = _func_body_uses_two_region_parallel(ast, fname)
+            needs_par1_read = bool(layout.file_scope_partition1) and (
+                _func_reads_partition1_file_vars(
+                    ast, fname, layout.file_scope_partition1
+                )
+                and fname not in layout.parallel_region1_workers
+            )
+            fn_phys = (
+                phys if (needs_par_body or needs_par1_read) else layout.total_cells
+            )
             user_fns.append(
                 _lower_user_function(
                     ext,
                     callable_names,
                     proc_returns_int,
+                    defined_user_functions=du,
                     layout=layout,
                     file_ast=ast,
                     ptr_pool_size=ptr_pool_size,
+                    physical_mem_cells=fn_phys,
                     file_td=file_td,
                     file_specs=file_specs,
                     file_unions=file_unions,
                     file_enums=file_enums,
+                    file_scope_mutex_names=fs_mutexes,
                 )
             )
+
+    main_phys = (
+        phys
+        if (
+            _func_body_uses_two_region_parallel(ast, "main")
+            or (
+                bool(layout.file_scope_partition1)
+                and _func_reads_partition1_file_vars(
+                    ast, "main", layout.file_scope_partition1
+                )
+            )
+        )
+        else layout.total_cells
+    )
 
     ctx = _Ctx(
         extern_procs=callable_names,
@@ -3262,14 +3883,24 @@ def lower_file_to_program(
         mem_layout=layout,
         file_ast=ast,
         total_mem_cells=layout.total_cells,
+        physical_mem_cells=main_phys,
         heap_base=layout.heap_base,
+        defined_user_functions=du,
     )
     _bind_ctx_layout(ctx, layout, "main")
+    ctx.file_scope_mutex_names = fs_mutexes
+    for m in fs_mutexes:
+        ctx.channel_kairos[m] = f"__mn_mtx_{m}"
+        ctx.channel_decl_order.append(m)
+    for (fk, n), _ in layout.slot_of.items():
+        if fk == "__file__":
+            ctx.int_locals.add(n)
+    _register_file_scope_struct_union_tags(ctx, ast)
     for name, _role in main_param_setup:
         ctx.int_locals.add(name)
-    ctx.decl_order = [f"__mn_mem{i}" for i in range(layout.total_cells)]
+    ctx.decl_order = [f"__mn_mem{i}" for i in range(main_phys)]
     ctx.decl_order.append("__mn_exit")
-    for i in range(layout.total_cells):
+    for i in range(main_phys):
         ctx.int_locals.add(f"__mn_mem{i}")
     ctx.int_locals.add("__mn_exit")
 

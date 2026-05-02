@@ -1,67 +1,50 @@
-procedure fibonacci(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8)
+// KAIROS_ALLOW_PAR_SHARED_INT
+procedure ssend(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9)
     stack __mn_hist
-    stack __mn_scratch
     local int __mn_e0 = 0
-    local int __mn_e1 = 0
-    local int __mn_e2 = 0
-    local int __mn_e3 = 0
-    local int __mn_e4 = 0
-    local int __mn_e5 = 0
-        // funzione C fibonacci
-        if __mn_mem0 <= 1 then
-            push(__mn_mem1, __mn_hist)
-            __mn_mem1 += 1
-            // return
-        else
+        // funzione C ssend
+        push(__mn_mem2, __mn_hist)
+        __mn_mem2 += __mn_mem4
+        push(__mn_mem0, __mn_hist)
+        __mn_mem0 += 1
+        if __mn_mem1 == 0 then
             push(__mn_e0, __mn_hist)
-            __mn_e0 += __mn_mem0
-            __mn_e2 += __mn_mem0
-            __mn_e2 -= 1
-            push(__mn_mem0, __mn_hist)
-            __mn_mem0 += __mn_e2
-            push(__mn_e2, __mn_scratch)
-            push(__mn_mem1, __mn_hist)
-            __mn_mem1 += 0
-            call fibonacci(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8)
-            push(__mn_e1, __mn_hist)
-            __mn_e1 += __mn_mem1
-            push(__mn_mem0, __mn_hist)
-            __mn_mem0 += __mn_e0
-            __mn_e4 += __mn_mem0
-            __mn_e4 -= 2
-            push(__mn_mem0, __mn_hist)
-            __mn_mem0 += __mn_e4
-            push(__mn_e4, __mn_scratch)
-            push(__mn_mem1, __mn_hist)
-            __mn_mem1 += 0
-            call fibonacci(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8)
-            push(__mn_e3, __mn_hist)
-            __mn_e3 += __mn_mem1
-            __mn_e5 += __mn_e1
-            __mn_e5 += __mn_e3
-            push(__mn_mem1, __mn_hist)
-            __mn_mem1 += __mn_e5
-            push(__mn_e5, __mn_scratch)
-            push(__mn_e0, __mn_scratch)
-            push(__mn_e3, __mn_scratch)
-            push(__mn_e1, __mn_scratch)
-            // return
-        fi __mn_mem0 <= 1
-    push(__mn_e5, __mn_hist)
-    delocal int __mn_e5 = 0
-    push(__mn_e4, __mn_hist)
-    delocal int __mn_e4 = 0
-    push(__mn_e3, __mn_hist)
-    delocal int __mn_e3 = 0
-    push(__mn_e2, __mn_hist)
-    delocal int __mn_e2 = 0
-    push(__mn_e1, __mn_hist)
-    delocal int __mn_e1 = 0
+            __mn_e0 += 1
+        fi __mn_mem1 == 0
+        from __mn_e0 != 0 loop
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+            if __mn_mem1 == 0 then
+                push(__mn_e0, __mn_hist)
+                __mn_e0 += 1
+            fi __mn_mem1 == 0
+        until __mn_e0 == 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+procedure srecv(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9)
+    stack __mn_hist
+    local int __mn_e0 = 0
+        // funzione C srecv
+        if __mn_mem0 == 0 then
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 1
+        fi __mn_mem0 == 0
+        from __mn_e0 != 0 loop
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+            if __mn_mem0 == 0 then
+                push(__mn_e0, __mn_hist)
+                __mn_e0 += 1
+            fi __mn_mem0 == 0
+        until __mn_e0 == 0
+        push(__mn_mem3, __mn_hist)
+        __mn_mem3 += __mn_mem2
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += 1
     push(__mn_e0, __mn_hist)
     delocal int __mn_e0 = 0
 procedure main()
     stack __mn_hist
-    stack __mn_scratch
     local int __mn_mem0 = 0
     local int __mn_mem1 = 0
     local int __mn_mem2 = 0
@@ -71,27 +54,56 @@ procedure main()
     local int __mn_mem6 = 0
     local int __mn_mem7 = 0
     local int __mn_mem8 = 0
+    local int __mn_mem9 = 0
+    local int __mn_mem10 = 0
+    local int __mn_mem11 = 0
+    local int __mn_mem12 = 0
+    local int __mn_mem13 = 0
+    local int __mn_mem14 = 0
+    local int __mn_mem15 = 0
+    local int __mn_mem16 = 0
+    local int __mn_mem17 = 0
+    local int __mn_mem18 = 0
+    local int __mn_mem19 = 0
     local int __mn_exit = 0
-    local int __mn_e0 = 0
         // generato da Mnemo da C
-        __mn_mem2 += 20
-        __mn_mem3 += 0
-        push(__mn_mem0, __mn_hist)
-        __mn_mem0 += __mn_mem2
-        push(__mn_mem1, __mn_hist)
-        __mn_mem1 += 0
-        call fibonacci(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8)
-        push(__mn_e0, __mn_hist)
-        __mn_e0 += __mn_mem1
         push(__mn_mem4, __mn_hist)
-        __mn_mem4 += __mn_e0
-        push(__mn_e0, __mn_scratch)
-        show(__mn_mem4)
+        __mn_mem4 += 10
+        push(__mn_mem15, __mn_hist)
+        __mn_mem15 += 0
+        par
+            call ssend(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9)
+        and
+            call srecv(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19)
+        rap
+        push(__mn_exit, __mn_hist)
+        __mn_exit += __mn_mem13
+        show(__mn_exit)
         // return
-    push(__mn_e0, __mn_hist)
-    delocal int __mn_e0 = 0
     push(__mn_exit, __mn_hist)
     delocal int __mn_exit = 0
+    push(__mn_mem19, __mn_hist)
+    delocal int __mn_mem19 = 0
+    push(__mn_mem18, __mn_hist)
+    delocal int __mn_mem18 = 0
+    push(__mn_mem17, __mn_hist)
+    delocal int __mn_mem17 = 0
+    push(__mn_mem16, __mn_hist)
+    delocal int __mn_mem16 = 0
+    push(__mn_mem15, __mn_hist)
+    delocal int __mn_mem15 = 0
+    push(__mn_mem14, __mn_hist)
+    delocal int __mn_mem14 = 0
+    push(__mn_mem13, __mn_hist)
+    delocal int __mn_mem13 = 0
+    push(__mn_mem12, __mn_hist)
+    delocal int __mn_mem12 = 0
+    push(__mn_mem11, __mn_hist)
+    delocal int __mn_mem11 = 0
+    push(__mn_mem10, __mn_hist)
+    delocal int __mn_mem10 = 0
+    push(__mn_mem9, __mn_hist)
+    delocal int __mn_mem9 = 0
     push(__mn_mem8, __mn_hist)
     delocal int __mn_mem8 = 0
     push(__mn_mem7, __mn_hist)

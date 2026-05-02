@@ -115,6 +115,25 @@ Per provare valori diversi senza toccare il sorgente:
 
 ---
 
+## Parallelismo (`mnemo_pthread_parallel*`)
+
+Mnemo abbassa questi prototipi su **`par … and … rap`** nella VM Kairos (due thread logici):
+
+| ABI | Effetto |
+|-----|---------|
+| **`mnemo_pthread_parallel2(a,b)`** | `par call a … and call b … rap` con `void a(void)`, `void b(void)`. |
+| **`mnemo_pthread_parallel2(a,b, x, y)`** | Stesso `par`, con `void a(int)`, `void b(int)`: `x` e `y` sono scritti nello slot del primo parametro di ciascun worker (finestra mem regione 0 / 1). |
+| **`mnemo_pthread_parallel_with(w,c)`** | worker `w` e continuazione `c` insieme (`void (*)(void)` entrambi). |
+| **`mnemo_pthread_parallel_with1(w, arg, c)`** | Come sopra con argomento scalare verso `w`. |
+
+**Due finestre di memoria.** Due chiamate che ricevono gli **stessi** parametri `__mn_mem0 … __mn_mem{S-1}` nel ramo `PAR` creano una race nel controllo statico Kairos. Il compilatore Mnemo, quando incontra uno degli ABI sopra, riserva **`2·S`** celle fisiche (`S` = layout unificato del programma) e passa al primo ramo `__mn_mem0 … __mn_mem{S-1}` e al secondo **`__mn_mem{S} … __mn_mem{2S-1}`**. Il pool `__mn_pool_*` resta definito su **una** finestra di **S** argomenti per chiamata (ogni worker ha la sua copia logica).
+
+**Risultati dai worker al `main` (variabili file-scope).** Puoi dichiarare **`int nome;`** a livello file (prima delle funzioni). Il worker del **primo** ramo (`parallel2`: prima funzione; `parallel_with*`: la *continuazione* è sul ramo 0) scrive in variabili file normali: stessa cella che il `main` vede come `__mn_mem{idx}`. Per l’uscita del **secondo** ramo usa un nome che inizia per **`__mn_p1_`** (es. `int __mn_p1_sum;`): nel worker è il formale `__mn_mem{idx}`, nel `main` è la cella **`__mn_mem{S+idx}`** dopo il `rap`. Esempio completo: **`c_examples/ex33_parallel2_fib.c`** e **`test.c`** in root.
+
+**Nota:** variabili **`pthread_mutex_t`** restano canali **locali alla procedura** Kairos; per messaggi tra procedure servirebbe altro modello.
+
+---
+
 ## Direttive nel sorgente C
 
 ### (Nessuna direttiva per le lib)
@@ -139,7 +158,7 @@ Solo per `main` con `int argc`: fissa **`argc`** a **N** a compile-time (intero 
 | `mod.kairos` | `__mn_mod_nonneg` — resto. |
 | `ptr_pool.kairos` | `__mn_pool_*` — allocazione LIFO, load/store, `free` sul pool. |
 
-Gli esempi sono in **`c_examples/`** (`ex21` cicli/condizioni/main, `ex22`–`ex26` puntatori/array/`sizeof`, `ex27`–`ex28` typedef/struct/enum/union/ternario/…).
+Gli esempi sono in **`c_examples/`** (`ex21` cicli/condizioni/main, `ex22`–`ex26` puntatori/array/`sizeof`, `ex27`–`ex28` typedef/struct/enum/union/ternario/…, `ex33`–`ex34` parallelismo / sketch client-server, **`test.c`** in root come vetrina compatta).
 
 ---
 
@@ -206,6 +225,7 @@ La rappresentazione intermedia vive in **`mnemo/ir.py`** (istruzioni, `Function`
 | Fissare `argc` da CLI | `mnemo compile f.c --main-argc 4` o `make run FILE=f.c MAIN_ARGC=4` |
 | Default `argc` senza direttiva | **0** |
 | Pool più grande per `malloc` | `mnemo compile f.c --ptr-pool-size 32` |
+| Test rapidi (lowering, senza VM) | `make test-unit` |
 | Lib Kairos custom | Metti `procedure nome(…)` in `lib/qualcosa.kairos` e dichiara `nome` in C; Mnemo include il file da solo |
 
 Per domande sul linguaggio Kairos (reversibilità, `push`/`pop`, `if`/`fi`), vedi la documentazione nella **root del repo Kairos** (`README.md` e test di errore statico).

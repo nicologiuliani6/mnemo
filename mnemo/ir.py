@@ -174,6 +174,29 @@ class ILocalBlock:
     body_instrs: list[Any]
 
 
+@dataclass
+class ISsend:
+    """Kairos SSEND — invio su canale (tuple di interi / ID)."""
+
+    channel: str
+    payload_atoms: list[str]
+
+
+@dataclass
+class ISrecv:
+    """Kairos SRECV — ricezione su canale nelle variabili int dest."""
+
+    dests: list[str]
+    channel: str
+
+
+@dataclass
+class IPar:
+    """Kairos par … and … rap — rami paralleli (THREAD_* nel bytecode)."""
+
+    branches: list[list[Any]]
+
+
 Instr = Union[
     IConst,
     ICopy,
@@ -193,6 +216,9 @@ Instr = Union[
     IIfKairos,
     IFromUntilKairos,
     ILocalBlock,
+    ISsend,
+    ISrecv,
+    IPar,
 ]
 
 

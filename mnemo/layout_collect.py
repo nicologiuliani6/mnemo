@@ -20,6 +20,12 @@ class ProgramMemLayout:
     heap_cells: int
     slot_of: dict[tuple[str, str], int]
     ret_words: dict[str, int]
+    """Nomi `int` a livello file con risultato sul secondo worker del PAR (main legge `__mn_mem{S+idx}`)."""
+    file_scope_partition1: frozenset[str] = frozenset()
+    """Funzioni usate solo come worker regione-1 (2° arg di parallel2, 1° di parallel_with*)."""
+    parallel_region1_workers: frozenset[str] = frozenset()
+    """Indici globali di variabili `("__file__", v)` con `v` non `__mn_p1_*`: stesso `__mn_mem{i}` in entrambi i rami PAR."""
+    parallel_file_shared_slots: frozenset[int] = frozenset()
 
 
 def compute_program_mem_layout(
@@ -106,6 +112,16 @@ def compute_program_mem_layout(
                 ctx.int_locals.add(cell)
                 alloc(fn, cell)
             return
+
+        if isinstance(node.type, c.TypeDecl) and node.type.declname is not None:
+            imm = node.type.type
+            if isinstance(imm, c.IdentifierType) and len(imm.names) == 1:
+                if imm.names[0] == "pthread_mutex_t":
+                    varname = str(node.type.declname)
+                    if varname in ctx.int_locals or varname in ctx.array_info:
+                        raise MnemoCompileError(f"ridichiarazione: {varname}")
+                    ctx.int_locals.add(varname)
+                    return
 
         tdm = ctx.typedef_map
         name = L._scalar_decl_name(node, tdm)
@@ -204,6 +220,85 @@ def compute_program_mem_layout(
         if body is not None:
             walk_stmt(body, fname, ctx)
 
+    file_par1: set[str] = set()
+    fs_ctx = L._Ctx()
+    fs_ctx.typedef_map = td
+    fs_ctx.struct_specs = specs
+    fs_ctx.union_specs = unions
+    fs_ctx.enum_constants = enums
+    for ext in ast.ext:
+        if isinstance(ext, c.FuncDef):
+            continue
+        if isinstance(ext, c.Typedef):
+            continue
+        if not isinstance(ext, c.Decl):
+            continue
+        if isinstance(ext.type, c.FuncDecl):
+            continue
+        imm = L._immediate_named_scalar_typedef(ext)
+        if imm == "pthread_mutex_t":
+            continue
+
+        ut = L._union_tag_for_decl_type(ext.type, fs_ctx)
+        if ut is not None:
+            if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
+                raise MnemoCompileError("union: nome variabile mancante")
+            varname = str(ext.type.declname)
+            if varname in fs_ctx.int_locals:
+                raise MnemoCompileError(f"ridichiarazione: {varname}")
+            if ut not in fs_ctx.union_specs:
+                raise MnemoCompileError(f"union {ut}: definizione mancante")
+            fs_ctx.union_tag_of_var[varname] = ut
+            fs_ctx.int_locals.add(varname)
+            if ("__file__", varname) in slot_of:
+                raise MnemoCompileError(f"variabile file-scope duplicata: {varname}")
+            alloc("__file__", varname)
+            if varname.startswith("__mn_p1_"):
+                file_par1.add(varname)
+            continue
+
+        st_tag = L._struct_tag_for_decl_type(ext.type, fs_ctx)
+        if st_tag is not None:
+            if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
+                raise MnemoCompileError("struct: nome variabile mancante")
+            varname = str(ext.type.declname)
+            if varname in fs_ctx.int_locals:
+                raise MnemoCompileError(f"ridichiarazione: {varname}")
+            fields = fs_ctx.struct_specs.get(st_tag)
+            if not fields:
+                raise MnemoCompileError(f"struct {st_tag}: definizione mancante")
+            fs_ctx.struct_tag_of_var[varname] = st_tag
+            for fnm, _fty in fields:
+                loc = L._struct_field_local(varname, fnm)
+                if loc in fs_ctx.int_locals:
+                    raise MnemoCompileError(f"ridichiarazione: {loc}")
+                fs_ctx.int_locals.add(loc)
+                if ("__file__", loc) in slot_of:
+                    raise MnemoCompileError(f"variabile file-scope duplicata: {loc}")
+                alloc("__file__", loc)
+                if loc.startswith("__mn_p1_"):
+                    file_par1.add(loc)
+            continue
+
+        if L._try_parse_array_decl(ext, fs_ctx) is not None:
+            raise MnemoCompileError(
+                "variabile a livello file: solo scalari `int`/typedef supportati (niente array)"
+            )
+        tdm = td
+        name = L._scalar_decl_name(ext, tdm)
+        if name is None:
+            name = L._enum_scalar_decl_name(ext)
+        if name is None:
+            pn = L._int_ptr_var_decl_name(ext, tdm)
+            if pn is None:
+                continue
+            name = pn
+        if ("__file__", name) in slot_of:
+            raise MnemoCompileError(f"variabile file-scope duplicata: {name}")
+        alloc("__file__", name)
+        if name.startswith("__mn_p1_"):
+            file_par1.add(name)
+
     for ext in ast.ext:
         if isinstance(ext, c.FuncDef) and ext.decl.name and ext.decl.name != "main":
             fd = ext.decl.type
@@ -239,10 +334,17 @@ def compute_program_mem_layout(
 
     heap_base = cursor
     total = heap_base + heap_pool_cells
+    parallel_shared_slots: set[int] = set()
+    for (fn, logical), idx in slot_of.items():
+        if fn == "__file__" and not logical.startswith("__mn_p1_"):
+            parallel_shared_slots.add(idx)
     return ProgramMemLayout(
         heap_base=heap_base,
         total_cells=total,
         heap_cells=heap_pool_cells,
         slot_of=slot_of,
         ret_words=ret_words,
+        file_scope_partition1=frozenset(file_par1),
+        parallel_region1_workers=L.infer_parallel_region1_workers(ast),
+        parallel_file_shared_slots=frozenset(parallel_shared_slots),
     )

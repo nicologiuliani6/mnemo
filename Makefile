@@ -12,9 +12,9 @@ GREEN := \033[0;32m
 RED := \033[0;31m
 RESET := \033[0m
 
-.PHONY: all help venv compile test run clean-kairos
+.PHONY: all help venv compile test test-unit run clean-kairos
 
-all: test
+all: test-unit test
 
 help:
 	@echo ""
@@ -24,6 +24,7 @@ help:
 	@echo "  $(GREEN)make run FILE=<path>$(RESET)  un solo .c (compila) o .kairos — path relativo a mnemo/"
 	@echo "  $(GREEN)make run FILE=... MAIN_ARGC=N$(RESET)  opzionale: sovrascrive argc (come mnemo compile --main-argc N)"
 	@echo "  $(GREEN)make test$(RESET)         compile + esegue ogni .kairos (timeout 5s, come make test Kairos)"
+	@echo "  $(GREEN)make test-unit$(RESET)    unittest Python (parallelismo / lowering, senza VM)"
 	@echo "  $(GREEN)make clean-kairos$(RESET) rimuove c_examples/*.kairos"
 	@echo "  $(CYAN)Kairos VM$(RESET): $(GREEN)KAIROS_ROOT$(RESET) default $(abspath $(MNEMO_ROOT)/../kairos) → $(GREEN)$(KAIROS_PY)$(RESET)"
 	@echo ""
@@ -34,6 +35,9 @@ $(MNEMO_PY):
 	@test -f $(MNEMO_PY)
 
 venv: $(MNEMO_PY)
+
+test-unit: $(MNEMO_PY)
+	@cd $(MNEMO_ROOT) && $(MNEMO_PY) -m unittest discover -s tests -p 'test_*.py' -v
 
 compile: $(MNEMO_PY)
 	@command -v gcc >/dev/null || (echo "$(RED)serve gcc (preprocessore C)$(RESET)"; exit 1)

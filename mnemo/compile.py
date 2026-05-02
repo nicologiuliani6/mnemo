@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mnemo.c_lower import (
+    PTHREAD_ABI_TWO_REGION_PAR,
     infer_auto_lib_files,
     infer_lib_files_from_calls,
     lower_file_to_program,
@@ -12,6 +13,37 @@ from mnemo.c_parse import parse_c
 from mnemo.emit_kairos import emit_program
 from mnemo.errors import MnemoCompileError
 from mnemo.prelude import lib_procedure_index, load_prelude_kairos, parse_mnemo_main_argc
+from mnemo.ptr_pool_kairos import PTR_POOL_MAX
+import pycparser.c_ast as c
+
+
+def _iter_c_nodes(node: c.Node | None) -> list[c.Node]:
+    """Attraversamento depth-first (pycparser `children()`)."""
+    if node is None:
+        return []
+    out: list[c.Node] = [node]
+    for _name, child in node.children():
+        if child is None:
+            continue
+        if isinstance(child, list):
+            for ch in child:
+                out.extend(_iter_c_nodes(ch))
+        else:
+            out.extend(_iter_c_nodes(child))
+    return out
+
+
+def _ast_needs_two_mem_partitions(ast: c.FileAST) -> bool:
+    """
+    `par` a due rami con call che condividono le stesse celle `__mn_mem*`
+    → race in Kairos. Raddoppiamo lo spazio (`2 * S` celle) e passiamo
+    argomenti disgiunti per branch (vedi c_lower, `mnemo_pthread_parallel*`).
+    """
+    for n in _iter_c_nodes(ast):
+        if isinstance(n, c.FuncCall) and isinstance(n.name, c.ID):
+            if n.name.name in PTHREAD_ABI_TWO_REGION_PAR:
+                return True
+    return False
 
 
 def _merge_lib_lists(a: list[str], b: list[str]) -> list[str]:
@@ -23,6 +55,11 @@ def _merge_lib_lists(a: list[str], b: list[str]) -> list[str]:
             seen.add(x)
             out.append(x)
     return out
+
+
+# Prima riga del .kairos: il frontend Kairos la rimuove e disattiva il check
+# «race su int nel PAR» (serve per variabili file-scope condivise + mutex Mnemo).
+KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA = "// KAIROS_ALLOW_PAR_SHARED_INT\n"
 
 
 def compile_c_to_kairos(
@@ -43,10 +80,18 @@ def compile_c_to_kairos(
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")
     layout = compute_program_mem_layout(ast, ptr_pool_size)
+    mem_units = 2 if _ast_needs_two_mem_partitions(ast) else 1
+    physical_mem_cells = layout.total_cells * mem_units
+    if layout.total_cells > PTR_POOL_MAX:
+        raise MnemoCompileError(
+            f"celle memoria (layout) {layout.total_cells} superano il limite pool "
+            f"{PTR_POOL_MAX} (prova a ridurre --ptr-pool-size o le variabili C)"
+        )
     try:
         prelude = load_prelude_kairos(
             lib_names,
             ptr_pool_size=ptr_pool_size,
+            # Pool: una finestra di S celle per call; il PAR usa due finestre disgiunte in main.
             total_mem_cells=layout.total_cells,
         )
     except FileNotFoundError as e:
@@ -56,9 +101,16 @@ def compile_c_to_kairos(
         main_argc=argc_use,
         ptr_pool_size=ptr_pool_size,
         layout=layout,
+        physical_mem_cells=physical_mem_cells,
     )
     body = emit_program(prog)
-    return (prelude + body) if prelude else body
+    out = (prelude + body) if prelude else body
+    if (
+        mem_units == 2
+        and layout.parallel_file_shared_slots
+    ):
+        out = KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA + out
+    return out
 
 
 def write_kairos_next_to_c(c_path: str, content: str) -> str:

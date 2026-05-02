@@ -21,7 +21,10 @@ from mnemo.ir import (
     IJump,
     ILabel,
     ILocalBlock,
+    IPar,
     IReturn,
+    ISrecv,
+    ISsend,
     IShow,
     IStoreRev,
     ISubEq,
@@ -124,6 +127,24 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
             _emit_instr(lines, sub, ind2)
         lines.append(f"{indent}delocal int {ins.var} = 0")
         return
+    if isinstance(ins, ISsend):
+        inner = ", ".join(ins.payload_atoms)
+        lines.append(f"{indent}ssend(<{inner}>, {ins.channel})")
+        return
+    if isinstance(ins, ISrecv):
+        inner = ", ".join(ins.dests)
+        lines.append(f"{indent}srecv(<{inner}>, {ins.channel})")
+        return
+    if isinstance(ins, IPar):
+        lines.append(f"{indent}par")
+        br_ind = indent + "    "
+        for i, branch in enumerate(ins.branches):
+            if i > 0:
+                lines.append(f"{indent}and")
+            for sub in branch:
+                _emit_instr(lines, sub, br_ind)
+        lines.append(f"{indent}rap")
+        return
     raise TypeError(ins)
 
 
@@ -149,15 +170,19 @@ def _emit_main(fn: Function) -> str:
     lines: list[str] = ["procedure main()"]
     stacks = [(t, n) for t, n in fn.locals if t == "stack"]
     stack_names = {n for _t, n in stacks}
+    channels = [(t, n) for t, n in fn.locals if t == "channel"]
     ints = [(t, n) for t, n in fn.locals if t == "int"]
     hist = "__mn_hist"
 
-    if len(ints) > 0 and hist not in stack_names:
+    need_stack_line = (len(ints) > 0 or len(channels) > 0) and hist not in stack_names
+    if need_stack_line:
         lines.append(f"    stack {hist}")
     for typ, name in stacks:
         lines.append(f"    stack {name}")
 
-    if len(ints) > 0:
+    if len(ints) > 0 or len(channels) > 0:
+        for _t, name in channels:
+            lines.append(f"    local channel {name} = empty")
         for _t, name in ints:
             lines.append(f"    local int {name} = 0")
         body_indent = "        "
@@ -171,6 +196,8 @@ def _emit_main(fn: Function) -> str:
     for _t, name in reversed(ints):
         lines.append(f"    push({name}, {hist})")
         lines.append(f"    delocal int {name} = 0")
+    for _t, name in reversed(channels):
+        lines.append(f"    delocal channel {name} = empty")
 
     return "\n".join(lines)
 
@@ -184,19 +211,29 @@ def _emit_procedure(fn: Function) -> str:
     Per `__mn_memN`: niente `push` (non azzerare valori visti dal chiamante);
     `delocal int x x` — il valore atteso è letto da `x` e coincide col corrente.
     """
-    params = ", ".join(f"int {name}" for _t, name in fn.params)
+    param_parts: list[str] = []
+    for typ, name in fn.params:
+        if typ == "channel":
+            param_parts.append(f"channel {name}")
+        else:
+            param_parts.append(f"int {name}")
+    params = ", ".join(param_parts)
     lines: list[str] = [f"procedure {fn.name}({params})"]
     stacks = [(t, n) for t, n in fn.locals if t == "stack"]
     stack_names = {n for _t, n in stacks}
+    channels = [(t, n) for t, n in fn.locals if t == "channel"]
     ints = [(t, n) for t, n in fn.locals if t == "int"]
     hist = "__mn_hist"
 
-    if len(ints) > 0 and hist not in stack_names:
+    need_stack_line = (len(ints) > 0 or len(channels) > 0) and hist not in stack_names
+    if need_stack_line:
         lines.append(f"    stack {hist}")
     for _typ, name in stacks:
         lines.append(f"    stack {name}")
 
-    if len(ints) > 0:
+    if len(ints) > 0 or len(channels) > 0:
+        for _t, name in channels:
+            lines.append(f"    local channel {name} = empty")
         for _t, name in ints:
             lines.append(f"    local int {name} = 0")
         body_indent = "        "
@@ -213,6 +250,8 @@ def _emit_procedure(fn: Function) -> str:
         else:
             lines.append(f"    push({name}, {hist})")
             lines.append(f"    delocal int {name} = 0")
+    for _t, name in reversed(channels):
+        lines.append(f"    delocal channel {name} = empty")
 
     return "\n".join(lines)
 
