@@ -1,0 +1,728 @@
+// KAIROS_ALLOW_PAR_SHARED_INT
+// Pool puntatori Mnemo — generato, N=18 celle (__mn_mem0..__mn_mem17).
+// `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.
+
+procedure __mn_pool_alloc(int ctr, int out_slot)
+    stack __mn_hist
+    local int t = 0
+        t += ctr
+        push(ctr, __mn_hist)
+        ctr += 1
+        push(out_slot, __mn_hist)
+        out_slot += t
+        push(t, __mn_hist)
+    delocal int t = 0
+
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17)
+    stack __mn_hist
+    if slot == 0 then
+        push(__mn_mem0, __mn_hist)
+        __mn_mem0 += val
+    fi slot == 0
+    if slot == 1 then
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += val
+    fi slot == 1
+    if slot == 2 then
+        push(__mn_mem2, __mn_hist)
+        __mn_mem2 += val
+    fi slot == 2
+    if slot == 3 then
+        push(__mn_mem3, __mn_hist)
+        __mn_mem3 += val
+    fi slot == 3
+    if slot == 4 then
+        push(__mn_mem4, __mn_hist)
+        __mn_mem4 += val
+    fi slot == 4
+    if slot == 5 then
+        push(__mn_mem5, __mn_hist)
+        __mn_mem5 += val
+    fi slot == 5
+    if slot == 6 then
+        push(__mn_mem6, __mn_hist)
+        __mn_mem6 += val
+    fi slot == 6
+    if slot == 7 then
+        push(__mn_mem7, __mn_hist)
+        __mn_mem7 += val
+    fi slot == 7
+    if slot == 8 then
+        push(__mn_mem8, __mn_hist)
+        __mn_mem8 += val
+    fi slot == 8
+    if slot == 9 then
+        push(__mn_mem9, __mn_hist)
+        __mn_mem9 += val
+    fi slot == 9
+    if slot == 10 then
+        push(__mn_mem10, __mn_hist)
+        __mn_mem10 += val
+    fi slot == 10
+    if slot == 11 then
+        push(__mn_mem11, __mn_hist)
+        __mn_mem11 += val
+    fi slot == 11
+    if slot == 12 then
+        push(__mn_mem12, __mn_hist)
+        __mn_mem12 += val
+    fi slot == 12
+    if slot == 13 then
+        push(__mn_mem13, __mn_hist)
+        __mn_mem13 += val
+    fi slot == 13
+    if slot == 14 then
+        push(__mn_mem14, __mn_hist)
+        __mn_mem14 += val
+    fi slot == 14
+    if slot == 15 then
+        push(__mn_mem15, __mn_hist)
+        __mn_mem15 += val
+    fi slot == 15
+    if slot == 16 then
+        push(__mn_mem16, __mn_hist)
+        __mn_mem16 += val
+    fi slot == 16
+    if slot == 17 then
+        push(__mn_mem17, __mn_hist)
+        __mn_mem17 += val
+    fi slot == 17
+
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, int out)
+    stack __mn_hist
+    if slot == 0 then
+        local int t = 0
+            t += __mn_mem0
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 0
+    if slot == 1 then
+        local int t = 0
+            t += __mn_mem1
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 1
+    if slot == 2 then
+        local int t = 0
+            t += __mn_mem2
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 2
+    if slot == 3 then
+        local int t = 0
+            t += __mn_mem3
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 3
+    if slot == 4 then
+        local int t = 0
+            t += __mn_mem4
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 4
+    if slot == 5 then
+        local int t = 0
+            t += __mn_mem5
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 5
+    if slot == 6 then
+        local int t = 0
+            t += __mn_mem6
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 6
+    if slot == 7 then
+        local int t = 0
+            t += __mn_mem7
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 7
+    if slot == 8 then
+        local int t = 0
+            t += __mn_mem8
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 8
+    if slot == 9 then
+        local int t = 0
+            t += __mn_mem9
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 9
+    if slot == 10 then
+        local int t = 0
+            t += __mn_mem10
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 10
+    if slot == 11 then
+        local int t = 0
+            t += __mn_mem11
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 11
+    if slot == 12 then
+        local int t = 0
+            t += __mn_mem12
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 12
+    if slot == 13 then
+        local int t = 0
+            t += __mn_mem13
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 13
+    if slot == 14 then
+        local int t = 0
+            t += __mn_mem14
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 14
+    if slot == 15 then
+        local int t = 0
+            t += __mn_mem15
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 15
+    if slot == 16 then
+        local int t = 0
+            t += __mn_mem16
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 16
+    if slot == 17 then
+        local int t = 0
+            t += __mn_mem17
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 17
+
+procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, int ctr)
+    stack __mn_hist
+    local int ctr0 = 0
+        ctr0 += ctr
+        if slot == 0 then
+            push(__mn_mem0, __mn_hist)
+        fi slot == 0
+        if slot == 1 then
+            push(__mn_mem1, __mn_hist)
+        fi slot == 1
+        if slot == 2 then
+            push(__mn_mem2, __mn_hist)
+        fi slot == 2
+        if slot == 3 then
+            push(__mn_mem3, __mn_hist)
+        fi slot == 3
+        if slot == 4 then
+            push(__mn_mem4, __mn_hist)
+        fi slot == 4
+        if slot == 5 then
+            push(__mn_mem5, __mn_hist)
+        fi slot == 5
+        if slot == 6 then
+            push(__mn_mem6, __mn_hist)
+        fi slot == 6
+        if slot == 7 then
+            push(__mn_mem7, __mn_hist)
+        fi slot == 7
+        if slot == 8 then
+            push(__mn_mem8, __mn_hist)
+        fi slot == 8
+        if slot == 9 then
+            push(__mn_mem9, __mn_hist)
+        fi slot == 9
+        if slot == 10 then
+            push(__mn_mem10, __mn_hist)
+        fi slot == 10
+        if slot == 11 then
+            push(__mn_mem11, __mn_hist)
+        fi slot == 11
+        if slot == 12 then
+            push(__mn_mem12, __mn_hist)
+        fi slot == 12
+        if slot == 13 then
+            push(__mn_mem13, __mn_hist)
+        fi slot == 13
+        if slot == 14 then
+            push(__mn_mem14, __mn_hist)
+        fi slot == 14
+        if slot == 15 then
+            push(__mn_mem15, __mn_hist)
+        fi slot == 15
+        if slot == 16 then
+            push(__mn_mem16, __mn_hist)
+        fi slot == 16
+        if slot == 17 then
+            push(__mn_mem17, __mn_hist)
+        fi slot == 17
+        if slot == 0 then
+            if ctr0 == 1 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 1
+        fi slot == 0
+        if slot == 1 then
+            if ctr0 == 2 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 2
+        fi slot == 1
+        if slot == 2 then
+            if ctr0 == 3 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 3
+        fi slot == 2
+        if slot == 3 then
+            if ctr0 == 4 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 4
+        fi slot == 3
+        if slot == 4 then
+            if ctr0 == 5 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 5
+        fi slot == 4
+        if slot == 5 then
+            if ctr0 == 6 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 6
+        fi slot == 5
+        if slot == 6 then
+            if ctr0 == 7 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 7
+        fi slot == 6
+        if slot == 7 then
+            if ctr0 == 8 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 8
+        fi slot == 7
+        if slot == 8 then
+            if ctr0 == 9 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 9
+        fi slot == 8
+        if slot == 9 then
+            if ctr0 == 10 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 10
+        fi slot == 9
+        if slot == 10 then
+            if ctr0 == 11 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 11
+        fi slot == 10
+        if slot == 11 then
+            if ctr0 == 12 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 12
+        fi slot == 11
+        if slot == 12 then
+            if ctr0 == 13 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 13
+        fi slot == 12
+        if slot == 13 then
+            if ctr0 == 14 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 14
+        fi slot == 13
+        if slot == 14 then
+            if ctr0 == 15 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 15
+        fi slot == 14
+        if slot == 15 then
+            if ctr0 == 16 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 16
+        fi slot == 15
+        if slot == 16 then
+            if ctr0 == 17 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 17
+        fi slot == 16
+        if slot == 17 then
+            if ctr0 == 18 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 18
+        fi slot == 17
+        push(ctr0, __mn_hist)
+    delocal int ctr0 = 0
+
+procedure init_mutexes(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, channel __mn_mtx_g_cs, channel __mn_mtx_g_xfer)
+    stack __mn_hist
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+    local int __mn_e2 = 0
+        // funzione C init_mutexes
+        // pthread_mutex_init → token su canale (mutex libero)
+        __mn_e0 += 1
+        ssend(<__mn_e0>, __mn_mtx_g_cs)
+        // pthread_mutex_init → token su canale (mutex libero)
+        __mn_e1 += 1
+        ssend(<__mn_e1>, __mn_mtx_g_xfer)
+        // pthread_mutex_lock → srecv token (π-style)
+        srecv(<__mn_e2>, __mn_mtx_g_xfer)
+    push(__mn_e2, __mn_hist)
+    delocal int __mn_e2 = 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+procedure destroy_mutexes(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, channel __mn_mtx_g_cs, channel __mn_mtx_g_xfer)
+    stack __mn_hist
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+        // funzione C destroy_mutexes
+        // pthread_mutex_destroy: svuota token residuo sul canale (prima del delocal)
+        srecv(<__mn_e0>, __mn_mtx_g_cs)
+        // pthread_mutex_destroy: svuota token residuo sul canale (prima del delocal)
+        srecv(<__mn_e1>, __mn_mtx_g_xfer)
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+procedure ssend(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, channel __mn_mtx_g_cs, channel __mn_mtx_g_xfer)
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_pool_ctr = 0
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+    local int __mn_e2 = 0
+    local int __mn_e3 = 0
+        // funzione C ssend
+        // pthread_mutex_lock → srecv token (π-style)
+        srecv(<__mn_e0>, __mn_mtx_g_cs)
+        push(__mn_e1, __mn_hist)
+        __mn_e1 += __mn_mem0
+        call __mn_pool_store(__mn_e1, __mn_mem1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17)
+        push(__mn_e1, __mn_scratch)
+        __mn_e2 += 1
+        ssend(<__mn_e2>, __mn_mtx_g_cs)
+        __mn_e3 += 1
+        ssend(<__mn_e3>, __mn_mtx_g_xfer)
+    push(__mn_e3, __mn_hist)
+    delocal int __mn_e3 = 0
+    push(__mn_e2, __mn_hist)
+    delocal int __mn_e2 = 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+    push(__mn_pool_ctr, __mn_hist)
+    delocal int __mn_pool_ctr = 0
+procedure srecv(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, channel __mn_mtx_g_cs, channel __mn_mtx_g_xfer)
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_pool_ctr = 0
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+    local int __mn_e2 = 0
+    local int __mn_e3 = 0
+    local int __mn_e4 = 0
+    local int __mn_e5 = 0
+    local int __mn_e6 = 0
+        // funzione C srecv
+        // pthread_mutex_lock → srecv token (π-style)
+        srecv(<__mn_e0>, __mn_mtx_g_xfer)
+        // pthread_mutex_lock → srecv token (π-style)
+        srecv(<__mn_e1>, __mn_mtx_g_cs)
+        push(__mn_e2, __mn_hist)
+        __mn_e2 += __mn_mem2
+        call __mn_pool_load(__mn_e2, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_e3)
+        push(__mn_e4, __mn_hist)
+        __mn_e4 += __mn_mem3
+        call __mn_pool_store(__mn_e4, __mn_e3, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17)
+        push(__mn_e4, __mn_scratch)
+        push(__mn_e3, __mn_scratch)
+        push(__mn_e2, __mn_scratch)
+        __mn_e5 += 1
+        ssend(<__mn_e5>, __mn_mtx_g_cs)
+        __mn_e6 += 1
+        ssend(<__mn_e6>, __mn_mtx_g_xfer)
+    push(__mn_e6, __mn_hist)
+    delocal int __mn_e6 = 0
+    push(__mn_e5, __mn_hist)
+    delocal int __mn_e5 = 0
+    push(__mn_e4, __mn_hist)
+    delocal int __mn_e4 = 0
+    push(__mn_e3, __mn_hist)
+    delocal int __mn_e3 = 0
+    push(__mn_e2, __mn_hist)
+    delocal int __mn_e2 = 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+    push(__mn_pool_ctr, __mn_hist)
+    delocal int __mn_pool_ctr = 0
+procedure producer(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, channel __mn_mtx_g_cs, channel __mn_mtx_g_xfer)
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_v_i = 0
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+        // funzione C producer
+        push(__mn_v_i, __mn_hist)
+        __mn_v_i += 0
+        if __mn_v_i < 10 then
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 1
+        fi __mn_v_i < 10
+        from __mn_e0 != 0 loop
+            push(__mn_mem0, __mn_hist)
+            __mn_mem0 += __mn_mem4
+            push(__mn_mem1, __mn_hist)
+            __mn_mem1 += __mn_v_i
+            call ssend(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mtx_g_cs, __mn_mtx_g_xfer)
+            __mn_e1 += (__mn_v_i + 1)
+            push(__mn_v_i, __mn_hist)
+            __mn_v_i += __mn_e1
+            push(__mn_e1, __mn_scratch)
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+            if __mn_v_i < 10 then
+                push(__mn_e0, __mn_hist)
+                __mn_e0 += 1
+            fi __mn_v_i < 10
+        until __mn_e0 == 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+    push(__mn_v_i, __mn_hist)
+    delocal int __mn_v_i = 0
+procedure consumer(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, int __mn_mem17, channel __mn_mtx_g_cs, channel __mn_mtx_g_xfer)
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_v_i = 0
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+        // funzione C consumer
+        push(__mn_v_i, __mn_hist)
+        __mn_v_i += 0
+        if __mn_v_i < 10 then
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 1
+        fi __mn_v_i < 10
+        from __mn_e0 != 0 loop
+            push(__mn_mem2, __mn_hist)
+            __mn_mem2 += __mn_mem6
+            push(__mn_mem3, __mn_hist)
+            __mn_mem3 += __mn_mem7
+            call srecv(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mtx_g_cs, __mn_mtx_g_xfer)
+            __mn_e1 += (__mn_v_i + 1)
+            push(__mn_v_i, __mn_hist)
+            __mn_v_i += __mn_e1
+            push(__mn_e1, __mn_scratch)
+            push(__mn_e0, __mn_hist)
+            __mn_e0 += 0
+            if __mn_v_i < 10 then
+                push(__mn_e0, __mn_hist)
+                __mn_e0 += 1
+            fi __mn_v_i < 10
+        until __mn_e0 == 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+    push(__mn_v_i, __mn_hist)
+    delocal int __mn_v_i = 0
+procedure main()
+    stack __mn_hist
+    local channel __mn_mtx_g_cs = empty
+    local channel __mn_mtx_g_xfer = empty
+    local int __mn_mem0 = 0
+    local int __mn_mem1 = 0
+    local int __mn_mem2 = 0
+    local int __mn_mem3 = 0
+    local int __mn_mem4 = 0
+    local int __mn_mem5 = 0
+    local int __mn_mem6 = 0
+    local int __mn_mem7 = 0
+    local int __mn_mem8 = 0
+    local int __mn_mem9 = 0
+    local int __mn_mem10 = 0
+    local int __mn_mem11 = 0
+    local int __mn_mem12 = 0
+    local int __mn_mem13 = 0
+    local int __mn_mem14 = 0
+    local int __mn_mem15 = 0
+    local int __mn_mem16 = 0
+    local int __mn_mem17 = 0
+    local int __mn_mem18 = 0
+    local int __mn_mem19 = 0
+    local int __mn_mem20 = 0
+    local int __mn_mem21 = 0
+    local int __mn_mem22 = 0
+    local int __mn_mem23 = 0
+    local int __mn_mem24 = 0
+    local int __mn_mem25 = 0
+    local int __mn_mem26 = 0
+    local int __mn_mem27 = 0
+    local int __mn_mem28 = 0
+    local int __mn_mem29 = 0
+    local int __mn_mem30 = 0
+    local int __mn_mem31 = 0
+    local int __mn_mem32 = 0
+    local int __mn_mem33 = 0
+    local int __mn_mem34 = 0
+    local int __mn_mem35 = 0
+    local int __mn_exit = 0
+    local int __mn_pool_ctr = 0
+        // generato da Mnemo da C
+        __mn_mem9 += 0
+        __mn_mem10 += 0
+        __mn_pool_ctr += 14
+        push(__mn_mem13, __mn_hist)
+        __mn_mem13 += 0
+        call init_mutexes(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mtx_g_cs, __mn_mtx_g_xfer)
+        push(__mn_mem4, __mn_hist)
+        __mn_mem4 += 11
+        push(__mn_mem24, __mn_hist)
+        __mn_mem24 += 11
+        push(__mn_mem25, __mn_hist)
+        __mn_mem25 += 13
+        par
+            call producer(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mtx_g_cs, __mn_mtx_g_xfer)
+        and
+            call consumer(__mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem11, __mn_mem30, __mn_mem31, __mn_mem32, __mn_mem33, __mn_mem34, __mn_mem35, __mn_mtx_g_cs, __mn_mtx_g_xfer)
+        rap
+        call destroy_mutexes(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mtx_g_cs, __mn_mtx_g_xfer)
+        push(__mn_exit, __mn_hist)
+        __mn_exit += __mn_mem31
+        show(__mn_exit)
+        // return
+    push(__mn_pool_ctr, __mn_hist)
+    delocal int __mn_pool_ctr = 0
+    push(__mn_exit, __mn_hist)
+    delocal int __mn_exit = 0
+    push(__mn_mem35, __mn_hist)
+    delocal int __mn_mem35 = 0
+    push(__mn_mem34, __mn_hist)
+    delocal int __mn_mem34 = 0
+    push(__mn_mem33, __mn_hist)
+    delocal int __mn_mem33 = 0
+    push(__mn_mem32, __mn_hist)
+    delocal int __mn_mem32 = 0
+    push(__mn_mem31, __mn_hist)
+    delocal int __mn_mem31 = 0
+    push(__mn_mem30, __mn_hist)
+    delocal int __mn_mem30 = 0
+    push(__mn_mem29, __mn_hist)
+    delocal int __mn_mem29 = 0
+    push(__mn_mem28, __mn_hist)
+    delocal int __mn_mem28 = 0
+    push(__mn_mem27, __mn_hist)
+    delocal int __mn_mem27 = 0
+    push(__mn_mem26, __mn_hist)
+    delocal int __mn_mem26 = 0
+    push(__mn_mem25, __mn_hist)
+    delocal int __mn_mem25 = 0
+    push(__mn_mem24, __mn_hist)
+    delocal int __mn_mem24 = 0
+    push(__mn_mem23, __mn_hist)
+    delocal int __mn_mem23 = 0
+    push(__mn_mem22, __mn_hist)
+    delocal int __mn_mem22 = 0
+    push(__mn_mem21, __mn_hist)
+    delocal int __mn_mem21 = 0
+    push(__mn_mem20, __mn_hist)
+    delocal int __mn_mem20 = 0
+    push(__mn_mem19, __mn_hist)
+    delocal int __mn_mem19 = 0
+    push(__mn_mem18, __mn_hist)
+    delocal int __mn_mem18 = 0
+    push(__mn_mem17, __mn_hist)
+    delocal int __mn_mem17 = 0
+    push(__mn_mem16, __mn_hist)
+    delocal int __mn_mem16 = 0
+    push(__mn_mem15, __mn_hist)
+    delocal int __mn_mem15 = 0
+    push(__mn_mem14, __mn_hist)
+    delocal int __mn_mem14 = 0
+    push(__mn_mem13, __mn_hist)
+    delocal int __mn_mem13 = 0
+    push(__mn_mem12, __mn_hist)
+    delocal int __mn_mem12 = 0
+    push(__mn_mem11, __mn_hist)
+    delocal int __mn_mem11 = 0
+    push(__mn_mem10, __mn_hist)
+    delocal int __mn_mem10 = 0
+    push(__mn_mem9, __mn_hist)
+    delocal int __mn_mem9 = 0
+    push(__mn_mem8, __mn_hist)
+    delocal int __mn_mem8 = 0
+    push(__mn_mem7, __mn_hist)
+    delocal int __mn_mem7 = 0
+    push(__mn_mem6, __mn_hist)
+    delocal int __mn_mem6 = 0
+    push(__mn_mem5, __mn_hist)
+    delocal int __mn_mem5 = 0
+    push(__mn_mem4, __mn_hist)
+    delocal int __mn_mem4 = 0
+    push(__mn_mem3, __mn_hist)
+    delocal int __mn_mem3 = 0
+    push(__mn_mem2, __mn_hist)
+    delocal int __mn_mem2 = 0
+    push(__mn_mem1, __mn_hist)
+    delocal int __mn_mem1 = 0
+    push(__mn_mem0, __mn_hist)
+    delocal int __mn_mem0 = 0
+    delocal channel __mn_mtx_g_xfer = empty
+    delocal channel __mn_mtx_g_cs = empty

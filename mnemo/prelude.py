@@ -65,6 +65,19 @@ def parse_mnemo_main_argc(source: str) -> int:
     return 0
 
 
+def parse_mnemo_skip_par_shared_mutex_check(source: str) -> bool:
+    """
+    // mnemo-skip-par-shared-mutex-check
+    Disattiva il controllo statico «stessi slot condivisi → mutex» quando nel PAR serve
+    anche attesa attiva sugli stessi campi (il mutex Mnemo è π, non un semaforo da polling).
+    """
+    pat = re.compile(r"^\s*//\s*mnemo-skip-par-shared-mutex-check\s*$")
+    for line in source.splitlines()[:80]:
+        if pat.match(line):
+            return True
+    return False
+
+
 def load_prelude_kairos(
     lib_filenames: list[str],
     *,

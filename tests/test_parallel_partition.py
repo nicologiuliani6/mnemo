@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 
 from mnemo.compile import compile_c_to_kairos
+from mnemo.c_parse import parse_c
+from mnemo.layout_collect import compute_program_mem_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,6 +66,28 @@ class TestParallelTwoRegions(unittest.TestCase):
         c0 = m1.group(1).split(",")[0].strip()
         self.assertEqual(c0, "__mn_mem0")
         self.assertEqual(w0, "__mn_mem4")
+
+    def test_infer_partition1_reads_through_library_call(self) -> None:
+        """`srecv` in mps.h fa `*answer = …`: il layout deve vederlo nel callee."""
+        ast = parse_c(_relpath("test.c"))
+        layout = compute_program_mem_layout(ast, 4)
+        self.assertIn(
+            "answer",
+            layout.main_partition1_read_logicals,
+            "consumer deve propagare *answer anche quando chiama srecv(m, answer)",
+        )
+
+    def test_infer_par_shared_struct_field_via_library_helpers(self) -> None:
+        """ssend/srecv usano m->payload nel .h: lo slot deve essere condiviso tra i due worker."""
+        ast = parse_c(_relpath("test.c"))
+        layout = compute_program_mem_layout(ast, 4)
+        idx = layout.slot_of.get(("main", "mps__payload"))
+        self.assertIsNotNone(idx)
+        self.assertIn(
+            idx,
+            layout.parallel_file_shared_slots,
+            "producer e consumer devono vedere lo stesso __mn_mem per il campo payload",
+        )
 
 
 if __name__ == "__main__":

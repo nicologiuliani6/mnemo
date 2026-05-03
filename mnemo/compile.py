@@ -9,10 +9,25 @@ from mnemo.c_lower import (
     lower_file_to_program,
 )
 from mnemo.layout_collect import compute_program_mem_layout
+from mnemo.par_shared_mutex_check import check_par_shared_mutex_discipline
 from mnemo.c_parse import parse_c
 from mnemo.emit_kairos import emit_program
 from mnemo.errors import MnemoCompileError
-from mnemo.prelude import lib_procedure_index, load_prelude_kairos, parse_mnemo_main_argc
+from mnemo.ir import (
+    ICall,
+    IIfKairos,
+    IFromUntilKairos,
+    ILocalBlock,
+    IPar,
+    Instr,
+    Program,
+)
+from mnemo.prelude import (
+    lib_procedure_index,
+    load_prelude_kairos,
+    parse_mnemo_main_argc,
+    parse_mnemo_skip_par_shared_mutex_check,
+)
 from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
@@ -57,6 +72,37 @@ def _merge_lib_lists(a: list[str], b: list[str]) -> list[str]:
     return out
 
 
+def _instr_list_uses_ptr_pool(instrs: list[Instr]) -> bool:
+    for ins in instrs:
+        if isinstance(ins, ICall) and ins.proc.startswith("__mn_pool_"):
+            return True
+        if isinstance(ins, IPar):
+            for br in ins.branches:
+                if _instr_list_uses_ptr_pool(br):
+                    return True
+        if isinstance(ins, IIfKairos):
+            if _instr_list_uses_ptr_pool(ins.then_instrs):
+                return True
+            if ins.else_instrs and _instr_list_uses_ptr_pool(ins.else_instrs):
+                return True
+        if isinstance(ins, IFromUntilKairos):
+            if _instr_list_uses_ptr_pool(ins.body_instrs):
+                return True
+        if isinstance(ins, ILocalBlock):
+            if _instr_list_uses_ptr_pool(ins.body_instrs):
+                return True
+    return False
+
+
+def _program_uses_ptr_pool(prog: Program) -> bool:
+    """True se l'IR contiene chiamate ai runtime pool (serve il preambolo `emit_ptr_pool_kairos`)."""
+    for fn in prog.functions:
+        for blk in fn.blocks:
+            if _instr_list_uses_ptr_pool(blk.instrs):
+                return True
+    return False
+
+
 # Prima riga del .kairos: il frontend Kairos la rimuove e disattiva il check
 # «race su int nel PAR» (serve per variabili file-scope condivise + mutex Mnemo).
 KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA = "// KAIROS_ALLOW_PAR_SHARED_INT\n"
@@ -87,6 +133,21 @@ def compile_c_to_kairos(
             f"celle memoria (layout) {layout.total_cells} superano il limite pool "
             f"{PTR_POOL_MAX} (prova a ridurre --ptr-pool-size o le variabili C)"
         )
+    if (
+        mem_units == 2
+        and layout.parallel_file_shared_slots
+        and not parse_mnemo_skip_par_shared_mutex_check(src)
+    ):
+        check_par_shared_mutex_discipline(ast, layout)
+    prog = lower_file_to_program(
+        ast,
+        main_argc=argc_use,
+        ptr_pool_size=ptr_pool_size,
+        layout=layout,
+        physical_mem_cells=physical_mem_cells,
+    )
+    if _program_uses_ptr_pool(prog):
+        lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])
     try:
         prelude = load_prelude_kairos(
             lib_names,
@@ -96,13 +157,6 @@ def compile_c_to_kairos(
         )
     except FileNotFoundError as e:
         raise MnemoCompileError(str(e)) from e
-    prog = lower_file_to_program(
-        ast,
-        main_argc=argc_use,
-        ptr_pool_size=ptr_pool_size,
-        layout=layout,
-        physical_mem_cells=physical_mem_cells,
-    )
     body = emit_program(prog)
     out = (prelude + body) if prelude else body
     if (

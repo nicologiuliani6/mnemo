@@ -419,6 +419,8 @@ class _Ctx:
     channel_decl_order: list[str] = field(default_factory=list)
     # Mutex `pthread_mutex_t` a livello file (nomi C ordinati) → formali Kairos `channel` in coda.
     file_scope_mutex_names: tuple[str, ...] = ()
+    """Dopo `mnemo_pthread_parallel2` in main: letture campi worker-1 usano la 2ª partizione."""
+    after_par_join: bool = False
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -494,6 +496,37 @@ def _phys(ctx: _Ctx, logical: str) -> str:
     """
     hit = ctx.mem_phys.get(logical)
     if hit is not None:
+        if (
+            ctx.fn_name == "main"
+            and ctx.after_par_join
+            and ctx.mem_layout is not None
+            and (
+                logical in ctx.mem_layout.main_partition1_read_logicals
+                or logical in ctx.mem_layout.file_scope_partition1
+            )
+        ):
+            idx = ctx.slot_index.get(logical)
+            if idx is not None:
+                s = ctx.mem_layout.total_cells
+                return f"__mn_mem{s + idx}"
+        # Parametri procedure utente: finestra pool __mn_mem0..S-1. Le altre variabili
+        # (es. `acc`, `i`) usano gli stessi indici globali → collisione di nome con il formale.
+        if (
+            not ctx.is_main
+            and ctx.param_storage_order
+            and logical not in ctx.param_storage_order
+        ):
+            suf = hit[8:] if hit.startswith("__mn_mem") else ""
+            if (
+                hit.startswith("__mn_mem")
+                and suf.isdigit()
+                and int(suf) < ctx.total_mem_cells
+            ):
+                alt = f"__mn_v_{logical}"
+                ctx.int_locals.add(alt)
+                if alt not in ctx.decl_order:
+                    ctx.decl_order.append(alt)
+                return alt
         return hit
     key = ("__file__", logical)
     if ctx.mem_layout is not None and key in ctx.mem_layout.slot_of:
@@ -528,7 +561,7 @@ def _ret_slot_names(n_words: int) -> list[str]:
 
 
 # Limite elementi totali per array (prodotto delle dimensioni; IR a catena if sull’indice lineare).
-ARR_MAX = 256
+ARR_MAX = 1024
 
 
 def _array_elem_local(base: str, linear: int) -> str:
@@ -798,6 +831,62 @@ def _pthread_assign_worker_first_scalar_arg(
     return _lower_assign(dst, arg_expr, ctx)
 
 
+def _pthread_assign_worker_params(
+    fname: str,
+    raw_exprs: list[c.Node],
+    ctx: _Ctx,
+    *,
+    mem_partition_index: int,
+) -> list[Instr]:
+    """
+    Copia gli argomenti del caller nello spazio memoria del worker PAR (stesso schema
+    delle chiamate utente: struct per valore, più slot, puntatori, ecc.).
+    `mem_partition_index` 0 = ramo sinistro, 1 = destro (`__mn_mem{S+idx}`).
+    """
+    if ctx.file_ast is None or ctx.mem_layout is None:
+        raise MnemoCompileError("worker PAR: layout memoria mancante")
+    fdef = _get_funcdef(ctx.file_ast, fname)
+    if fdef is None:
+        raise MnemoCompileError(f"worker PAR: {fname!r} non è definita nel file")
+    fd = fdef.decl.type
+    if not isinstance(fd, c.FuncDecl):
+        raise MnemoCompileError("worker PAR: firma non valida")
+    pm = _Ctx()
+    pm.typedef_map = dict(ctx.typedef_map)
+    pm.struct_specs = dict(ctx.struct_specs)
+    pm.union_specs = dict(ctx.union_specs)
+    pm.enum_constants = dict(ctx.enum_constants)
+    pm.array_param_names = set()
+    groups = _func_param_slot_groups(fd, ctx.typedef_map, pm)
+    param_logs = _func_param_storage_names(fd, ctx.typedef_map, pm)
+    if len(groups) != len(raw_exprs):
+        raise MnemoCompileError(
+            f"worker `{fname}`: servono {len(groups)} argomenti formali, ne ho {len(raw_exprs)}"
+        )
+    layout = ctx.mem_layout
+    lead_arg, flat_exprs = _flatten_user_call_arguments(
+        raw_exprs, groups, ctx, layout
+    )
+    if len(flat_exprs) != len(param_logs):
+        raise MnemoCompileError(
+            f"worker `{fname}`: mismatch tra argomenti appiattiti e slot nel layout"
+        )
+    s = layout.total_cells
+    pre: list[Instr] = []
+    pre.extend(lead_arg)
+    for ex, log_key in zip(flat_exprs, param_logs):
+        key = (fname, log_key)
+        if key not in layout.slot_of:
+            raise MnemoCompileError(
+                f"worker `{fname}`: slot parametro {log_key!r} assente nel layout"
+            )
+        idx = layout.slot_of[key]
+        phys = mem_partition_index * s + idx
+        dst = f"__mn_mem{phys}"
+        pre.extend(_lower_assign(dst, ex, ctx))
+    return pre
+
+
 def _pthread_worker_has_no_params(fname: str, ctx: _Ctx) -> bool:
     if ctx.file_ast is None:
         return False
@@ -815,26 +904,6 @@ def _pthread_worker_has_no_params(fname: str, ctx: _Ctx) -> bool:
     pm.array_param_names = set()
     names = _func_param_storage_names(fd, ctx.typedef_map, pm)
     return len(names) == 0
-
-
-def _pthread_worker_has_single_scalar_param(fname: str, ctx: _Ctx) -> bool:
-    """True se `void f(int x)` (esattamente un parametro scalare/storage)."""
-    if ctx.file_ast is None:
-        return False
-    fdef = _get_funcdef(ctx.file_ast, fname)
-    if fdef is None:
-        return False
-    fd = fdef.decl.type
-    if not isinstance(fd, c.FuncDecl):
-        return False
-    pm = _Ctx()
-    pm.typedef_map = dict(ctx.typedef_map)
-    pm.struct_specs = dict(ctx.struct_specs)
-    pm.union_specs = dict(ctx.union_specs)
-    pm.enum_constants = dict(ctx.enum_constants)
-    pm.array_param_names = set()
-    names = _func_param_storage_names(fd, ctx.typedef_map, pm)
-    return len(names) == 1
 
 
 def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
@@ -966,10 +1035,9 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
     if nm == "mnemo_pthread_parallel2":
         if ctx.mem_layout is None:
             raise MnemoCompileError("mnemo_pthread_parallel2: layout memoria mancante")
-        if len(exprs) not in (2, 4):
+        if len(exprs) < 2:
             raise MnemoCompileError(
-                "mnemo_pthread_parallel2: attesi 2 argomenti (f, g entrambi void(void)) "
-                "oppure 4 (f, g void(int), arg_f, arg_g)"
+                "mnemo_pthread_parallel2: attesi almeno f e g (nomi di funzione)"
             )
         a0, a1 = exprs[0], exprs[1]
         if not isinstance(a0, c.ID) or not isinstance(a1, c.ID):
@@ -981,40 +1049,44 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             raise MnemoCompileError(
                 "mnemo_pthread_parallel2: entrambe le funzioni devono essere definite nel file"
             )
-        if len(exprs) == 2:
-            if not _pthread_worker_has_no_params(f0, ctx) or not _pthread_worker_has_no_params(
-                f1, ctx
-            ):
-                raise MnemoCompileError(
-                    "mnemo_pthread_parallel2(f,g): servono `void f(void)` e `void g(void)` "
-                    "(oppure 4 argomenti con `void f(int)` / `void g(int)`)"
-                )
-            chx = _file_scope_channel_actuals(ctx)
-            return [
-                IPar(
-                    [
-                        [ICall(f0, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
-                        [ICall(f1, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
-                    ]
-                )
-            ]
-        if not _pthread_worker_has_single_scalar_param(
-            f0, ctx
-        ) or not _pthread_worker_has_single_scalar_param(f1, ctx):
+        fdef0 = _get_funcdef(ctx.file_ast, f0)
+        fdef1 = _get_funcdef(ctx.file_ast, f1)
+        if fdef0 is None or fdef1 is None:
+            raise MnemoCompileError("mnemo_pthread_parallel2: definizione funzione mancante")
+        fd0 = fdef0.decl.type
+        fd1 = fdef1.decl.type
+        if not isinstance(fd0, c.FuncDecl) or not isinstance(fd1, c.FuncDecl):
+            raise MnemoCompileError("mnemo_pthread_parallel2: firma worker non valida")
+        pm0 = _Ctx()
+        pm0.typedef_map = dict(ctx.typedef_map)
+        pm0.struct_specs = dict(ctx.struct_specs)
+        pm0.union_specs = dict(ctx.union_specs)
+        pm0.enum_constants = dict(ctx.enum_constants)
+        pm0.array_param_names = set()
+        pm1 = _Ctx()
+        pm1.typedef_map = dict(ctx.typedef_map)
+        pm1.struct_specs = dict(ctx.struct_specs)
+        pm1.union_specs = dict(ctx.union_specs)
+        pm1.enum_constants = dict(ctx.enum_constants)
+        pm1.array_param_names = set()
+        g0 = _func_param_slot_groups(fd0, ctx.typedef_map, pm0)
+        g1 = _func_param_slot_groups(fd1, ctx.typedef_map, pm1)
+        expected_len = 2 + len(g0) + len(g1)
+        if len(exprs) != expected_len:
             raise MnemoCompileError(
-                "mnemo_pthread_parallel2(f,g,a,b): f e g devono avere esattamente un parametro "
-                "scalare (es. void worker(int n))"
+                "mnemo_pthread_parallel2: numero argomenti errato — attesi "
+                f"{expected_len} (due nomi di funzione, poi {len(g0)} per `{f0}`, "
+                f"{len(g1)} per `{f1}`), ne ho {len(exprs)}"
             )
-        a2, a3 = exprs[2], exprs[3]
-        pre0 = _pthread_assign_worker_first_scalar_arg(
-            f0, a2, ctx, mem_partition_index=0
-        )
-        pre1 = _pthread_assign_worker_first_scalar_arg(
-            f1, a3, ctx, mem_partition_index=1
-        )
-        ctx.use_hist = True
+        raw0 = exprs[2 : 2 + len(g0)]
+        raw1 = exprs[2 + len(g0) :]
+        pre: list[Instr] = []
+        if expected_len > 2:
+            pre.extend(_pthread_assign_worker_params(f0, raw0, ctx, mem_partition_index=0))
+            pre.extend(_pthread_assign_worker_params(f1, raw1, ctx, mem_partition_index=1))
+            ctx.use_hist = True
         chx = _file_scope_channel_actuals(ctx)
-        return pre0 + pre1 + [
+        return pre + [
             IPar(
                 [
                     [ICall(f0, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
@@ -1229,6 +1301,20 @@ def _void_ptr_param_name(node: c.Decl) -> str | None:
     return str(inner.declname)
 
 
+def _struct_pointer_param_name(node: c.Decl, ctx: _Ctx) -> str | None:
+    """`mps_t *p` con `mps_t` typedef di struct — un solo slot (handle / indirizzo)."""
+    cur = node.type
+    if not isinstance(cur, c.PtrDecl):
+        return None
+    pointee = cur.type
+    st = _struct_tag_for_decl_type(pointee, ctx)
+    if st is None:
+        return None
+    if not isinstance(pointee, c.TypeDecl) or pointee.declname is None:
+        return None
+    return str(pointee.declname)
+
+
 def _cast_accepts_pointer_or_scalar(cast_node: c.Cast, td: dict[str, c.Node]) -> bool:
     tt = cast_node.to_type
     if isinstance(tt, c.TypeDecl) and isinstance(tt.type, c.IdentifierType):
@@ -1324,22 +1410,23 @@ def _return_is_int_like(fd: c.FuncDecl, td: dict[str, c.Node]) -> bool:
 
 
 def _pointer_level(decl_type: c.Node) -> int:
+    """Conta PtrDecl e ArrayDecl come livelli di indirection (ordine arbitrario nel tipo)."""
     n = 0
     cur: c.Node = decl_type
-    while isinstance(cur, c.PtrDecl):
-        n += 1
-        cur = cur.type
-    while isinstance(cur, c.ArrayDecl):
+    while isinstance(cur, (c.PtrDecl, c.ArrayDecl)):
         n += 1
         cur = cur.type
     return n
 
 
 def _type_leaf(decl_type: c.Node) -> tuple[list[str], str | None]:
+    """
+    Raggiunge TypeDecl / IdentifierType tra PtrDecl e ArrayDecl.
+    `char *argv[]` ha spesso ArrayDecl esterno e PtrDecl interno: strippare
+    prima tutti i Ptr e poi tutti gli Array fallisce (resta PtrDecl sopra il foglia).
+    """
     cur: c.Node = decl_type
-    while isinstance(cur, c.PtrDecl):
-        cur = cur.type
-    while isinstance(cur, c.ArrayDecl):
+    while isinstance(cur, (c.PtrDecl, c.ArrayDecl)):
         cur = cur.type
     if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.IdentifierType):
         return list(cur.type.names), cur.declname
@@ -1409,6 +1496,8 @@ def _func_param_names(fd: c.FuncDecl, td: dict[str, c.Node], ctx: _Ctx) -> list[
             if n is None:
                 n = _void_ptr_param_name(p)
             if n is None:
+                n = _struct_pointer_param_name(p, ctx)
+            if n is None:
                 raise MnemoCompileError("tipo parametro non supportato")
             names.append(n)
         else:
@@ -1460,6 +1549,8 @@ def _func_param_storage_names(fd: c.FuncDecl, td: dict[str, c.Node], ctx: _Ctx) 
                 n = _int_ptr_var_decl_name(p, td)
             if n is None:
                 n = _void_ptr_param_name(p)
+            if n is None:
+                n = _struct_pointer_param_name(p, ctx)
             if n is None:
                 raise MnemoCompileError("tipo parametro non supportato")
             out.append(n)
@@ -1513,6 +1604,8 @@ def _func_param_slot_groups(
                 n = _int_ptr_var_decl_name(p, td)
             if n is None:
                 n = _void_ptr_param_name(p)
+            if n is None:
+                n = _struct_pointer_param_name(p, ctx)
             if n is None:
                 raise MnemoCompileError("tipo parametro non supportato")
             out.append([n])
@@ -1715,6 +1808,8 @@ def _register_param_var_types(ctx: _Ctx, fd: c.FuncDecl) -> None:
                 n = _int_ptr_var_decl_name(p, td)
             if n is None:
                 n = _void_ptr_param_name(p)
+            if n is None:
+                n = _struct_pointer_param_name(p, ctx)
             if n:
                 if n in ctx.array_param_names:
                     cur = p.type
@@ -1907,9 +2002,21 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             inner = expr.expr
             if isinstance(inner, c.ID):
                 n = inner.name
-                if n not in ctx.slot_index:
-                    raise MnemoCompileError(f"&{n}: indirizzo non disponibile")
-                return [], Imm(ctx.slot_index[n]), []
+                if n in ctx.slot_index:
+                    return [], Imm(ctx.slot_index[n]), []
+                if n in ctx.struct_tag_of_var:
+                    tag = ctx.struct_tag_of_var[n]
+                    fields = ctx.struct_specs.get(tag)
+                    if not fields:
+                        raise MnemoCompileError(f"struct {tag!r}: metadati mancanti")
+                    first = fields[0][0]
+                    cell = _struct_field_local(n, first)
+                    if cell not in ctx.slot_index:
+                        raise MnemoCompileError(
+                            f"&{n}: indirizzo (primo campo) non disponibile"
+                        )
+                    return [], Imm(ctx.slot_index[cell]), []
+                raise MnemoCompileError(f"&{n}: indirizzo non disponibile")
             if isinstance(inner, c.StructRef) and inner.type == ".":
                 base, path = _structref_base_and_path(inner)
                 mangled = "__".join(path)
@@ -2473,6 +2580,62 @@ def _lower_expr_as_stmt(expr: c.Node, ctx: _Ctx) -> list[Instr]:
 def _lower_deref_assign(p_name: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
     """`*p = rhs` tramite __mn_pool_store (`p` è un identificatore puntatore)."""
     return _lower_deref_assign_phys(_phys(ctx, p_name), rhs, ctx)
+
+
+def _lower_struct_arrow_assign(lhs: c.StructRef, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
+    """`p->campo = rhs` tramite pool store con offset campo (come lettura `->` in _eval_expr)."""
+    if lhs.type != "->":
+        raise MnemoCompileError("solo `->`")
+    if not isinstance(lhs.name, c.ID) or not isinstance(lhs.field, c.ID):
+        raise MnemoCompileError("`->`: sintassi non supportata")
+    p = lhs.name.name
+    if p not in ctx.int_locals:
+        raise MnemoCompileError(f"puntatore non dichiarato: {p!r}")
+    pty = ctx.var_types.get(p)
+    if pty is None:
+        raise MnemoCompileError(f"`{p}`: tipo mancante per ->")
+    tag = _pointee_struct_tag(pty, ctx)
+    mangled = str(lhs.field.name)
+    spec = ctx.struct_specs.get(tag)
+    if not spec or mangled not in [fn for fn, _ in spec]:
+        raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
+    off_w = _field_word_offset(tag, mangled, ctx)
+    _register_ptr_pool_locals(ctx)
+    ei_m, op_m, tm_m = _eval_expr(c.ID(p, lhs.coord), ctx)
+    t_slot = ctx.fresh_temp()
+    ctx.use_hist = True
+    rop: Operand = op_m if isinstance(op_m, Imm) else Var(op_m.name)
+    pre_m = (
+        ei_m
+        + [IHistPush(ctx.hist, t_slot), IAddEq(t_slot, rop)]
+        + ([IAddEq(t_slot, Imm(off_w))] if off_w != 0 else [])
+    )
+    ei_r, op_r, tm_r = _eval_expr(rhs, ctx)
+    if isinstance(op_r, Imm):
+        t_val = ctx.fresh_temp()
+        pre_r = ei_r + [IConst(t_val, op_r.value)]
+        val = t_val
+        tm_r = tm_r + [t_val]
+    else:
+        pre_r = ei_r
+        val = op_r.name
+    pre_slot, slot_a, tm_sl = _pool_call_slot_arg(ctx, t_slot)
+    ins = (
+        pre_m
+        + pre_r
+        + pre_slot
+        + [
+            ICall(
+                "__mn_pool_store",
+                [slot_a, val] + list(_ptr_pool_mem_names(ctx)),
+            )
+        ]
+    )
+    all_tm = tm_m + tm_r + tm_sl + [t_slot]
+    if all_tm:
+        ctx.use_scratch = True
+    post = [IHistPush(ctx.scratch, x) for x in reversed(all_tm)]
+    return ins + post
 
 
 def _lower_deref_assign_phys(ptr_phys: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
@@ -3313,6 +3476,10 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         ]
                         return _lower_funccall_with_ret(node.rvalue, ctx, sinks)
         if isinstance(node.lvalue, c.StructRef):
+            if node.lvalue.type == "->":
+                if node.op != "=":
+                    raise MnemoCompileError("ptr->campo: solo `=` (niente += …)")
+                return _lower_struct_arrow_assign(node.lvalue, node.rvalue, ctx)
             base, path = _structref_base_and_path(node.lvalue)
             mangled = "__".join(path)
             if base in ctx.union_tag_of_var:
@@ -3388,6 +3555,8 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         compound = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%", "^=": "^"}
         if node.op in compound:
             coord = node.coord
+            # Nota Janus: `_lower_assign` fa eval(rhs) *prima* di push(lhs) che azzera lhs.
+            # Per `sum += i` serve rhs = sum+i così il totale è calcolato prima del push.
             rhs = c.BinaryOp(
                 compound[node.op],
                 c.ID(_phys(ctx, lhs), coord),
@@ -3413,6 +3582,12 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             raise MnemoCompileError("callee non è un identificatore")
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
+            if (
+                ctx.is_main
+                and isinstance(node.name, c.ID)
+                and node.name.name == "mnemo_pthread_parallel2"
+            ):
+                ctx.after_par_join = True
             return pthread_ins
         nm = node.name.name
         if ctx.proc_returns_int.get(nm, False):

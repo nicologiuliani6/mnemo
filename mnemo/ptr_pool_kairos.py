@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from mnemo.errors import MnemoCompileError
 
-PTR_POOL_MAX = 256
+PTR_POOL_MAX = 2048
 
 
 def emit_ptr_pool_kairos(n: int) -> str:

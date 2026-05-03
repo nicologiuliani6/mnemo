@@ -122,7 +122,7 @@ Mnemo abbassa questi prototipi su **`par … and … rap`** nella VM Kairos (due
 | ABI | Effetto |
 |-----|---------|
 | **`mnemo_pthread_parallel2(a,b)`** | `par call a … and call b … rap` con `void a(void)`, `void b(void)`. |
-| **`mnemo_pthread_parallel2(a,b, x, y)`** | Stesso `par`, con `void a(int)`, `void b(int)`: `x` e `y` sono scritti nello slot del primo parametro di ciascun worker (finestra mem regione 0 / 1). |
+| **`mnemo_pthread_parallel2(a,b, …)`** | Dopo `a` e `b` vengono gli argomenti **nell’ordine della firma C**: prima tutti quelli di `a`, poi tutti quelli di `b` (scalari, struct per valore, puntatori, … — come in una chiamata normale). Esempio: `void a(int x, mps_t *p)` e `void b(mps_t *q, int k)` → `parallel2(a, b, x, p, q, k)`. Regione mem 0 / 1 come sopra. |
 | **`mnemo_pthread_parallel_with(w,c)`** | worker `w` e continuazione `c` insieme (`void (*)(void)` entrambi). |
 | **`mnemo_pthread_parallel_with1(w, arg, c)`** | Come sopra con argomento scalare verso `w`. |
 

@@ -26,6 +26,828 @@ class ProgramMemLayout:
     parallel_region1_workers: frozenset[str] = frozenset()
     """Indici globali di variabili `("__file__", v)` con `v` non `__mn_p1_*`: stesso `__mn_mem{i}` in entrambi i rami PAR."""
     parallel_file_shared_slots: frozenset[int] = frozenset()
+    """
+    Locali `main` il cui valore aggiornato dopo `mnemo_pthread_parallel2` sta nella
+    seconda partizione (`__mn_mem{S+idx}`): campi struct scritti solo dal worker 1 (secondo arg).
+    """
+    main_partition1_read_logicals: frozenset[str] = frozenset()
+
+
+def _addr_of_root_var(expr: c.Node) -> str | None:
+    """`&x` → `x`; altrimenti None."""
+    if isinstance(expr, c.UnaryOp) and expr.op == "&":
+        if isinstance(expr.expr, c.ID):
+            return expr.expr.name
+    return None
+
+
+_MAX_PARTITION1_CALLEE_DEPTH = 16
+# Nomi di funzioni ABI / runtime: nessun corpo C da seguire per l'inferenza.
+_PARTITION1_SKIP_CALLEE_NAMES = frozenset(
+    {
+        "pthread_mutex_init",
+        "pthread_mutex_lock",
+        "pthread_mutex_unlock",
+        "pthread_mutex_destroy",
+        "mnemo_pthread_parallel2",
+        "mnemo_pthread_start",
+        "mnemo_pthread_start1",
+        "mnemo_pthread_parallel_with",
+        "mnemo_pthread_parallel_with1",
+    }
+)
+
+
+def _flatten_funcall_args(call: c.FuncCall) -> list[c.Node]:
+    if call.args is None:
+        return []
+    a = call.args
+    if isinstance(a, c.ExprList):
+        return list(a.exprs or [])
+    return [a]
+
+
+def _main_logical_from_worker_actual(
+    expr: c.Node, worker_param_to_main: dict[str, str]
+) -> str | None:
+    """Espressione attuale → nome logico main (param worker mappato da parallel2)."""
+    mv = _addr_of_root_var(expr)
+    if mv is not None and mv in worker_param_to_main:
+        return worker_param_to_main[mv]
+    if isinstance(expr, c.ID) and expr.name in worker_param_to_main:
+        return worker_param_to_main[expr.name]
+    return None
+
+
+def _partition1_follow_callee_call(
+    call: c.FuncCall,
+    param_to_main: dict[str, str],
+    ast: c.FileAST,
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+    depth: int,
+    *,
+    deref_acc: set[str] | None,
+    struct_acc: set[str] | None,
+) -> None:
+    """Entra nel corpo di una funzione definita nello stesso AST (es. `srecv`)."""
+    from mnemo import c_lower as L
+
+    if depth >= _MAX_PARTITION1_CALLEE_DEPTH:
+        return
+    if not isinstance(call.name, c.ID):
+        return
+    fnm = call.name.name
+    if fnm in _PARTITION1_SKIP_CALLEE_NAMES:
+        return
+    fdef = L._get_funcdef(ast, fnm)
+    if fdef is None or not isinstance(fdef.decl.type, c.FuncDecl) or fdef.body is None:
+        return
+    inner = _callee_param_map_for_partition1(
+        fdef.decl.type,
+        call,
+        param_to_main,
+        td,
+        struct_specs,
+        union_specs,
+        enum_constants,
+    )
+    if not inner:
+        return
+    if deref_acc is not None:
+        _walk_assignments_deref_param(
+            fdef.body,
+            inner,
+            deref_acc,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth + 1,
+        )
+    if struct_acc is not None:
+        _walk_assignments_struct_arrow(
+            fdef.body,
+            inner,
+            struct_acc,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth + 1,
+        )
+
+
+def _callee_param_map_for_partition1(
+    callee_fd: c.FuncDecl,
+    call: c.FuncCall,
+    worker_param_to_main: dict[str, str],
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+) -> dict[str, str]:
+    """Mappa formali della callee → logici main (es. srecv(m,answer) con answer worker → main)."""
+    from mnemo import c_lower as L
+
+    pm = L._Ctx()
+    pm.typedef_map = dict(td)
+    pm.struct_specs = dict(struct_specs)
+    pm.union_specs = dict(union_specs)
+    pm.enum_constants = dict(enum_constants)
+    pm.array_param_names = set()
+    groups = L._func_param_slot_groups(callee_fd, td, pm)
+    args = _flatten_funcall_args(call)
+    if len(args) != len(groups):
+        return {}
+    inner: dict[str, str] = {}
+    for group, rex in zip(groups, args):
+        if len(group) != 1:
+            continue
+        fname = group[0]
+        ml = _main_logical_from_worker_actual(rex, worker_param_to_main)
+        if ml is not None:
+            inner[fname] = ml
+    return inner
+
+
+def _partition1_follow_callee_call_arrow_fields(
+    call: c.FuncCall,
+    param_to_main: dict[str, str],
+    ast: c.FileAST,
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+    depth: int,
+    out_fields: set[str],
+) -> None:
+    """Come _partition1_follow_callee_call, ma raccoglie `->campo` (primo segmento) in out_fields."""
+    from mnemo import c_lower as L
+
+    if depth >= _MAX_PARTITION1_CALLEE_DEPTH:
+        return
+    if not isinstance(call.name, c.ID):
+        return
+    fnm = call.name.name
+    if fnm in _PARTITION1_SKIP_CALLEE_NAMES:
+        return
+    fdef = L._get_funcdef(ast, fnm)
+    if fdef is None or not isinstance(fdef.decl.type, c.FuncDecl) or fdef.body is None:
+        return
+    inner = _callee_param_map_for_partition1(
+        fdef.decl.type,
+        call,
+        param_to_main,
+        td,
+        struct_specs,
+        union_specs,
+        enum_constants,
+    )
+    if not inner:
+        return
+    _walk_arrow_field_first_segments(
+        fdef.body,
+        inner,
+        out_fields,
+        ast,
+        td,
+        struct_specs,
+        union_specs,
+        enum_constants,
+        depth + 1,
+    )
+
+
+def _walk_expr_collect_arrow_field_segments(
+    expr: c.Node | None,
+    param_to_main: dict[str, str],
+    out_fields: set[str],
+) -> None:
+    """Qualsiasi `param->campo` in un'espressione (es. rhs di `*p = m->payload`)."""
+    from mnemo import c_lower as L
+
+    if expr is None:
+        return
+    if isinstance(expr, c.StructRef) and expr.type == "->":
+        base, parts = L._structref_base_and_path(expr)
+        if base in param_to_main and len(parts) >= 1:
+            out_fields.add(parts[0])
+    for _na, ch in expr.children():
+        if isinstance(ch, list):
+            for x in ch:
+                _walk_expr_collect_arrow_field_segments(x, param_to_main, out_fields)
+        elif ch is not None:
+            _walk_expr_collect_arrow_field_segments(ch, param_to_main, out_fields)
+
+
+def _walk_arrow_field_first_segments(
+    node: c.Node | None,
+    param_to_main: dict[str, str],
+    out_fields: set[str],
+    ast: c.FileAST,
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+    depth: int = 0,
+) -> None:
+    """Primi segmenti `base->campo` per inferenza PAR condivisa (anche dentro callee nello stesso file)."""
+    from mnemo import c_lower as L
+
+    if node is None or depth > _MAX_PARTITION1_CALLEE_DEPTH:
+        return
+    if isinstance(node, c.Compound):
+        for it in node.block_items or []:
+            _walk_arrow_field_first_segments(
+                it,
+                param_to_main,
+                out_fields,
+                ast,
+                td,
+                struct_specs,
+                union_specs,
+                enum_constants,
+                depth,
+            )
+        return
+    if isinstance(node, c.If):
+        _walk_arrow_field_first_segments(
+            node.iftrue,
+            param_to_main,
+            out_fields,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+        )
+        _walk_arrow_field_first_segments(
+            node.iffalse,
+            param_to_main,
+            out_fields,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+        )
+        return
+    if isinstance(node, c.For):
+        _walk_arrow_field_first_segments(
+            node.stmt,
+            param_to_main,
+            out_fields,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+        )
+        return
+    if isinstance(node, c.While):
+        _walk_arrow_field_first_segments(
+            node.stmt,
+            param_to_main,
+            out_fields,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+        )
+        return
+    if isinstance(node, c.DoWhile):
+        _walk_arrow_field_first_segments(
+            node.stmt,
+            param_to_main,
+            out_fields,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+        )
+        return
+    if isinstance(node, c.Switch) and isinstance(node.stmt, c.Compound):
+        for it in node.stmt.block_items or []:
+            if isinstance(it, c.Case):
+                for s in it.stmts or []:
+                    _walk_arrow_field_first_segments(
+                        s,
+                        param_to_main,
+                        out_fields,
+                        ast,
+                        td,
+                        struct_specs,
+                        union_specs,
+                        enum_constants,
+                        depth,
+                    )
+            elif isinstance(it, c.Default):
+                for s in it.stmts or []:
+                    _walk_arrow_field_first_segments(
+                        s,
+                        param_to_main,
+                        out_fields,
+                        ast,
+                        td,
+                        struct_specs,
+                        union_specs,
+                        enum_constants,
+                        depth,
+                    )
+        return
+    if getattr(c, "ExprStmt", None) is not None and isinstance(node, c.ExprStmt):
+        if node.expr is not None:
+            _walk_arrow_field_first_segments(
+                node.expr,
+                param_to_main,
+                out_fields,
+                ast,
+                td,
+                struct_specs,
+                union_specs,
+                enum_constants,
+                depth,
+            )
+        return
+    if isinstance(node, c.FuncCall):
+        _partition1_follow_callee_call_arrow_fields(
+            node,
+            param_to_main,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+            out_fields,
+        )
+        return
+    if isinstance(node, c.Assignment):
+        lv = node.lvalue
+        if isinstance(lv, c.StructRef) and lv.type == "->":
+            base, parts = L._structref_base_and_path(lv)
+            if base in param_to_main and len(parts) >= 1:
+                out_fields.add(parts[0])
+        _walk_expr_collect_arrow_field_segments(
+            node.rvalue, param_to_main, out_fields
+        )
+        return
+
+
+def _collect_arrow_field_names_for_param_deep(
+    body: c.Node | None,
+    param: str,
+    main_root: str,
+    ast: c.FileAST,
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+) -> set[str]:
+    """Campi `param->campo` nel corpo del worker e nelle funzioni dello stesso file (es. ssend/srecv)."""
+    param_to_main = {param: main_root}
+    out: set[str] = set()
+    _walk_arrow_field_first_segments(
+        body,
+        param_to_main,
+        out,
+        ast,
+        td,
+        struct_specs,
+        union_specs,
+        enum_constants,
+        0,
+    )
+    return out
+
+
+def _walk_collect_parallel2_calls(node: c.Node | None, out: list[c.FuncCall]) -> None:
+    if node is None:
+        return
+    if isinstance(node, c.Compound):
+        for it in node.block_items or []:
+            _walk_collect_parallel2_calls(it, out)
+        return
+    if isinstance(node, c.If):
+        _walk_collect_parallel2_calls(node.iftrue, out)
+        _walk_collect_parallel2_calls(node.iffalse, out)
+        return
+    if isinstance(node, c.For):
+        _walk_collect_parallel2_calls(node.stmt, out)
+        return
+    if isinstance(node, c.While):
+        _walk_collect_parallel2_calls(node.stmt, out)
+        return
+    if isinstance(node, c.DoWhile):
+        _walk_collect_parallel2_calls(node.stmt, out)
+        return
+    if isinstance(node, c.Switch) and isinstance(node.stmt, c.Compound):
+        for it in node.stmt.block_items or []:
+            if isinstance(it, c.Case):
+                for s in it.stmts or []:
+                    _walk_collect_parallel2_calls(s, out)
+            elif isinstance(it, c.Default):
+                for s in it.stmts or []:
+                    _walk_collect_parallel2_calls(s, out)
+        return
+    if isinstance(node, c.FuncCall) and isinstance(node.name, c.ID):
+        if node.name.name == "mnemo_pthread_parallel2":
+            out.append(node)
+        return
+
+
+def _walk_assignments_deref_param(
+    node: c.Node | None,
+    param_to_main: dict[str, str],
+    out_logicals: set[str],
+    ast: c.FileAST,
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+    depth: int = 0,
+) -> None:
+    """
+    Assegnamenti `*param = …` dove `param` è un puntatore formale del worker 1
+    mappato a `&variabile_main` (es. `*answer = …` con `&answer` nella parallel2).
+    Segue anche chiamate a funzioni definite nello stesso file (es. `srecv(m, answer)`).
+    """
+    if node is None or depth > _MAX_PARTITION1_CALLEE_DEPTH:
+        return
+    if isinstance(node, c.Compound):
+        for it in node.block_items or []:
+            _walk_assignments_deref_param(
+                it,
+                param_to_main,
+                out_logicals,
+                ast,
+                td,
+                struct_specs,
+                union_specs,
+                enum_constants,
+                depth,
+            )
+        return
+    if isinstance(node, c.If):
+        _walk_assignments_deref_param(
+            node.iftrue, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        _walk_assignments_deref_param(
+            node.iffalse, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.For):
+        _walk_assignments_deref_param(
+            node.stmt, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.While):
+        _walk_assignments_deref_param(
+            node.stmt, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.DoWhile):
+        _walk_assignments_deref_param(
+            node.stmt, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.Switch) and isinstance(node.stmt, c.Compound):
+        for it in node.stmt.block_items or []:
+            if isinstance(it, c.Case):
+                for s in it.stmts or []:
+                    _walk_assignments_deref_param(
+                        s, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+                    )
+            elif isinstance(it, c.Default):
+                for s in it.stmts or []:
+                    _walk_assignments_deref_param(
+                        s, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+                    )
+        return
+    if getattr(c, "ExprStmt", None) is not None and isinstance(node, c.ExprStmt):
+        if node.expr is not None:
+            _walk_assignments_deref_param(
+                node.expr,
+                param_to_main,
+                out_logicals,
+                ast,
+                td,
+                struct_specs,
+                union_specs,
+                enum_constants,
+                depth,
+            )
+        return
+    if isinstance(node, c.FuncCall):
+        _partition1_follow_callee_call(
+            node,
+            param_to_main,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+            deref_acc=out_logicals,
+            struct_acc=None,
+        )
+        return
+    if isinstance(node, c.Assignment):
+        lv = node.lvalue
+        if (
+            isinstance(lv, c.UnaryOp)
+            and lv.op == "*"
+            and isinstance(lv.expr, c.ID)
+        ):
+            pname = lv.expr.name
+            if pname in param_to_main:
+                out_logicals.add(param_to_main[pname])
+        return
+
+
+def _walk_assignments_struct_arrow(
+    node: c.Node | None,
+    param_to_main: dict[str, str],
+    out_logicals: set[str],
+    ast: c.FileAST,
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+    depth: int = 0,
+) -> None:
+    from mnemo import c_lower as L
+
+    if node is None or depth > _MAX_PARTITION1_CALLEE_DEPTH:
+        return
+    if isinstance(node, c.Compound):
+        for it in node.block_items or []:
+            _walk_assignments_struct_arrow(
+                it, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+            )
+        return
+    if isinstance(node, c.If):
+        _walk_assignments_struct_arrow(
+            node.iftrue, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        _walk_assignments_struct_arrow(
+            node.iffalse, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.For):
+        _walk_assignments_struct_arrow(
+            node.stmt, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.While):
+        _walk_assignments_struct_arrow(
+            node.stmt, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.DoWhile):
+        _walk_assignments_struct_arrow(
+            node.stmt, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+        )
+        return
+    if isinstance(node, c.Switch) and isinstance(node.stmt, c.Compound):
+        for it in node.stmt.block_items or []:
+            if isinstance(it, c.Case):
+                for s in it.stmts or []:
+                    _walk_assignments_struct_arrow(
+                        s, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+                    )
+            elif isinstance(it, c.Default):
+                for s in it.stmts or []:
+                    _walk_assignments_struct_arrow(
+                        s, param_to_main, out_logicals, ast, td, struct_specs, union_specs, enum_constants, depth
+                    )
+        return
+    if getattr(c, "ExprStmt", None) is not None and isinstance(node, c.ExprStmt):
+        if node.expr is not None:
+            _walk_assignments_struct_arrow(
+                node.expr,
+                param_to_main,
+                out_logicals,
+                ast,
+                td,
+                struct_specs,
+                union_specs,
+                enum_constants,
+                depth,
+            )
+        return
+    if isinstance(node, c.FuncCall):
+        _partition1_follow_callee_call(
+            node,
+            param_to_main,
+            ast,
+            td,
+            struct_specs,
+            union_specs,
+            enum_constants,
+            depth,
+            deref_acc=None,
+            struct_acc=out_logicals,
+        )
+        return
+    if isinstance(node, c.Assignment):
+        lv = node.lvalue
+        if isinstance(lv, c.StructRef) and lv.type == "->":
+            base, parts = L._structref_base_and_path(lv)
+            if base in param_to_main and len(parts) >= 1:
+                main_v = param_to_main[base]
+                out_logicals.add(L._struct_field_local(main_v, parts[0]))
+        return
+
+
+def _infer_parallel_shared_main_slots(
+    ast: c.FileAST,
+    slot_of: dict[tuple[str, str], int],
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+) -> set[int]:
+    """
+    Se lo stesso `&variabile_main` è passato a entrambi i worker PAR e entrambi usano
+    `p->campo` sulla struct, quelle celle devono essere la stessa __mn_mem{i} in entrambi
+    i rami (non partizioni distinte), altrimenti pool_load/store non comunicano.
+    """
+    from mnemo import c_lower as L
+
+    main_ext = L._find_main(ast)
+    if main_ext is None or main_ext.body is None or not isinstance(
+        main_ext.body, c.Compound
+    ):
+        return set()
+
+    calls: list[c.FuncCall] = []
+    for it in main_ext.body.block_items or []:
+        _walk_collect_parallel2_calls(it, calls)
+
+    idx_out: set[int] = set()
+    for call in calls:
+        el = call.args
+        exprs = list(el.exprs) if el is not None else []
+        if len(exprs) < 2:
+            continue
+        if not isinstance(exprs[0], c.ID) or not isinstance(exprs[1], c.ID):
+            continue
+        f0, f1 = exprs[0].name, exprs[1].name
+        fdef0 = L._get_funcdef(ast, f0)
+        fdef1 = L._get_funcdef(ast, f1)
+        if fdef0 is None or fdef1 is None:
+            continue
+        fd0 = fdef0.decl.type
+        fd1 = fdef1.decl.type
+        if not isinstance(fd0, c.FuncDecl) or not isinstance(fd1, c.FuncDecl):
+            continue
+        pm0 = L._Ctx()
+        pm0.typedef_map = dict(td)
+        pm0.struct_specs = dict(struct_specs)
+        pm0.union_specs = dict(union_specs)
+        pm0.enum_constants = dict(enum_constants)
+        pm0.array_param_names = set()
+        pm1 = L._Ctx()
+        pm1.typedef_map = dict(td)
+        pm1.struct_specs = dict(struct_specs)
+        pm1.union_specs = dict(union_specs)
+        pm1.enum_constants = dict(enum_constants)
+        pm1.array_param_names = set()
+        g0 = L._func_param_slot_groups(fd0, td, pm0)
+        g1 = L._func_param_slot_groups(fd1, td, pm1)
+        if len(exprs) != 2 + len(g0) + len(g1):
+            continue
+        raw0 = exprs[2 : 2 + len(g0)]
+        raw1 = exprs[2 + len(g0) :]
+        if len(raw0) != len(g0) or len(raw1) != len(g1):
+            continue
+        body0 = fdef0.body
+        body1 = fdef1.body
+        if body0 is None or body1 is None:
+            continue
+        for i in range(len(g0)):
+            if len(g0[i]) != 1 or len(g1[i]) != 1:
+                continue
+            p0, p1 = g0[i][0], g1[i][0]
+            mv0 = _addr_of_root_var(raw0[i])
+            mv1 = _addr_of_root_var(raw1[i])
+            if mv0 is None or mv0 != mv1:
+                continue
+            fields0 = _collect_arrow_field_names_for_param_deep(
+                body0, p0, mv0, ast, td, struct_specs, union_specs, enum_constants
+            )
+            fields1 = _collect_arrow_field_names_for_param_deep(
+                body1, p1, mv1, ast, td, struct_specs, union_specs, enum_constants
+            )
+            for fn in fields0 & fields1:
+                logical = L._struct_field_local(mv0, fn)
+                key = ("main", logical)
+                if key in slot_of:
+                    idx_out.add(slot_of[key])
+    return idx_out
+
+
+def _infer_main_partition1_read_logicals(
+    ast: c.FileAST,
+    slot_of: dict[tuple[str, str], int],
+    td: dict,
+    struct_specs: dict,
+    union_specs: dict,
+    enum_constants: dict,
+) -> frozenset[str]:
+    """
+    Dopo `mnemo_pthread_parallel2(f,g, args_f..., args_g...)`, il ramo destro usa
+    `__mn_mem{S+idx}`. In main, dopo il PAR, vanno letti dalla partizione 1 i valori
+    aggiornati in g tramite `p->campo = ...` oppure `*param = ...` con `param` legato a
+    `&variabile_main` negli argomenti del secondo worker. Gli stessi effetti vengono
+    riconosciuti anche se avvengono in funzioni helper nello stesso file (es. `srecv`).
+    """
+    from mnemo import c_lower as L
+
+    main_ext = L._find_main(ast)
+    if main_ext is None or main_ext.body is None or not isinstance(
+        main_ext.body, c.Compound
+    ):
+        return frozenset()
+
+    calls: list[c.FuncCall] = []
+    for it in main_ext.body.block_items or []:
+        _walk_collect_parallel2_calls(it, calls)
+
+    acc: set[str] = set()
+    for call in calls:
+        el = call.args
+        exprs = list(el.exprs) if el is not None else []
+        if len(exprs) < 2:
+            continue
+        if not isinstance(exprs[0], c.ID) or not isinstance(exprs[1], c.ID):
+            continue
+        f0, f1 = exprs[0].name, exprs[1].name
+        fdef0 = L._get_funcdef(ast, f0)
+        fdef1 = L._get_funcdef(ast, f1)
+        if fdef0 is None or fdef1 is None:
+            continue
+        fd0 = fdef0.decl.type
+        fd1 = fdef1.decl.type
+        if not isinstance(fd0, c.FuncDecl) or not isinstance(fd1, c.FuncDecl):
+            continue
+        pm0 = L._Ctx()
+        pm0.typedef_map = dict(td)
+        pm0.struct_specs = dict(struct_specs)
+        pm0.union_specs = dict(union_specs)
+        pm0.enum_constants = dict(enum_constants)
+        pm0.array_param_names = set()
+        pm1 = L._Ctx()
+        pm1.typedef_map = dict(td)
+        pm1.struct_specs = dict(struct_specs)
+        pm1.union_specs = dict(union_specs)
+        pm1.enum_constants = dict(enum_constants)
+        pm1.array_param_names = set()
+        g0 = L._func_param_slot_groups(fd0, td, pm0)
+        g1 = L._func_param_slot_groups(fd1, td, pm1)
+        if len(exprs) != 2 + len(g0) + len(g1):
+            continue
+        raw1 = exprs[2 + len(g0) :]
+        if len(raw1) != len(g1):
+            continue
+        param_to_main: dict[str, str] = {}
+        for group, rex in zip(g1, raw1):
+            if len(group) != 1:
+                continue
+            p = group[0]
+            mv = _addr_of_root_var(rex)
+            if mv is not None:
+                param_to_main[p] = mv
+        if not param_to_main:
+            continue
+        body1 = fdef1.body
+        if body1 is None:
+            continue
+        _walk_assignments_struct_arrow(
+            body1, param_to_main, acc, ast, td, struct_specs, union_specs, enum_constants
+        )
+        _walk_assignments_deref_param(
+            body1, param_to_main, acc, ast, td, struct_specs, union_specs, enum_constants
+        )
+
+    verified: set[str] = set()
+    for log in acc:
+        if ("main", log) in slot_of:
+            verified.add(log)
+    return frozenset(verified)
 
 
 def compute_program_mem_layout(
@@ -338,6 +1160,14 @@ def compute_program_mem_layout(
     for (fn, logical), idx in slot_of.items():
         if fn == "__file__" and not logical.startswith("__mn_p1_"):
             parallel_shared_slots.add(idx)
+    parallel_shared_slots.update(
+        _infer_parallel_shared_main_slots(
+            ast, slot_of, td, specs, unions, enums
+        )
+    )
+    main_p1_reads = _infer_main_partition1_read_logicals(
+        ast, slot_of, td, specs, unions, enums
+    )
     return ProgramMemLayout(
         heap_base=heap_base,
         total_cells=total,
@@ -347,4 +1177,5 @@ def compute_program_mem_layout(
         file_scope_partition1=frozenset(file_par1),
         parallel_region1_workers=L.infer_parallel_region1_workers(ast),
         parallel_file_shared_slots=frozenset(parallel_shared_slots),
+        main_partition1_read_logicals=main_p1_reads,
     )

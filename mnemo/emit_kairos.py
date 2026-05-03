@@ -41,6 +41,35 @@ def _emit_operand_for_expr(o: Operand) -> str:
     return operand_str(o)
 
 
+def _emit_instr_seq(lines: list[str], instrs: list[Instr], indent: str) -> None:
+    """
+    Due IAddEq consecutivi sullo stesso `dst` (tipico di rhs `a + b` in _eval_expr)
+    diventano un solo `dst += ((a) + (b))` così la VM non ha una finestra tra due letture
+    di int condivisi nel PAR (Kairos → un solo PUSHEQ / resolve_expr parentesizzato).
+    """
+    i = 0
+    while i < len(instrs):
+        ins = instrs[i]
+        if (
+            isinstance(ins, IAddEq)
+            and i + 1 < len(instrs)
+            and isinstance(instrs[i + 1], IAddEq)
+            and ins.dst == instrs[i + 1].dst
+            and str(ins.dst).startswith("__mn_e")
+        ):
+            nxt = instrs[i + 1]
+            # Una sola coppia di parentesi: `(a + b)` così resolve_expr legge lhs/rhs flat
+            # (evita `( (a) + (b) )` dove gli atomi tra parentesi rompono il parser).
+            lines.append(
+                f"{indent}{ins.dst} += ({_emit_operand_for_expr(ins.rhs)}"
+                f" + {_emit_operand_for_expr(nxt.rhs)})"
+            )
+            i += 2
+            continue
+        _emit_instr(lines, ins, indent)
+        i += 1
+
+
 def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     if isinstance(ins, IComment):
         lines.append(f"{indent}// {ins.text}")
@@ -101,12 +130,10 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         rhs = ins.rhs
         lines.append(f"{indent}if {ins.lhs} {ins.op} {rhs} then")
         ind2 = indent + "    "
-        for sub in ins.then_instrs:
-            _emit_instr(lines, sub, ind2)
+        _emit_instr_seq(lines, ins.then_instrs, ind2)
         if ins.else_instrs is not None:
             lines.append(f"{indent}else")
-            for sub in ins.else_instrs:
-                _emit_instr(lines, sub, ind2)
+            _emit_instr_seq(lines, ins.else_instrs, ind2)
         lines.append(f"{indent}fi {ins.lhs} {ins.op} {rhs}")
         return
     if isinstance(ins, IFromUntilKairos):
@@ -114,8 +141,7 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
             f"{indent}from {ins.entry_lhs} {ins.entry_op} {ins.entry_rhs} loop"
         )
         ind2 = indent + "    "
-        for sub in ins.body_instrs:
-            _emit_instr(lines, sub, ind2)
+        _emit_instr_seq(lines, ins.body_instrs, ind2)
         lines.append(
             f"{indent}until {ins.until_lhs} {ins.until_op} {ins.until_rhs}"
         )
@@ -123,8 +149,7 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     if isinstance(ins, ILocalBlock):
         lines.append(f"{indent}local int {ins.var} = 0")
         ind2 = indent + "    "
-        for sub in ins.body_instrs:
-            _emit_instr(lines, sub, ind2)
+        _emit_instr_seq(lines, ins.body_instrs, ind2)
         lines.append(f"{indent}delocal int {ins.var} = 0")
         return
     if isinstance(ins, ISsend):
@@ -141,8 +166,7 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         for i, branch in enumerate(ins.branches):
             if i > 0:
                 lines.append(f"{indent}and")
-            for sub in branch:
-                _emit_instr(lines, sub, br_ind)
+            _emit_instr_seq(lines, branch, br_ind)
         lines.append(f"{indent}rap")
         return
     raise TypeError(ins)
@@ -190,8 +214,7 @@ def _emit_main(fn: Function) -> str:
         body_indent = "    "
 
     for b in fn.blocks:
-        for ins in b.instrs:
-            _emit_instr(lines, ins, body_indent)
+        _emit_instr_seq(lines, b.instrs, body_indent)
 
     for _t, name in reversed(ints):
         lines.append(f"    push({name}, {hist})")
@@ -241,8 +264,7 @@ def _emit_procedure(fn: Function) -> str:
         body_indent = "    "
 
     for b in fn.blocks:
-        for ins in b.instrs:
-            _emit_instr(lines, ins, body_indent)
+        _emit_instr_seq(lines, b.instrs, body_indent)
 
     for _t, name in reversed(ints):
         if _is_unified_mem_local(name):
