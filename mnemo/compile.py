@@ -8,6 +8,7 @@ from mnemo.c_lower import (
     infer_lib_files_from_calls,
     lower_file_to_program,
 )
+from mnemo.inline_user import maybe_inline_user_functions
 from mnemo.layout_collect import compute_program_mem_layout
 from mnemo.par_shared_mutex_check import check_par_shared_mutex_discipline
 from mnemo.c_parse import parse_c
@@ -145,6 +146,9 @@ def compile_c_to_kairos(
         ptr_pool_size=ptr_pool_size,
         layout=layout,
         physical_mem_cells=physical_mem_cells,
+    )
+    prog = maybe_inline_user_functions(
+        ast, prog, total_mem_cells=layout.total_cells
     )
     if _program_uses_ptr_pool(prog):
         lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])

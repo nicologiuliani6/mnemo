@@ -19,11 +19,13 @@ Lowering pycparser AST → IR Mnemo.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import pycparser.c_ast as c
 
 from mnemo.errors import MnemoCompileError
+from mnemo.kairos_limits import MONOLITHIC_POOL_MEM_MAX, POOL_BANK_SIZE
 from mnemo.layout_collect import ProgramMemLayout, compute_program_mem_layout
 from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 from mnemo.ir import (
@@ -48,6 +50,7 @@ from mnemo.ir import (
     Instr,
     Program,
     Imm,
+    Operand,
     Var,
 )
 
@@ -56,6 +59,10 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_mul_into",
         "__mn_divmod_nonneg",
         "__mn_mod_nonneg",
+        "__mn_and_into",
+        "__mn_or_into",
+        "__mn_shl_into",
+        "__mn_shr_into",
         "__mn_pool_alloc",
         "__mn_pool_store",
         "__mn_pool_load",
@@ -355,11 +362,13 @@ def _enum_constants_from_enum(en: c.Enum) -> dict[str, int]:
 
 @dataclass
 class _ArrayInfo:
-    """Row-major: `dims` = (d0,d1,…), `total` = ∏ dims, `elem_size` byte per elemento."""
+    """Row-major: `dims` = (d0,d1,…), `total` = ∏ dims, `elem_size` byte per elemento.
+    `array_decay_pointer`: parametro `int a[R][C]` — storage è un puntatore base pool."""
 
     dims: tuple[int, ...]
     total: int
     elem_size: int = _SIZEOF_SCALAR
+    array_decay_pointer: bool = False
 
 
 @dataclass
@@ -486,6 +495,107 @@ def _pool_call_slot_arg(
         t,
         [t],
     )
+
+
+def _pool_uses_banking(ctx: _Ctx) -> bool:
+    if ctx.mem_layout is None:
+        return False
+    return ctx.total_mem_cells > MONOLITHIC_POOL_MEM_MAX
+
+
+def _n_pool_banks(ctx: _Ctx) -> int:
+    return math.ceil(ctx.total_mem_cells / POOL_BANK_SIZE)
+
+
+def _ir_pool_divmod_slot(
+    ctx: _Ctx, slot_var: str
+) -> tuple[list[Instr], str, str, str]:
+    t_b = ctx.fresh_temp()
+    t_q = ctx.fresh_temp()
+    t_r = ctx.fresh_temp()
+    ctx.use_hist = True
+    pre: list[Instr] = [
+        IConst(t_b, POOL_BANK_SIZE),
+        ICall("__mn_divmod_nonneg", [slot_var, t_b, t_q, t_r]),
+    ]
+    return pre, t_b, t_q, t_r
+
+
+def _bank_chain_pool_calls(
+    ctx: _Ctx,
+    t_q: str,
+    proc_base: str,
+    build_args: Callable[[int], list[str]],
+) -> list[Instr]:
+    """Albero di confronti su `t_q` (indice banca): meno `if` sequenziali che una catena lineare."""
+    nb = _n_pool_banks(ctx)
+    if nb == 1:
+        return [ICall(f"{proc_base}_b0", build_args(0))]
+
+    def tree(lo: int, hi: int) -> list[Instr]:
+        if hi - lo == 1:
+            k = lo
+            return [ICall(f"{proc_base}_b{k}", build_args(k))]
+        mid = (lo + hi) // 2
+        left = tree(lo, mid)
+        right = tree(mid, hi)
+        return [IIfKairos(t_q, "<", str(mid), left, right)]
+
+    return tree(0, nb)
+
+
+def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
+    if not _pool_uses_banking(ctx):
+        return [
+            ICall(
+                "__mn_pool_store",
+                [slot_var, val_var] + list(_ptr_pool_mem_names(ctx)),
+            )
+        ]
+    pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
+
+    def args_for(bi: int) -> list[str]:
+        s0 = bi * POOL_BANK_SIZE
+        s1 = min(ctx.total_mem_cells, s0 + POOL_BANK_SIZE)
+        return [t_r, val_var] + [f"__mn_mem{i}" for i in range(s0, s1)]
+
+    return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_store", args_for)
+
+
+def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
+    if not _pool_uses_banking(ctx):
+        return [
+            ICall(
+                "__mn_pool_load",
+                [slot_var] + list(_ptr_pool_mem_names(ctx)) + [out_var],
+            )
+        ]
+    pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
+
+    def args_for(bi: int) -> list[str]:
+        s0 = bi * POOL_BANK_SIZE
+        s1 = min(ctx.total_mem_cells, s0 + POOL_BANK_SIZE)
+        return [t_r] + [f"__mn_mem{i}" for i in range(s0, s1)] + [out_var]
+
+    return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_load", args_for)
+
+
+def _ir_pool_free_call(ctx: _Ctx, slot_var: str) -> list[Instr]:
+    if not _pool_uses_banking(ctx):
+        return [
+            ICall(
+                "__mn_pool_free",
+                [slot_var] + list(_ptr_pool_mem_names(ctx)) + [_PTR_POOL_CTR],
+            )
+        ]
+    pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
+
+    def args_for(bi: int) -> list[str]:
+        s0 = bi * POOL_BANK_SIZE
+        s1 = min(ctx.total_mem_cells, s0 + POOL_BANK_SIZE)
+        return [t_r] + [f"__mn_mem{i}" for i in range(s0, s1)] + [_PTR_POOL_CTR]
+
+    return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_free", args_for)
 
 
 def _phys(ctx: _Ctx, logical: str) -> str:
@@ -1824,6 +1934,92 @@ def _register_param_var_types(ctx: _Ctx, fd: c.FuncDecl) -> None:
                     ctx.var_types[n] = p.type
 
 
+def _eval_decay_array_elem_read(
+    base: str,
+    subs: list[c.Node],
+    info: _ArrayInfo,
+    ctx: _Ctx,
+    coord,
+) -> tuple[list[Instr], Var, list[str]]:
+    """Legge `base[i][…]` quando `base` è punatore-decay (parametro array)."""
+    _register_ptr_pool_locals(ctx)
+    coord_use = coord if coord is not None else getattr(subs[0], "coord", None)
+    idx_expr = _c_row_major_index_ast(subs, info.dims, coord_use)
+    pre_i, op_ix, tm_i = _eval_expr(idx_expr, ctx)
+    ei_b, op_b, tm_b = _eval_expr(c.ID(base, coord_use), ctx)
+    if isinstance(op_ix, Imm):
+        ix_op: Operand = Imm(op_ix.value)
+    else:
+        ix_op = Var(op_ix.name)
+    if isinstance(op_b, Imm):
+        b_op: Operand = Imm(op_b.value)
+    else:
+        b_op = Var(op_b.name)
+    t_slot = ctx.fresh_temp()
+    ctx.use_hist = True
+    pre = (
+        ei_b
+        + pre_i
+        + [IHistPush(ctx.hist, t_slot), IAddEq(t_slot, b_op), IAddEq(t_slot, ix_op)]
+    )
+    pre_slot, slot_a, tm_sl = _pool_call_slot_arg(ctx, t_slot)
+    if tm_sl:
+        ctx.use_scratch = True
+    t_out = ctx.fresh_temp()
+    ins = pre + pre_slot + _ir_pool_load_call(ctx, slot_a, t_out)
+    post = [IHistPush(ctx.scratch, x) for x in reversed(tm_i + tm_b + tm_sl)]
+    if tm_i or tm_b or tm_sl:
+        ctx.use_scratch = True
+    return ins + post, Var(t_out), tm_b + tm_i + tm_sl + [t_slot, t_out]
+
+
+def _lower_decay_array_subscript_assign(
+    base: str,
+    subs: list[c.Node],
+    rhs: c.Node,
+    info: _ArrayInfo,
+    ctx: _Ctx,
+) -> list[Instr]:
+    """`*(`pool)[base+ix]` per parametro array decay."""
+    _register_ptr_pool_locals(ctx)
+    idx_expr = _c_row_major_index_ast(subs, info.dims, None)
+    pre_i, op_ix, tm_i = _eval_expr(idx_expr, ctx)
+    ei_b, op_b, tm_b = _eval_expr(c.ID(base, None), ctx)
+    ei_r, op_r, tm_r = _eval_expr(rhs, ctx)
+    ctx.use_hist = True
+    if isinstance(op_r, Imm):
+        t = ctx.fresh_temp()
+        pre_r = ei_r + [IConst(t, op_r.value)]
+        val = t
+        tm_r = tm_r + [t]
+    else:
+        pre_r = ei_r
+        val = op_r.name
+    if tm_r:
+        ctx.use_scratch = True
+    if isinstance(op_ix, Imm):
+        ix_op: Operand = Imm(op_ix.value)
+    else:
+        ix_op = Var(op_ix.name)
+    if isinstance(op_b, Imm):
+        b_op: Operand = Imm(op_b.value)
+    else:
+        b_op = Var(op_b.name)
+    t_slot = ctx.fresh_temp()
+    pre = (
+        ei_b
+        + pre_i
+        + pre_r
+        + [IHistPush(ctx.hist, t_slot), IAddEq(t_slot, b_op), IAddEq(t_slot, ix_op)]
+    )
+    pre_slot, slot_a, tm_sl = _pool_call_slot_arg(ctx, t_slot)
+    if tm_sl:
+        ctx.use_scratch = True
+    ins = pre + pre_slot + _ir_pool_store_call(ctx, slot_a, val)
+    post = [IHistPush(ctx.scratch, x) for x in reversed(tm_i + tm_b + tm_sl + tm_r)]
+    return ins + post
+
+
 def _eval_expr_into_var(expr: c.Node, ctx: _Ctx, target: str) -> list[Instr]:
     """Somma il valore di expr su `target` (target parte da 0)."""
     ei, op, tm = _eval_expr(expr, ctx)
@@ -1849,9 +2045,10 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 f"{expr.name!r} è una union: usa {expr.name}.campo"
             )
         if expr.name in ctx.array_info:
-            raise MnemoCompileError(
-                f"l'array {expr.name!r} non è un valore scalare: usa {expr.name}[…]"
-            )
+            if not ctx.array_info[expr.name].array_decay_pointer:
+                raise MnemoCompileError(
+                    f"l'array {expr.name!r} non è un valore scalare: usa {expr.name}[…]"
+                )
         if expr.name in ctx.int_locals:
             return [], Var(_phys(ctx, expr.name)), []
         if expr.name in ctx.enum_constants:
@@ -1885,12 +2082,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 + [IHistPush(ctx.hist, t_slot), IAddEq(t_slot, rop)]
                 + ([IAddEq(t_slot, Imm(off_w))] if off_w != 0 else [])
             )
-            ins = pre + [
-                ICall(
-                    "__mn_pool_load",
-                    [t_slot] + list(_ptr_pool_mem_names(ctx)) + [t_out],
-                )
-            ]
+            ins = pre + _ir_pool_load_call(ctx, t_slot, t_out)
             return ins, Var(t_out), tm + [t_slot, t_out]
         base, path = _structref_base_and_path(expr)
         mangled = "__".join(path)
@@ -1934,6 +2126,8 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 f"array {base!r}: servono {len(info.dims)} indici, ne ho {len(subs)}"
             )
         coord = getattr(expr, "coord", None)
+        if info.array_decay_pointer:
+            return _eval_decay_array_elem_read(base, subs, info, ctx, coord)
         if all(isinstance(s, c.Constant) for s in subs):
             lin = _const_row_major_linear(subs, info.dims)
             return [], Var(_phys(ctx, _array_elem_local(base, lin))), []
@@ -2050,16 +2244,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 raise MnemoCompileError("dereference: operando non dichiarato")
             t = ctx.fresh_temp()
             pre_sl, slot_a, tm_sl = _pool_call_slot_arg(ctx, ptrn)
-            ins = (
-                ei_p
-                + pre_sl
-                + [
-                    ICall(
-                        "__mn_pool_load",
-                        [slot_a] + list(_ptr_pool_mem_names(ctx)) + [t],
-                    )
-                ]
-            )
+            ins = ei_p + pre_sl + _ir_pool_load_call(ctx, slot_a, t)
             return ins, Var(t), tm_p + tm_sl + [t]
         raise MnemoCompileError(f"operatore unario non supportato: {expr.op!r}")
 
@@ -2180,6 +2365,42 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             ctx.use_hist = True
             ctx.use_scratch = True
             return pre + post, Var(t_r), [t_r]
+        if expr.op == "&":
+            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
+            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
+            t = ctx.fresh_temp()
+            pre = pa + pb + [ICall("__mn_and_into", [t, va, vb])]
+            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
+            if ca or cb:
+                ctx.use_scratch = True
+            return pre + post, Var(t), [t]
+        if expr.op == "|":
+            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
+            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
+            t = ctx.fresh_temp()
+            pre = pa + pb + [ICall("__mn_or_into", [t, va, vb])]
+            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
+            if ca or cb:
+                ctx.use_scratch = True
+            return pre + post, Var(t), [t]
+        if expr.op == "<<":
+            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
+            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
+            t = ctx.fresh_temp()
+            pre = pa + pb + [ICall("__mn_shl_into", [t, va, vb])]
+            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
+            if ca or cb:
+                ctx.use_scratch = True
+            return pre + post, Var(t), [t]
+        if expr.op == ">>":
+            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
+            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
+            t = ctx.fresh_temp()
+            pre = pa + pb + [ICall("__mn_shr_into", [t, va, vb])]
+            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
+            if ca or cb:
+                ctx.use_scratch = True
+            return pre + post, Var(t), [t]
         raise MnemoCompileError(f"operatore binario non supportato: {expr.op!r}")
 
     if isinstance(expr, c.Cast):
@@ -2303,9 +2524,17 @@ def _prepare_call_arg(
                 f"passaggio union {expr.name!r} non supportato (usa un membro scalare)"
             )
         if expr.name in ctx.array_info:
-            raise MnemoCompileError(
-                f"passaggio array {expr.name!r} non supportato (usa puntatore o elemento)"
-            )
+            ainf = ctx.array_info[expr.name]
+            if ainf.array_decay_pointer:
+                return [], _phys(ctx, expr.name), []
+            first = _array_elem_local(expr.name, 0)
+            k = ctx.slot_index.get(first)
+            if k is None:
+                raise MnemoCompileError(
+                    f"passaggio array {expr.name!r}: indirizzo base assente nel layout"
+                )
+            t = ctx.fresh_temp()
+            return [IConst(t, k)], t, [t]
         if expr.name not in ctx.int_locals:
             raise MnemoCompileError(f"argomento non dichiarato: {expr.name}")
         return [], _phys(ctx, expr.name), []
@@ -2433,12 +2662,7 @@ def _lower_funccall_with_ret(
         if tm_al:
             ctx.use_scratch = True
         post_al = [IHistPush(ctx.scratch, t) for t in reversed(tm_al)]
-        return pre + pre_al + [
-            ICall(
-                "__mn_pool_free",
-                [free_slot] + list(_ptr_pool_mem_names(ctx)) + [_PTR_POOL_CTR],
-            )
-        ] + post + post_al
+        return pre + pre_al + _ir_pool_free_call(ctx, free_slot) + post + post_al
     if wants:
         if ret_sink is None or not isinstance(ret_sink, str):
             raise MnemoCompileError(
@@ -2624,12 +2848,7 @@ def _lower_struct_arrow_assign(lhs: c.StructRef, rhs: c.Node, ctx: _Ctx) -> list
         pre_m
         + pre_r
         + pre_slot
-        + [
-            ICall(
-                "__mn_pool_store",
-                [slot_a, val] + list(_ptr_pool_mem_names(ctx)),
-            )
-        ]
+        + _ir_pool_store_call(ctx, slot_a, val)
     )
     all_tm = tm_m + tm_r + tm_sl + [t_slot]
     if all_tm:
@@ -2656,17 +2875,23 @@ def _lower_deref_assign_phys(ptr_phys: str, rhs: c.Node, ctx: _Ctx) -> list[Inst
     pre_slot, slot_a, tm_sl = _pool_call_slot_arg(ctx, ptr_phys)
     if tm_sl:
         ctx.use_scratch = True
-    ins = pre + pre_slot + [
-        ICall(
-            "__mn_pool_store",
-            [slot_a, val] + list(_ptr_pool_mem_names(ctx)),
-        )
-    ]
+    ins = pre + pre_slot + _ir_pool_store_call(ctx, slot_a, val)
     post = [IHistPush(ctx.scratch, x) for x in reversed(temps + tm_sl)]
     return ins + post
 
 
 def _lower_assign(lhs: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
+    if isinstance(rhs, c.ID) and rhs.name in ctx.array_info:
+        ainf = ctx.array_info[rhs.name]
+        if not ainf.array_decay_pointer:
+            first = _array_elem_local(rhs.name, 0)
+            k = ctx.slot_index.get(first)
+            if k is None:
+                raise MnemoCompileError(
+                    f"array {rhs.name!r}: indirizzo base assente nel layout"
+                )
+            ctx.use_hist = True
+            return [IHistPush(ctx.hist, lhs), IAddEq(lhs, Imm(k))]
     ei, op, temps = _eval_expr(rhs, ctx)
     ctx.use_hist = True
     if temps:
@@ -2687,6 +2912,8 @@ def _lower_array_subscript_assign(
         raise MnemoCompileError(
             f"array {base!r}: servono {len(info.dims)} indici nell'lvalue"
         )
+    if info.array_decay_pointer:
+        return _lower_decay_array_subscript_assign(base, subs, rhs, info, ctx)
     ei, op, tm_r = _eval_expr(rhs, ctx)
     ctx.use_hist = True
     if isinstance(op, Imm):
@@ -3739,6 +3966,11 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
             elif node.op == "%":
                 needed.add("helpers.kairos")
                 needed.add("mod.kairos")
+            elif node.op in ("&", "|", "<<", ">>"):
+                needed.add("helpers.kairos")
+                needed.add("mul.kairos")
+                needed.add("divmod.kairos")
+                needed.add("bits.kairos")
         if not hasattr(node, "children"):
             return
         for _name, ch in node.children():
@@ -3761,6 +3993,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
         "mul.kairos",
         "divmod.kairos",
         "mod.kairos",
+        "bits.kairos",
         "ptr_pool.kairos",
     ]
     return [name for name in order if name in needed]
@@ -3810,6 +4043,7 @@ def infer_lib_files_from_calls(
         "mul.kairos",
         "divmod.kairos",
         "mod.kairos",
+        "bits.kairos",
         "ptr_pool.kairos",
     ]
     head = [n for n in order if n in needed]
@@ -3932,6 +4166,18 @@ def _lower_user_function(
         ctx.int_locals.add(p)
     for r in _ret_slot_names(layout.ret_words.get(name, 0)):
         ctx.int_locals.add(r)
+    for p in fd.args.params if fd.args else []:
+        if isinstance(p, c.Decl):
+            ap = _try_parse_array_decl(p, ctx)
+            if ap is not None:
+                aname, dims, esz = ap
+                tot = int(math.prod(dims))
+                ctx.array_info[aname] = _ArrayInfo(
+                    dims=dims,
+                    total=tot,
+                    elem_size=esz,
+                    array_decay_pointer=True,
+                )
     for p in fd.args.params if fd.args else []:
         if isinstance(p, c.Decl):
             st_tag = _struct_tag_for_decl_type(p.type, ctx)

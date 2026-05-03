@@ -1,0 +1,180 @@
+// Operazioni bitwise via aritmetica (Kairos non ha &, |, <<, >>).
+// Richiede helpers.kairos, mul.kairos, divmod.kairos.
+// Convenzione: gli *_into fanno dst += f(...) assumendo dst partenza dal caller.
+
+// Chiamate con divisore 2: le `call` Kairos accettano solo identificatori, non `2` letterale.
+procedure __mn_divmod_nonneg_div2(int a, int q, int r)
+    local int two = 0
+    two += 1
+    two += 1
+    call __mn_divmod_nonneg(a, two, q, r)
+    delocal int two = 2
+
+// q = floor(t/2) con semantica divisione intera C su int; azzera t.
+procedure __mn_floor_div2_signed(int t, int q)
+    stack __mn_hist
+    local int r = 0
+    if t >= 0 then
+        call __mn_divmod_nonneg_div2(t, q, r)
+    else
+        local int u = 0
+        u -= t
+        u += 1
+        call __mn_divmod_nonneg_div2(u, q, r)
+        local int z = 0
+        z -= q
+        call __mn_move_int(q, z)
+        local int sink = 0
+        call __mn_move_int(sink, t)
+        push(sink, __mn_hist)
+        delocal int sink = 0
+        push(z, __mn_hist)
+        delocal int z = 0
+        push(u, __mn_hist)
+        delocal int u = 0
+    fi t >= 0
+    push(r, __mn_hist)
+    delocal int r = 0
+
+// Bit k (0=LSB) dopo k shift aritmetici su a (semantica come int C).
+procedure __mn_bit_k_signed(int a, int k, int bit_out)
+    stack __mn_hist
+    local int t = 0
+    t += a
+    local int i = 0
+    from i < k loop
+        i += 1
+        local int q = 0
+        call __mn_floor_div2_signed(t, q)
+        t += q
+        push(q, __mn_hist)
+        delocal int q = 0
+    until i == k
+    local int qf = 0
+    local int rf = 0
+    if t >= 0 then
+        call __mn_divmod_nonneg_div2(t, qf, rf)
+        bit_out += rf
+    else
+        local int u = 0
+        u -= t
+        call __mn_divmod_nonneg_div2(u, qf, rf)
+        bit_out += rf
+        push(u, __mn_hist)
+        delocal int u = 0
+    fi t >= 0
+    push(rf, __mn_hist)
+    delocal int rf = 0
+    push(qf, __mn_hist)
+    delocal int qf = 0
+    push(i, __mn_hist)
+    delocal int i = 0
+    push(t, __mn_hist)
+    delocal int t = 0
+
+// dst += (a & b) — bit-a-bit su 31 iterazioni (LSB… , come interi con bit signed).
+procedure __mn_and_into(int dst, int a, int b)
+    stack __mn_hist
+    local int k = 0
+    local int pow = 1
+    from k < 31 loop
+        local int abit = 0
+        local int bbit = 0
+        call __mn_bit_k_signed(a, k, abit)
+        call __mn_bit_k_signed(b, k, bbit)
+        if abit != 0 then
+            if bbit != 0 then
+                dst += pow
+            fi bbit != 0
+        fi abit != 0
+        k += 1
+        local int next_pow = 0
+        next_pow += pow
+        next_pow += pow
+        call __mn_move_int(pow, next_pow)
+        push(next_pow, __mn_hist)
+        delocal int next_pow = 0
+        push(bbit, __mn_hist)
+        delocal int bbit = 0
+        push(abit, __mn_hist)
+        delocal int abit = 0
+    until k == 31
+    push(pow, __mn_hist)
+    delocal int pow = 0
+    push(k, __mn_hist)
+    delocal int k = 0
+
+// dst += (a | b)
+procedure __mn_or_into(int dst, int a, int b)
+    stack __mn_hist
+    local int k = 0
+    local int pow = 1
+    from k < 31 loop
+        local int abit = 0
+        local int bbit = 0
+        call __mn_bit_k_signed(a, k, abit)
+        call __mn_bit_k_signed(b, k, bbit)
+        local int s = 0
+        s += abit
+        s += bbit
+        if s != 0 then
+            dst += pow
+        fi s != 0
+        k += 1
+        local int next_pow = 0
+        next_pow += pow
+        next_pow += pow
+        call __mn_move_int(pow, next_pow)
+        push(next_pow, __mn_hist)
+        delocal int next_pow = 0
+        push(s, __mn_hist)
+        delocal int s = 0
+        push(bbit, __mn_hist)
+        delocal int bbit = 0
+        push(abit, __mn_hist)
+        delocal int abit = 0
+    until k == 31
+    push(pow, __mn_hist)
+    delocal int pow = 0
+    push(k, __mn_hist)
+    delocal int k = 0
+
+// dst += (x << n), n >= 0
+procedure __mn_shl_into(int dst, int x, int n)
+    stack __mn_hist
+    local int pow = 1
+    local int i = 0
+    from i < n loop
+        i += 1
+        local int np = 0
+        np += pow
+        np += pow
+        call __mn_move_int(pow, np)
+        push(np, __mn_hist)
+        delocal int np = 0
+    until i == n
+    call __mn_mul_into(dst, x, pow)
+    push(i, __mn_hist)
+    delocal int i = 0
+    push(pow, __mn_hist)
+    delocal int pow = 0
+
+// dst += (x >> n) aritmetico
+procedure __mn_shr_into(int dst, int x, int n)
+    stack __mn_hist
+    local int t = 0
+    t += x
+    local int i = 0
+    from i < n loop
+        i += 1
+        local int q = 0
+        call __mn_floor_div2_signed(t, q)
+        t += q
+        push(q, __mn_hist)
+        delocal int q = 0
+    until i == n
+    dst += t
+    push(i, __mn_hist)
+    delocal int i = 0
+    push(t, __mn_hist)
+    delocal int t = 0

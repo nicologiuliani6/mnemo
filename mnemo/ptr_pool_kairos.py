@@ -3,13 +3,17 @@ Emissione del sorgente Kairos per `__mn_pool_*` con N celle (`__mn_mem0` … `__
 
 Kairos non ha array di int da passare per nome al chiamante: le celle sono parametri espliciti
 e il dispatcher `if slot == k` è generato in Python in base a N (compile-time).
+
+Quando N è grande, una singola procedura supera i limiti della VM sui parametri / argomenti
+di `call`: si emettono slice (`__mn_pool_*_b0`, …) e il lowering IR dispatcha con divmod.
 """
 
 from __future__ import annotations
 
-from mnemo.errors import MnemoCompileError
+import math
 
-PTR_POOL_MAX = 2048
+from mnemo.errors import MnemoCompileError
+from mnemo.kairos_limits import MONOLITHIC_POOL_MEM_MAX, POOL_BANK_SIZE, PTR_POOL_MAX
 
 
 def emit_ptr_pool_kairos(n: int) -> str:
@@ -17,7 +21,12 @@ def emit_ptr_pool_kairos(n: int) -> str:
         raise MnemoCompileError(
             f"ptr_pool_size deve essere tra 1 e {PTR_POOL_MAX}, non {n}"
         )
+    if n <= MONOLITHIC_POOL_MEM_MAX:
+        return _emit_monolithic_ptr_pool_kairos(n)
+    return _emit_banked_ptr_pool_kairos(n)
 
+
+def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
     mem_params = ", ".join(f"int __mn_mem{i}" for i in range(n))
 
     lines: list[str] = [
@@ -110,5 +119,106 @@ def emit_ptr_pool_kairos(n: int) -> str:
             "",
         ]
     )
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _emit_banked_ptr_pool_kairos(n: int) -> str:
+    bsz = POOL_BANK_SIZE
+    n_banks = math.ceil(n / bsz)
+    lines: list[str] = [
+        f"// Pool puntatori Mnemo — generato (bancato), N={n}, bank={bsz}, n_banks={n_banks}.",
+        "// Limite VM su argomenti di call / parametri di procedura.",
+        "",
+        "procedure __mn_pool_alloc(int ctr, int out_slot)",
+        "    stack __mn_hist",
+        "    local int t = 0",
+        "        t += ctr",
+        "        push(ctr, __mn_hist)",
+        "        ctr += 1",
+        "        push(out_slot, __mn_hist)",
+        "        out_slot += t",
+        "        push(t, __mn_hist)",
+        "    delocal int t = 0",
+        "",
+    ]
+
+    for bi in range(n_banks):
+        start = bi * bsz
+        end = min(n, start + bsz)
+        mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
+        lines.append(f"procedure __mn_pool_store_b{bi}(int lslot, int val, {mem_params})")
+        lines.append("    stack __mn_hist")
+        for j in range(start, end):
+            rel = j - start
+            lines.extend(
+                [
+                    f"    if lslot == {rel} then",
+                    f"        push(__mn_mem{j}, __mn_hist)",
+                    f"        __mn_mem{j} += val",
+                    f"    fi lslot == {rel}",
+                ]
+            )
+        lines.append("")
+
+    for bi in range(n_banks):
+        start = bi * bsz
+        end = min(n, start + bsz)
+        mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
+        lines.append(f"procedure __mn_pool_load_b{bi}(int lslot, {mem_params}, int out)")
+        lines.append("    stack __mn_hist")
+        for j in range(start, end):
+            rel = j - start
+            lines.extend(
+                [
+                    f"    if lslot == {rel} then",
+                    "        local int t = 0",
+                    f"            t += __mn_mem{j}",
+                    "            push(out, __mn_hist)",
+                    "            out += t",
+                    "            push(t, __mn_hist)",
+                    "        delocal int t = 0",
+                    f"    fi lslot == {rel}",
+                ]
+            )
+        lines.append("")
+
+    for bi in range(n_banks):
+        start = bi * bsz
+        end = min(n, start + bsz)
+        mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
+        lines.append(f"procedure __mn_pool_free_b{bi}(int lslot, {mem_params}, int ctr)")
+        lines.append("    stack __mn_hist")
+        lines.append("    local int ctr0 = 0")
+        lines.append("        ctr0 += ctr")
+        for j in range(start, end):
+            rel = j - start
+            lines.extend(
+                [
+                    f"        if lslot == {rel} then",
+                    f"            push(__mn_mem{j}, __mn_hist)",
+                    f"        fi lslot == {rel}",
+                ]
+            )
+        for j in range(start, end):
+            rel = j - start
+            need = j + 1
+            lines.extend(
+                [
+                    f"        if lslot == {rel} then",
+                    f"            if ctr0 == {need} then",
+                    "                push(ctr, __mn_hist)",
+                    "                ctr -= 1",
+                    f"            fi ctr0 == {need}",
+                    f"        fi lslot == {rel}",
+                ]
+            )
+        lines.extend(
+            [
+                "        push(ctr0, __mn_hist)",
+                "    delocal int ctr0 = 0",
+                "",
+            ]
+        )
 
     return "\n".join(lines).rstrip() + "\n"
