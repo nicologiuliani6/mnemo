@@ -1,0 +1,69 @@
+// Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
+// Dopo le cifre, n viene ricostruito con __mn_mul_into (niente uncall su divmod).
+
+procedure __mn_putd_uint(int n)
+    local int ten = 0
+    ten += 10
+    local int qu = 0
+    local int rem = 0
+    if n >= ten then
+        call __mn_divmod_nonneg(n, ten, qu, rem)
+        call __mn_putd_uint(qu)
+        local int ch = 0
+        ch += rem
+        ch += 48
+        show(ch, char)
+        ch -= 48
+        ch -= rem
+        delocal int ch = 0
+        local int prod = 0
+        call __mn_mul_into(prod, qu, ten)
+        n += prod
+        n += rem
+        from prod > 0 loop
+            prod -= 1
+        until prod == 0
+        from qu > 0 loop
+            qu -= 1
+        until qu == 0
+        from rem > 0 loop
+            rem -= 1
+        until rem == 0
+        delocal int prod = 0
+    else
+        local int ch = 0
+        ch += n
+        ch += 48
+        show(ch, char)
+        ch -= 48
+        ch -= n
+        delocal int ch = 0
+    fi n >= ten
+    ten -= 10
+    delocal int rem = 0
+    delocal int qu = 0
+    delocal int ten = 0
+
+procedure __mn_putd(int n)
+    local int z = 0
+    if n < z then
+        local int hy = 0
+        hy += 45
+        show(hy, char)
+        hy -= 45
+        delocal int hy = 0
+        local int t = 0
+        t -= n
+        n += t
+        n <=> t
+        delocal int t = 0
+        call __mn_putd_uint(n)
+        local int t2 = 0
+        t2 -= n
+        n += t2
+        n <=> t2
+        delocal int t2 = 0
+    else
+        call __mn_putd_uint(n)
+    fi n < z
+    delocal int z = 0

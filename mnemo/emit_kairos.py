@@ -124,7 +124,10 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         lines.append(f"{indent}// return")
         return
     if isinstance(ins, IShow):
-        lines.append(f"{indent}show({ins.var})")
+        if ins.as_char:
+            lines.append(f"{indent}show({ins.var}, char)")
+        else:
+            lines.append(f"{indent}show({ins.var})")
         return
     if isinstance(ins, IIfKairos):
         rhs = ins.rhs

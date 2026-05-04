@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import pycparser.c_ast as c
 
-from mnemo.c_lower import _get_funcdef, collect_file_scope_mutex_names
+from mnemo.c_lower import (
+    _get_funcdef,
+    collect_file_typedefs_structs_unions_enums,
+    collect_mutex_channel_keys,
+    pthread_mutex_channel_key_for_par_check,
+)
 from mnemo.errors import MnemoCompileError
 from mnemo.layout_collect import ProgramMemLayout
 
@@ -76,12 +81,6 @@ def _refs_shared_in_function(fdef: c.FuncDef, shared: frozenset[str]) -> frozens
     return frozenset(found)
 
 
-def _pthread_mutex_ptr_name(arg: c.Node) -> str | None:
-    if isinstance(arg, c.UnaryOp) and arg.op == "&" and isinstance(arg.expr, c.ID):
-        return arg.expr.name
-    return None
-
-
 def _join_held(a: str | None, b: str | None) -> str | None:
     return a if a == b else None
 
@@ -117,8 +116,11 @@ def _check_expr_access(
 def _func_call_new_hold(
     call: c.FuncCall,
     held: str | None,
-    file_mutexes: frozenset[str],
+    all_mutex_keys: frozenset[str],
     conflict: frozenset[str],
+    fdef: c.FuncDef,
+    td: dict[str, c.Node],
+    struct_specs: dict[str, list[tuple[str, c.Node]]],
 ) -> str | None:
     """
     Verifica argomenti per accessi illegali; se è lock/unlock su mutex file-scope,
@@ -131,14 +133,18 @@ def _func_call_new_hold(
     el = call.args
     exprs = list(el.exprs) if el is not None else []
     if nm == "pthread_mutex_lock" and len(exprs) == 1:
-        m = _pthread_mutex_ptr_name(exprs[0])
-        if m is not None and m in file_mutexes:
+        m = pthread_mutex_channel_key_for_par_check(
+            exprs[0], fdef, td, struct_specs
+        )
+        if m is not None and m in all_mutex_keys:
             for a in exprs:
                 _check_expr_access(a, held, conflict)
             return m
     if nm == "pthread_mutex_unlock" and len(exprs) == 1:
-        m = _pthread_mutex_ptr_name(exprs[0])
-        if m is not None and m in file_mutexes:
+        m = pthread_mutex_channel_key_for_par_check(
+            exprs[0], fdef, td, struct_specs
+        )
+        if m is not None and m in all_mutex_keys:
             for a in exprs:
                 _check_expr_access(a, held, conflict)
             return None if held == m else held
@@ -150,8 +156,11 @@ def _func_call_new_hold(
 def _walk_stmt(
     node: c.Node | None,
     held: str | None,
-    file_mutexes: frozenset[str],
+    all_mutex_keys: frozenset[str],
     conflict: frozenset[str],
+    fdef: c.FuncDef,
+    td: dict[str, c.Node],
+    struct_specs: dict[str, list[tuple[str, c.Node]]],
 ) -> str | None:
     if node is None:
         return held
@@ -166,7 +175,9 @@ def _walk_stmt(
     if isinstance(node, c.Compound):
         h = held
         for it in node.block_items or []:
-            h = _walk_stmt(it, h, file_mutexes, conflict)
+            h = _walk_stmt(
+                it, h, all_mutex_keys, conflict, fdef, td, struct_specs
+            )
         return h
     if isinstance(node, c.Assignment):
         _check_expr_access(node.rvalue, held, conflict)
@@ -179,34 +190,56 @@ def _walk_stmt(
         h = held
         for e in node.exprs:
             if isinstance(e, c.FuncCall):
-                h = _func_call_new_hold(e, h, file_mutexes, conflict)
+                h = _func_call_new_hold(
+                    e, h, all_mutex_keys, conflict, fdef, td, struct_specs
+                )
             else:
                 _check_expr_access(e, h, conflict)
         return h
     if isinstance(node, c.FuncCall):
-        return _func_call_new_hold(node, held, file_mutexes, conflict)
+        return _func_call_new_hold(
+            node, held, all_mutex_keys, conflict, fdef, td, struct_specs
+        )
     # pycparser mette `(void)x;` come Cast in lista Compound (non ExprStmt).
     if isinstance(node, c.Cast):
         _check_expr_access(node.expr, held, conflict)
         return held
     if isinstance(node, c.If):
         _check_expr_access(node.cond, held, conflict)
-        ht = _walk_stmt(node.iftrue, held, file_mutexes, conflict)
-        hf = _walk_stmt(node.iffalse, held, file_mutexes, conflict) if node.iffalse else held
+        ht = _walk_stmt(
+            node.iftrue, held, all_mutex_keys, conflict, fdef, td, struct_specs
+        )
+        hf = (
+            _walk_stmt(
+                node.iffalse, held, all_mutex_keys, conflict, fdef, td, struct_specs
+            )
+            if node.iffalse
+            else held
+        )
         return _join_held(ht, hf)
     if isinstance(node, (c.While, c.DoWhile)):
         _check_expr_access(node.cond, held, conflict)
-        return _walk_stmt(node.stmt, held, file_mutexes, conflict)
+        return _walk_stmt(
+            node.stmt, held, all_mutex_keys, conflict, fdef, td, struct_specs
+        )
     if isinstance(node, c.DeclList):
         h = held
         for d in node.decls:
-            h = _walk_stmt(d, h, file_mutexes, conflict)
+            h = _walk_stmt(
+                d, h, all_mutex_keys, conflict, fdef, td, struct_specs
+            )
         return h
     if isinstance(node, c.For):
-        _walk_stmt(node.init, held, file_mutexes, conflict)
+        _walk_stmt(
+            node.init, held, all_mutex_keys, conflict, fdef, td, struct_specs
+        )
         _check_expr_access(node.cond, held, conflict)
-        _walk_stmt(node.next, held, file_mutexes, conflict)
-        return _walk_stmt(node.stmt, held, file_mutexes, conflict)
+        _walk_stmt(
+            node.next, held, all_mutex_keys, conflict, fdef, td, struct_specs
+        )
+        return _walk_stmt(
+            node.stmt, held, all_mutex_keys, conflict, fdef, td, struct_specs
+        )
     if isinstance(node, c.Switch):
         _check_expr_access(node.cond, held, conflict)
         if not isinstance(node.stmt, c.Compound):
@@ -217,7 +250,9 @@ def _walk_stmt(
                 stmts = it.stmts or []
                 h_end = held
                 for s in stmts:
-                    h_end = _walk_stmt(s, h_end, file_mutexes, conflict)
+                    h_end = _walk_stmt(
+                        s, h_end, all_mutex_keys, conflict, fdef, td, struct_specs
+                    )
                 join_h = _join_held(join_h, h_end)
         return join_h
     if isinstance(node, (c.Break, c.Continue, c.Goto)):
@@ -232,20 +267,24 @@ def _verify_worker_mutex(
     ast: c.FileAST,
     fname: str,
     conflict: frozenset[str],
-    file_mutexes: frozenset[str],
+    all_mutex_keys: frozenset[str],
+    td: dict[str, c.Node],
+    struct_specs: dict[str, list[tuple[str, c.Node]]],
 ) -> None:
     if not conflict:
         return
-    if not file_mutexes:
+    if not all_mutex_keys:
         raise MnemoCompileError(
             "due worker del PAR accedono agli stessi slot file-scope condivisi: "
-            "serve almeno un `pthread_mutex_t` dichiarato a livello file "
-            "(mutex locali ai worker non sincronizzano la memoria condivisa)."
+            "serve almeno un `pthread_mutex_t` a livello file o come campo struct "
+            "(mutex solo locali al worker non sincronizzano la memoria condivisa)."
         )
     fdef = _get_funcdef(ast, fname)
     if fdef is None or fdef.body is None:
         return
-    _walk_stmt(fdef.body, None, file_mutexes, conflict)
+    _walk_stmt(
+        fdef.body, None, all_mutex_keys, conflict, fdef, td, struct_specs
+    )
 
 
 def check_par_shared_mutex_discipline(
@@ -261,7 +300,8 @@ def check_par_shared_mutex_discipline(
     pairs = iter_par_worker_pairs(ast)
     if not pairs:
         return
-    file_mutexes = frozenset(collect_file_scope_mutex_names(ast))
+    td, struct_specs, _unions, _en = collect_file_typedefs_structs_unions_enums(ast)
+    all_mutex_keys = frozenset(collect_mutex_channel_keys(ast, struct_specs, td))
     for a, b in pairs:
         fa = _get_funcdef(ast, a)
         fb = _get_funcdef(ast, b)
@@ -272,5 +312,5 @@ def check_par_shared_mutex_discipline(
         conflict = frozenset(sa & sb)
         if not conflict:
             continue
-        _verify_worker_mutex(ast, a, conflict, file_mutexes)
-        _verify_worker_mutex(ast, b, conflict, file_mutexes)
+        _verify_worker_mutex(ast, a, conflict, all_mutex_keys, td, struct_specs)
+        _verify_worker_mutex(ast, b, conflict, all_mutex_keys, td, struct_specs)

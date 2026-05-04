@@ -20,6 +20,9 @@ def parse_c(path: str) -> c_ast.FileAST:
     """
     Legge un file .c: preprocessa con gcc -E e parsa con pycparser.
     Richiede `gcc` nel PATH.
+
+    Il preprocessore riceve sempre ``-DMNEMO`` così il sorgente può usare
+    ``#ifdef MNEMO`` / ``#if defined(MNEMO)`` per rami specifici della toolchain Mnemo.
     """
     if not os.path.isfile(path):
         raise MnemoCompileError(f"file non trovato: {path}")
@@ -31,7 +34,7 @@ def parse_c(path: str) -> c_ast.FileAST:
     # fake_libc_include (pycparser sorgente) non è sempre incluso nel wheel;
     # per file senza #include basta -E -std=c99. Con #include si può installare
     # pycparser da sorgente o aggiungere -I verso una copia degli header fake.
-    cpp_args = ["-E", "-std=c99"]
+    cpp_args = ["-E", "-std=c99", "-DMNEMO"]
     fake = _fake_libc_include()
     if os.path.isdir(fake):
         cpp_args.append(f"-I{fake}")

@@ -738,7 +738,7 @@ def _infer_parallel_shared_main_slots(
         body1 = fdef1.body
         if body0 is None or body1 is None:
             continue
-        for i in range(len(g0)):
+        for i in range(min(len(g0), len(g1))):
             if len(g0[i]) != 1 or len(g1[i]) != 1:
                 continue
             p0, p1 = g0[i][0], g1[i][0]
@@ -916,7 +916,9 @@ def compute_program_mem_layout(
             if not fields:
                 raise MnemoCompileError(f"struct {st_tag}: definizione mancante")
             ctx.struct_tag_of_var[varname] = st_tag
-            for fnm, _fty in fields:
+            for fnm, fty in fields:
+                if L._type_node_is_pthread_mutex(fty, ctx.typedef_map):
+                    continue
                 loc = L._struct_field_local(varname, fnm)
                 ctx.int_locals.add(loc)
                 alloc(fn, loc)
@@ -956,6 +958,20 @@ def compute_program_mem_layout(
                     f"dichiarazione non supportata: {type(node.type).__name__}"
                 )
             name = pn
+            ros = L._char_ptr_string_literal_meta(node, tdm, fn)
+            if ros is not None:
+                sbase, tot, _raw = ros
+                if sbase in ctx.array_info:
+                    raise MnemoCompileError(f"ridichiarazione: {sbase}")
+                ctx.array_info[sbase] = L._ArrayInfo(
+                    dims=(tot,), total=tot, elem_size=1
+                )
+                for i in range(tot):
+                    cell = L._array_elem_local(sbase, i)
+                    if cell in ctx.int_locals:
+                        raise MnemoCompileError(f"ridichiarazione: {cell}")
+                    ctx.int_locals.add(cell)
+                    alloc(fn, cell)
         if name in ctx.int_locals or name in ctx.array_info:
             raise MnemoCompileError(f"ridichiarazione: {name}")
         ctx.int_locals.add(name)
@@ -1058,7 +1074,7 @@ def compute_program_mem_layout(
         if isinstance(ext.type, c.FuncDecl):
             continue
         imm = L._immediate_named_scalar_typedef(ext)
-        if imm == "pthread_mutex_t":
+        if imm in ("pthread_mutex_t", "mnemo_kairos_channel_t"):
             continue
 
         ut = L._union_tag_for_decl_type(ext.type, fs_ctx)
@@ -1090,7 +1106,9 @@ def compute_program_mem_layout(
             if not fields:
                 raise MnemoCompileError(f"struct {st_tag}: definizione mancante")
             fs_ctx.struct_tag_of_var[varname] = st_tag
-            for fnm, _fty in fields:
+            for fnm, fty in fields:
+                if L._type_node_is_pthread_mutex(fty, td):
+                    continue
                 loc = L._struct_field_local(varname, fnm)
                 if loc in fs_ctx.int_locals:
                     raise MnemoCompileError(f"ridichiarazione: {loc}")
@@ -1115,6 +1133,11 @@ def compute_program_mem_layout(
             if pn is None:
                 continue
             name = pn
+            if L._char_ptr_string_literal_meta(ext, tdm, "__file__") is not None:
+                raise MnemoCompileError(
+                    "char* = letterale a livello file non supportato "
+                    "(sposta la dichiarazione in main o in una funzione)"
+                )
         if ("__file__", name) in slot_of:
             raise MnemoCompileError(f"variabile file-scope duplicata: {name}")
         alloc("__file__", name)

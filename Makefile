@@ -20,7 +20,7 @@ help:
 	@echo ""
 	@echo "$(CYAN)Mnemo$(RESET)"
 	@echo "  $(GREEN)make venv$(RESET)          python3 -m venv .venv && pip install -e ."
-	@echo "  $(GREEN)make compile$(RESET)       mnemo compile su c_examples/*.c → .kairos"
+	@echo "  $(GREEN)make compile$(RESET)       mnemo dump-kairos su c_examples/*.c → .kairos"
 	@echo "  $(GREEN)make run FILE=<path>$(RESET)  un solo .c (compila) o .kairos — path relativo a mnemo/"
 	@echo "  $(GREEN)make run FILE=... MAIN_ARGC=N$(RESET)  opzionale: sovrascrive argc (come mnemo compile --main-argc N)"
 	@echo "  $(GREEN)make test$(RESET)         compile + esegue ogni .kairos (timeout 5s, come make test Kairos)"
@@ -40,11 +40,10 @@ test-unit: $(MNEMO_PY)
 	@cd $(MNEMO_ROOT) && $(MNEMO_PY) -m unittest discover -s tests -p 'test_*.py' -v
 
 compile: $(MNEMO_PY)
-	@command -v gcc >/dev/null || (echo "$(RED)serve gcc (preprocessore C)$(RESET)"; exit 1)
 	@test -n "$(C_FILES)" || (echo "$(RED)nessun file in c_examples/$(RESET)"; exit 1)
 	@for c in $(C_FILES); do \
-	  echo "$(CYAN)mnemo compile $$(basename $$c)$(RESET)"; \
-	  $(MNEMO_PY) -m mnemo compile $$c || exit 1; \
+	  echo "$(CYAN)mnemo dump-kairos $$(basename $$c)$(RESET)"; \
+	  $(MNEMO_PY) -m mnemo dump-kairos $$c || exit 1; \
 	done
 
 test: compile
@@ -83,8 +82,8 @@ endif
 	@runf="$(abspath $(FILE))"; \
 	test -f "$$runf" || (echo "$(RED)file non trovato: $(FILE)$(RESET)"; exit 1); \
 	case "$$runf" in \
-	  *.c) echo "$(CYAN)mnemo compile $$(basename $$runf)$(RESET)"; \
-	       $(MNEMO_PY) -m mnemo compile "$$runf" \
+	  *.c) echo "$(CYAN)mnemo dump-kairos $$(basename $$runf)$(RESET)"; \
+	       $(MNEMO_PY) -m mnemo dump-kairos "$$runf" \
 	         $$(test -n "$(MAIN_ARGC)" && echo --main-argc $(MAIN_ARGC) || true) || exit 1; \
 	       runf="$${runf%.c}.kairos" ;; \
 	esac; \

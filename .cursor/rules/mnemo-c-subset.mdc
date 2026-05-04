@@ -1,0 +1,135 @@
+---
+description: Riferimento completo — subset C di Mnemo, cosa manca rispetto al C standard e limiti (da c_lower.py)
+globs:
+  - "**/*.c"
+  - "**/*.h"
+  - "mnemo/**/*.py"
+alwaysApply: false
+---
+
+# Mnemo — subset C vs C “normale”
+
+Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mnemo/compile.py`). Non è un compilatore C conforme allo standard. Questa nota elenca **cosa manca o è diverso** rispetto al C d’uso comune.
+
+## Tipi fondamentali
+
+- **`char` / `signed char` / `unsigned char`** come tipo scalare di variabile: gli scalari ammessi sono sostanzialmente `int`, `unsigned` / `unsigned int`, `bool` / `_Bool` (`_SCALAR_NAMES`).
+- **`short`, `long`, `long long`** (e varianti unsigned) come tipi distinti per dichiarazioni normali.
+- **`float`, `double`, `long double`** e tipi complessi.
+- **`wchar_t`, `size_t`, `ptrdiff_t`** come tipi “veri” del C standard (non c’è ecosistema ABI completo).
+
+## Letterali e stringhe
+
+- Letterali interi: `_const_int` accetta solo tipi AST `int`, `long`, `unsigned int`, `long long`.
+- **Stringhe `"..."`** e uso “da manuale C” di array di caratteri / puntatori a stringa read-only.
+- **Costanti carattere** `'x'` come primarie intere ovunque (percorso ristretto).
+
+## Dichiarazioni e puntatori
+
+- Puntatori dichiarati nel subset: **`int *`**, **`unsigned *` / `unsigned int *`**, **`void *`** (un livello, dove previsto).
+- Niente **`char *`** generico o **`T *`** per tipi arbitrari (salvo il caso **`char **argv`** in `main`).
+- **`const`, `volatile`, `restrict`, `_Atomic`**: non c’è modello semantico C completo dopo il lowering.
+- **`static` / `extern` / linkage** e durata di storage come nel C standard.
+
+## `main`, `argc`, `argv`
+
+- **`main`**: solo nessun parametro (`void`), solo **`int argc`**, oppure **`int argc`** poi **`char **argv`**; altre firme → errore.
+- **`argv`** è **stub** (non array di stringhe POSIX, non dereferenziabile come in C reale).
+- Nessun terzo argomento (`envp`), `wmain`, ecc.
+
+## Array
+
+- **VLA**: dimensione deve essere **costante intera** a compile-time.
+- Prodotto dimensioni ≤ **`ARR_MAX` (1024)** elementi totali.
+- Elementi: solo **scalari Mnemo** o **puntatore** nel senso sopra (`int*`, `void*`, ecc.).
+
+## Struct e union
+
+- **Passaggio struct/union per valore** come argomento → errore (usare campi scalari).
+- **Inizializzatori `{ ... }`** per variabili struct o union alla dichiarazione → non supportati.
+- **`struct.campo`**: in assegnamento solo **`=`**, non `+=`, `*=`, ecc.
+- **`p->campo`**: solo **`=`**, non assegnamenti composti.
+- **Union**: assegnamenti composti solo per un sottoinsieme di operatori; altri → errore.
+- **Bit-field** nei struct: non nel modello (campi appiattiti a interi).
+
+## Enum
+
+- Enum come **costanti intere**; `switch`/`case` con costante intera o enumeratore — non sistema tipi enum completo del C.
+
+## Operatori unari
+
+- Implementati in forme limitate: `-`, `*`, `&` (solo **`&id`** e **`&struct.campo`** con vincoli), `sizeof`, e **`++` / `--` solo come istruzione su identificatore**.
+- Altri unari → `operatore unario non supportato` (es. **`~`** non gestito nel file).
+- **`++` / `--` in espressione** generica (prefisso/postfisso su `*p`, campi, ecc.) non è C generico.
+
+## Operatori binari e logici
+
+- Espressioni: insieme chiuso di operatori (`+ - * / %`, `& | ^`, `<< >>`, virgola, ecc.); il resto → `operatore binario non supportato`.
+- **`&&` / `||` / `==` / …** non sono valutati come nel C su ogni sotto-espressione: il controllo usa predicati dedicati (`if`, confronti atomici, `!` sul predicato).
+
+## Assegnamenti
+
+- Su **`ID`** scalare: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `^=`.
+- **Non supportati** su scalare: `&=`, `|=`, `<<=`, `>>=` → `assegnamento con … non supportato`.
+- **`array[i]`** e **`*p`**: in LHS solo **`=`**, non composti.
+- Molti lvalue → `lvalue non-ID non supportato`.
+
+## Cast
+
+- Solo se `_cast_accepts_pointer_or_scalar`: **`void`**, puntatori **`void*` / `int*`**, scalari del subset; altro → `cast non supportato`.
+
+## Indirizzo `&`
+
+- Solo **`&variabile`** e **`&struct.campo`** (con disponibilità slot); non `&a[i]`, `&(expr)` generico, ecc.
+
+## Puntatori e memoria
+
+- Semantica **indici pool** / celle **`__mn_mem*`**, non aritmetica puntatori e confronti del C pieno.
+- **`malloc` / `free`**: modello **pool** dimensionato dalla toolchain, non libc.
+
+## Chiamate
+
+- Callee = **identificatore** `f(...)`; no puntatore-a-funzione come callee.
+- **Variadiche** (`...`): no.
+- **`void`**: non come sotto-espressione (solo istruzione), con errori dedicati.
+
+## `switch` / `case`
+
+- Corpo **`switch`** deve essere **`{ ... }`**.
+- **No fall-through** tra case (ogni case/default con disciplina `break` in coda, ecc.).
+- **`default`** deve essere **ultimo**.
+- Corpo: solo **`case`** e **`default`**.
+- **`case`**: costante intera o enumeratore noto.
+
+## `for`
+
+- Init solo nei casi gestiti (`DeclList`, `Decl`, `Assignment`, `FuncCall`, `ExprStmt`); altro → `for-init non supportato`.
+
+## Altre istruzioni
+
+- **`goto`**, etichette: **non supportate** (`istruzione non supportata` per `Goto`, ecc.).
+- **`setjmp` / `longjmp`**: no.
+
+## Preprocessore
+
+- **`gcc -E`**: macro e `#include` sul testo, ma **nessuna libreria/ABI C reale** aggiunta dal solo preprocessore.
+
+## Estensioni e C moderno
+
+- **`__asm`**, **`_Generic`**, **`typeof`**, attributi compiler-specific: fuori dal lowering Mnemo (parse o errore a valle).
+
+## Kairos / reversibilità
+
+- ** `/` e `%`**: vincoli delle procedure (`__mn_divmod_nonneg`, `__mn_mod_nonneg`, ecc.), non UB C generico.
+- Parallelismo: solo ABI **`mnemo_pthread_*`** e mutex Mnemo, non pthread POSIX completo.
+
+## Emitter IR (nota tecnica)
+
+- In `mnemo/emit_kairos.py`, istruzioni IR **`ICopy`**, **`IStoreRev`**, **`IBranch`**, **`IJump`** sono emesse come **commenti** (non Kairos eseguibile). Il lowering attuale non le genera in genere; **`IReturn`** è commento (fine procedura reale via sequenza + `delocal`).
+
+## Riferimento rapido “cosa usare”
+
+- Tipi: `int`, `unsigned`, `bool`, puntatori `int*` / `void*` come da codice; struct/union con limiti sopra.
+- `main`: `int main(void)` o `int main(int argc, char **argv)`; `argc` da direttiva o CLI; `argv` fittizio.
+- Controllo: `if`, `while`, `do/while`, `for`, `switch` senza fall-through; no `goto`.
+- Heap: `malloc`/`free` sul pool; dimensione con `--ptr-pool-size` / layout.

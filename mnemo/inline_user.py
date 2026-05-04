@@ -155,7 +155,7 @@ def _rename_one_instr(ins: Instr, ren: Callable[[str], str]) -> Instr:
     if isinstance(ins, IReturn):
         return IReturn()
     if isinstance(ins, IShow):
-        return IShow(ren(ins.var))
+        return IShow(ren(ins.var), ins.as_char)
     if isinstance(ins, IComment):
         return IComment(ins.text)
     if isinstance(ins, IIfKairos):

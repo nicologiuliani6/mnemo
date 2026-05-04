@@ -132,9 +132,10 @@ class IReturn:
 
 @dataclass
 class IShow:
-    """Kairos `show(var)` — stampa `var: <int>` (usato per exit code da mnemo run)."""
+    """Kairos `show(var)` oppure `show(var, char)` (byte basso come carattere)."""
 
     var: str
+    as_char: bool = False
 
 
 @dataclass

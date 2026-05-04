@@ -62,7 +62,8 @@ def _dump_instr(i: Instr, prefix: str = "") -> str:
     if isinstance(i, IReturn):
         return f"{prefix}  return"
     if isinstance(i, IShow):
-        return f"{prefix}  show {i.var}"
+        suf = " char" if i.as_char else ""
+        return f"{prefix}  show {i.var}{suf}"
     if isinstance(i, IIfKairos):
         lines = [f"{prefix}  if_kairos {i.lhs} {i.op} {i.rhs}"]
         p2 = prefix + "    "

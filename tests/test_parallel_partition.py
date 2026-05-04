@@ -69,7 +69,7 @@ class TestParallelTwoRegions(unittest.TestCase):
 
     def test_infer_partition1_reads_through_library_call(self) -> None:
         """`srecv` in mps.h fa `*answer = …`: il layout deve vederlo nel callee."""
-        ast = parse_c(_relpath("test.c"))
+        ast = parse_c(_relpath("PC.c"))
         layout = compute_program_mem_layout(ast, 4)
         self.assertIn(
             "answer",
@@ -79,7 +79,7 @@ class TestParallelTwoRegions(unittest.TestCase):
 
     def test_infer_par_shared_struct_field_via_library_helpers(self) -> None:
         """ssend/srecv usano m->payload nel .h: lo slot deve essere condiviso tra i due worker."""
-        ast = parse_c(_relpath("test.c"))
+        ast = parse_c(_relpath("PC.c"))
         layout = compute_program_mem_layout(ast, 4)
         idx = layout.slot_of.get(("main", "mps__payload"))
         self.assertIsNotNone(idx)

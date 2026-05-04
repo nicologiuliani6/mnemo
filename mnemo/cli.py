@@ -24,6 +24,7 @@ from mnemo.errors import MnemoCompileError
 from mnemo.ir_dump import dump_program
 from mnemo.emit_kairos import emit_program
 from mnemo.compile import compile_c_to_kairos, write_kairos_next_to_c
+from mnemo.kairos_bytecode import build_native_standalone, resolve_kairos_root
 
 
 def _example_program() -> Program:
@@ -58,24 +59,22 @@ def main(argv: list[str] | None = None) -> None:
     p_k = sub.add_parser("emit-kairos", help="emette .kairos di esempio su stdout")
     p_k.set_defaults(handler=_cmd_emit_kairos)
 
-    p_c = sub.add_parser("compile", help="compila un file .c in Kairos")
+    p_c = sub.add_parser(
+        "compile",
+        help="compila .c → eseguibile nativo (bytecode in .rodata + libvm.so accanto; niente Python)",
+    )
     p_c.add_argument("input", help="file sorgente .c")
     p_c.add_argument(
         "-o",
         "--output",
-        help="file .kairos (default: stesso nome del .c nella stessa cartella)",
+        help="path dell'eseguibile (default: stesso stem del .c, senza estensione, nella stessa cartella)",
         default=None,
-    )
-    p_c.add_argument(
-        "--stdout",
-        action="store_true",
-        help="stampa il .kairos su stdout invece di scrivere su disco",
     )
     p_c.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="stampa su stderr il path del file generato",
+        help="stampa su stderr il comando gcc e i path generati",
     )
     p_c.add_argument(
         "--main-argc",
@@ -91,7 +90,50 @@ def main(argv: list[str] | None = None) -> None:
         metavar="N",
         help="celle pool malloc/free (__mn_mem0..__mn_mem{N-1}); default 4, max 256",
     )
+    p_c.add_argument(
+        "--keep-kairos",
+        action="store_true",
+        help="scrive anche stem.kairos accanto al .c (il sorgente Kairos testuale)",
+    )
     p_c.set_defaults(handler=_cmd_compile)
+
+    p_dk = sub.add_parser(
+        "dump-kairos",
+        help="emette solo il sorgente .kairos (testo) da un .c — senza linkare la VM",
+    )
+    p_dk.add_argument("input", help="file sorgente .c")
+    p_dk.add_argument(
+        "-o",
+        "--output",
+        help="file .kairos (default: stesso nome del .c nella stessa cartella)",
+        default=None,
+    )
+    p_dk.add_argument(
+        "--stdout",
+        action="store_true",
+        help="stampa il .kairos su stdout invece di scrivere su disco",
+    )
+    p_dk.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="stampa su stderr il path del file scritto",
+    )
+    p_dk.add_argument(
+        "--main-argc",
+        type=int,
+        default=None,
+        metavar="N",
+        help="come per compile",
+    )
+    p_dk.add_argument(
+        "--ptr-pool-size",
+        type=int,
+        default=4,
+        metavar="N",
+        help="come per compile",
+    )
+    p_dk.set_defaults(handler=_cmd_dump_kairos)
 
     p_r = sub.add_parser(
         "run",
@@ -123,6 +165,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="stampa su stderr comando usato e codice di uscita della VM",
     )
+    p_r.add_argument(
+        "--vm-dump",
+        action="store_true",
+        help="stampa anche il blocco dump della VM (dopo «=== VM dump ===»); default: no",
+    )
     p_r.set_defaults(handler=_cmd_run)
 
     args = parser.parse_args(argv)
@@ -147,6 +194,49 @@ def _cmd_compile(args: argparse.Namespace) -> None:
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
         sys.exit(1)
+    kroot = resolve_kairos_root()
+    if not kroot:
+        print(
+            "mnemo: repo Kairos non trovato. Imposta KAIROS_ROOT o clona kairos accanto a mnemo.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    in_path = Path(args.input).resolve()
+    if args.output:
+        exe_path = Path(args.output).expanduser()
+    else:
+        exe_path = in_path.with_suffix("")
+    try:
+        build_native_standalone(
+            kairos_source=out,
+            output_exe=exe_path,
+            kairos_root=kroot,
+            verbose=args.verbose,
+        )
+    except MnemoCompileError as e:
+        print(f"mnemo: {e}", file=sys.stderr)
+        sys.exit(1)
+    if args.keep_kairos:
+        written_k = write_kairos_next_to_c(args.input, out)
+        if args.verbose:
+            print(f"mnemo: scritto anche {written_k}", file=sys.stderr)
+    if args.verbose:
+        print(
+            f"mnemo: eseguibile {exe_path} (e libvm.so nella stessa directory)",
+            file=sys.stderr,
+        )
+
+
+def _cmd_dump_kairos(args: argparse.Namespace) -> None:
+    try:
+        out = compile_c_to_kairos(
+            args.input,
+            main_argc=args.main_argc,
+            ptr_pool_size=args.ptr_pool_size,
+        )
+    except MnemoCompileError as e:
+        print(f"mnemo: {e}", file=sys.stderr)
+        sys.exit(1)
     if args.stdout:
         print(out, end="")
         return
@@ -159,6 +249,14 @@ def _cmd_compile(args: argparse.Namespace) -> None:
         written = write_kairos_next_to_c(args.input, out)
     if args.verbose:
         print(f"mnemo: scritto {written}", file=sys.stderr)
+
+
+def _stdout_without_vm_dump(stdout: str) -> str:
+    """Rimuove la sezione dump Kairos se presente (tutto da «=== VM dump ===» in poi)."""
+    head, sep, _ = stdout.partition("=== VM dump ===")
+    if not sep:
+        return stdout
+    return head.rstrip() + ("\n" if head.strip() else "")
 
 
 def _parse_main_exit_from_kairos_stdout(stdout: str) -> int | None:
@@ -260,11 +358,17 @@ def _cmd_run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(127)
-    if r.stdout:
-        sys.stdout.write(r.stdout)
+    raw_stdout = r.stdout or ""
+    display = (
+        raw_stdout
+        if args.vm_dump
+        else _stdout_without_vm_dump(raw_stdout)
+    )
+    if display:
+        sys.stdout.write(display)
     if r.stderr:
         sys.stderr.write(r.stderr)
-    exit_out = _parse_main_exit_from_kairos_stdout(r.stdout or "")
+    exit_out = _parse_main_exit_from_kairos_stdout(raw_stdout)
     if args.verbose:
         print(
             f"mnemo: VM exit {r.returncode}"
