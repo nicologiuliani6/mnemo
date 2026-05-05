@@ -481,13 +481,10 @@ procedure main()
                 __mn_e7 += 2
                 call __mn_mul_into(__mn_e8, __mn_mem4, __mn_e7)
                 push(__mn_e7, __mn_scratch)
-                push(__mn_e9, __mn_hist)
                 __mn_e9 += __mn_e8
                 __mn_e9 += __mn_mem5
-                push(__mn_e4, __mn_hist)
                 __mn_e4 += __mn_mem4
                 __mn_e4 += 1
-                push(__mn_e5, __mn_hist)
                 __mn_e5 += __mn_mem5
                 __mn_e5 += 2
                 call __mn_mul_into(__mn_e6, __mn_e4, __mn_e5)
@@ -518,7 +515,6 @@ procedure main()
                 __mn_e10 += 2
                 call __mn_mul_into(__mn_e11, __mn_mem4, __mn_e10)
                 push(__mn_e10, __mn_scratch)
-                push(__mn_e12, __mn_hist)
                 __mn_e12 += __mn_e11
                 __mn_e12 += __mn_mem5
                 if __mn_e12 == 0 then
@@ -540,7 +536,6 @@ procedure main()
                         fi __mn_e12 == 2
                     fi __mn_e12 == 1
                 fi __mn_e12 == 0
-                push(__mn_e14, __mn_hist)
                 __mn_e14 += __mn_mem6
                 __mn_e14 += __mn_e13
                 push(__mn_mem6, __mn_hist)
@@ -549,7 +544,6 @@ procedure main()
                 push(__mn_e13, __mn_scratch)
                 push(__mn_e12, __mn_scratch)
                 push(__mn_e11, __mn_scratch)
-                push(__mn_e3, __mn_hist)
                 __mn_e3 += __mn_mem5
                 __mn_e3 += 1
                 push(__mn_mem5, __mn_hist)
@@ -562,7 +556,6 @@ procedure main()
                     __mn_e2 += 1
                 fi __mn_mem5 < 2
             until __mn_e2 == 0
-            push(__mn_e1, __mn_hist)
             __mn_e1 += __mn_mem4
             __mn_e1 += 1
             push(__mn_mem4, __mn_hist)

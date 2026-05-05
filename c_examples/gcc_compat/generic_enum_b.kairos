@@ -340,7 +340,6 @@ procedure main()
         __mn_pool_ctr += 2
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += 3
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem0
         __mn_e0 += 5
         push(__mn_mem1, __mn_hist)

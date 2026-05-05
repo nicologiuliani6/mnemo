@@ -391,7 +391,6 @@ procedure main()
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += __mn_e0
         push(__mn_e0, __mn_scratch)
-        push(__mn_e1, __mn_hist)
         __mn_e1 += __mn_mem2
         __mn_e1 -= 60
         push(__mn_mem3, __mn_hist)

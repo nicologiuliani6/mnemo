@@ -449,7 +449,6 @@ procedure main()
         __mn_e7 -= 10
         push(__mn_e7, __mn_scratch)
         push(__mn_e6, __mn_scratch)
-        push(__mn_e8, __mn_hist)
         __mn_e8 += __mn_mem0
         __mn_e8 += __mn_mem1
         push(__mn_exit, __mn_hist)

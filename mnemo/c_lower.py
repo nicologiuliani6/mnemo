@@ -240,10 +240,41 @@ _SCALAR_NAMES = frozenset(
         ("unsigned",),
         ("char",),
         ("unsigned", "char"),
+        ("signed", "char"),
+        ("short",),
+        ("short", "int"),
+        ("signed", "short"),
+        ("signed", "short", "int"),
+        ("unsigned", "short"),
+        ("unsigned", "short", "int"),
+        ("long",),
+        ("long", "int"),
+        ("signed", "long"),
+        ("signed", "long", "int"),
+        ("unsigned", "long"),
+        ("unsigned", "long", "int"),
+        ("long", "long"),
+        ("signed", "long", "long"),
+        ("unsigned", "long", "long"),
         ("_Bool",),
         ("bool",),
     }
 )
+
+_FLOATING_LEAF_NAMES = frozenset({"float", "double", "long double"})
+
+
+def _reject_floating_leaf(leaf: c.Node, ctx: str) -> None:
+    if isinstance(leaf, c.IdentifierType) and leaf.names:
+        n0 = leaf.names[0]
+        if n0 in _FLOATING_LEAF_NAMES or (
+            len(leaf.names) >= 2
+            and leaf.names[0] == "long"
+            and leaf.names[1] == "double"
+        ):
+            raise MnemoCompileError(
+                f"{ctx}: `float` / `double` non supportati nel modello intero Mnemo"
+            )
 
 
 def _strip_typedecl(node: c.Node) -> c.Node:
@@ -276,6 +307,7 @@ def _follow_typedef_chain(
 def _expand_typedef_names(names: list[str], td: dict[str, c.Node]) -> list[str]:
     leaf = _follow_typedef_chain(names, td, set())
     if isinstance(leaf, c.IdentifierType):
+        _reject_floating_leaf(leaf, "tipo")
         return list(leaf.names)
     if isinstance(leaf, c.Enum):
         return ["int"]
@@ -419,6 +451,14 @@ class _LoopFrame:
 
 
 @dataclass
+class _SwitchSeg:
+    """Un gruppo di etichette case/default con lo stesso blocco di istruzioni iniziale."""
+
+    values: list[str]
+    stmts: list[c.Node]
+
+
+@dataclass
 class _Ctx:
     hist: str = "__mn_hist"
     scratch: str = "__mn_scratch"
@@ -473,9 +513,15 @@ class _Ctx:
     after_par_join: bool = False
     # char* = "…" → mappa nome puntatore → base array `__mn_ros_*` (per printf %s su quella variabile).
     char_ptr_string_base: dict[str, str] = field(default_factory=dict)
+    """Slot logici dichiarati come puntatore a funzione (`int (*p)(int)`)."""
+    func_ptr_vars: set[str] = field(default_factory=set)
+    """Puntatore a funzione (nome logico) → nome procedura risolto a compile-time."""
+    func_ptr_alias: dict[str, str] = field(default_factory=dict)
     """Scope blocchi: ogni frame mappa nome C → nome logico slot (shadowing)."""
     scope_stack: list[dict[str, str]] = field(default_factory=list)
     shadow_uid: int = 0
+    """`&x` almeno una volta: non usare `__mn_v_x` in `_phys` (pool aggiorna `__mn_mem*`)."""
+    addr_taken_logicals: set[str] = field(default_factory=set)
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -709,6 +755,8 @@ def _phys(ctx: _Ctx, logical: str) -> str:
             if idx is not None:
                 s = ctx.mem_layout.total_cells
                 return f"__mn_mem{s + idx}"
+        if logical in ctx.addr_taken_logicals:
+            return hit
         # Parametri procedure utente: finestra pool __mn_mem0..S-1. Le altre variabili
         # (es. `acc`, `i`) usano gli stessi indici globali → collisione di nome con il formale.
         if (
@@ -1946,6 +1994,12 @@ def _register_ptr_pool_locals(ctx: _Ctx) -> None:
             ctx.decl_order.append(n)
 
 
+def _func_decl_has_variadic(fd: c.FuncDecl) -> bool:
+    if fd.args is None:
+        return False
+    return any(isinstance(p, c.EllipsisParam) for p in fd.args.params)
+
+
 def _func_return_is_void(fd: c.FuncDecl) -> bool:
     """`void f(...)` — il tipo di ritorno in pycparser è `fd.type` (TypeDecl o no)."""
     rt = fd.type
@@ -2289,8 +2343,23 @@ def _all_callable_names(ast: c.FileAST) -> frozenset[str]:
     return frozenset(s)
 
 
+_CONST_INT_TYPES = frozenset(
+    {
+        "int",
+        "long",
+        "unsigned int",
+        "unsigned",
+        "long long",
+        "unsigned long",
+        "unsigned long long",
+        "short",
+        "unsigned short",
+    }
+)
+
+
 def _const_int(node: c.Constant) -> int:
-    if node.type not in ("int", "long", "unsigned int", "long long"):
+    if node.type not in _CONST_INT_TYPES:
         raise MnemoCompileError(f"letterale non int supportato: type={node.type!r}")
     return int(node.value.rstrip("uUlL"), 0)
 
@@ -2658,6 +2727,8 @@ def _sizeof_of_c_type_node(node: c.Node, ctx: _Ctx) -> int:
                 raise MnemoCompileError("sizeof(void) non valido")
             if tuple(ex) in _SCALAR_NAMES:
                 return _SIZEOF_SCALAR
+            if tuple(ex) in {("float",), ("double",), ("long", "double")}:
+                raise MnemoCompileError("sizeof: float/double non supportati")
             raise MnemoCompileError(f"sizeof: tipo non supportato: {ex!r}")
         if isinstance(node.type, c.Struct):
             st = node.type
@@ -2808,6 +2879,104 @@ def _eval_expr_into_var(expr: c.Node, ctx: _Ctx, target: str) -> list[Instr]:
     if tm:
         ctx.use_scratch = True
     return ins + post
+
+
+def _is_incdec_lvalue_shape(lv: c.Node) -> bool:
+    if isinstance(lv, c.ID):
+        return True
+    if isinstance(lv, c.UnaryOp) and lv.op == "*":
+        return True
+    if isinstance(lv, c.StructRef):
+        return lv.type in (".", "->")
+    if isinstance(lv, c.ArrayRef):
+        return True
+    return False
+
+
+def _lvalue_inc_dec_prefix_postfix(
+    lv: c.Node, op: str, ctx: _Ctx
+) -> tuple[list[Instr], Var | Imm, list[str]]:
+    if op not in ("p++", "p--", "++", "--"):
+        raise MnemoCompileError(f"operatore incremento non valido: {op!r}")
+    if not _is_incdec_lvalue_shape(lv):
+        raise MnemoCompileError(
+            "++/--: lvalue richiesto (`x`, `*p`, `s.campo`, `p->campo`, `a[i]`)"
+        )
+    coord = getattr(lv, "coord", None)
+    c1 = c.Constant("int", "1", coord)
+    binop = "+" if op in ("p++", "++") else "-"
+    ctx.use_hist = True
+    if op in ("++", "--"):
+        rhs = c.BinaryOp(binop, lv, c1, coord)
+        st = c.Assignment("=", lv, rhs, coord)
+        ei1 = _lower_stmt(st, ctx)
+        ei2, op2, tm2 = _eval_expr(lv, ctx)
+        return ei1 + ei2, op2, tm2
+    t_old = ctx.fresh_temp()
+    ei0 = _eval_expr_into_var(lv, ctx, t_old)
+    rhs = c.BinaryOp(binop, c.ID(t_old, coord), c1, coord)
+    st = c.Assignment("=", lv, rhs, coord)
+    ei1 = _lower_stmt(st, ctx)
+    return ei0 + ei1, Var(t_old), [t_old]
+
+
+def _func_ptr_decl_meta(node: c.Decl, td: dict[str, c.Node]) -> tuple[str, c.FuncDecl] | None:
+    """`int (*p)(int)` → (`p`, FuncDecl)."""
+    cur = node.type
+    if not isinstance(cur, c.PtrDecl):
+        return None
+    inner = cur.type
+    while isinstance(inner, c.PtrDecl):
+        inner = inner.type
+    if not isinstance(inner, c.FuncDecl):
+        return None
+    if inner.args is None:
+        return None
+    if _func_decl_has_variadic(inner):
+        return None
+    rt = inner.type
+    if not isinstance(rt, c.TypeDecl) or rt.declname is None:
+        return None
+    return str(rt.declname), inner
+
+
+def _parse_function_designator(init: c.Node, ctx: _Ctx) -> str | None:
+    if isinstance(init, c.ID):
+        nm = init.name
+        if nm in ctx.extern_procs or nm in ctx.defined_user_functions:
+            return nm
+        return None
+    if isinstance(init, c.UnaryOp) and init.op == "&" and isinstance(init.expr, c.ID):
+        return _parse_function_designator(init.expr, ctx)
+    return None
+
+
+def _resolve_indirect_callee(
+    node: c.FuncCall, ctx: _Ctx
+) -> tuple[c.FuncCall, str]:
+    coord = getattr(node, "coord", None)
+    if isinstance(node.name, c.ID):
+        nm = node.name.name
+        if nm in ctx.func_ptr_alias:
+            nm = ctx.func_ptr_alias[nm]
+        return c.FuncCall(c.ID(nm, coord), node.args, coord), nm
+    if (
+        isinstance(node.name, c.UnaryOp)
+        and node.name.op == "*"
+        and isinstance(node.name.expr, c.ID)
+    ):
+        idv = node.name.expr.name
+        log = _scope_resolve(ctx, idv)
+        if log not in ctx.func_ptr_alias:
+            raise MnemoCompileError(
+                "chiamata indiretta: puntatore non inizializzato con una funzione nota "
+                "a compile-time (`p = f` o `p = &f` con `f` dichiarata)"
+            )
+        nm = ctx.func_ptr_alias[log]
+        return c.FuncCall(c.ID(nm, coord), node.args, coord), nm
+    raise MnemoCompileError(
+        "chiamata: atteso nome funzione, variabile puntatore a funzione, o `(*p)(…)`"
+    )
 
 
 def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[str]]:
@@ -3002,6 +3171,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             if isinstance(inner, c.ID):
                 n = _scope_resolve(ctx, inner.name)
                 if n in ctx.slot_index:
+                    ctx.addr_taken_logicals.add(n)
                     return [], Imm(ctx.slot_index[n]), []
                 if n in ctx.struct_tag_of_var:
                     tag = ctx.struct_tag_of_var[n]
@@ -3014,6 +3184,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                         raise MnemoCompileError(
                             f"&{inner.name}: indirizzo (primo campo) non disponibile"
                         )
+                    ctx.addr_taken_logicals.add(cell)
                     return [], Imm(ctx.slot_index[cell]), []
                 raise MnemoCompileError(f"&{inner.name}: indirizzo non disponibile")
             if isinstance(inner, c.StructRef) and inner.type == ".":
@@ -3029,6 +3200,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                     raise MnemoCompileError(
                         f"&{base}.{mangled}: indirizzo slot non disponibile"
                     )
+                ctx.addr_taken_logicals.add(cell)
                 return [], Imm(ctx.slot_index[cell]), []
             raise MnemoCompileError(
                 "&: supportati `&x` e `&struct.campo` (punto, catena di campi)"
@@ -3052,6 +3224,8 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pre_sl, slot_a, tm_sl = _pool_call_slot_arg(ctx, ptrn)
             ins = ei_p + pre_sl + _ir_pool_load_call(ctx, slot_a, t)
             return ins, Var(t), tm_p + tm_sl + [t]
+        if expr.op in ("p++", "p--", "++", "--"):
+            return _lvalue_inc_dec_prefix_postfix(expr.expr, expr.op, ctx)
         raise MnemoCompileError(f"operatore unario non supportato: {expr.op!r}")
 
     if isinstance(expr, c.BinaryOp):
@@ -3223,9 +3397,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return _eval_expr(_fold_exprlist_as_comma_chain(expr), ctx)
 
     if isinstance(expr, c.FuncCall):
-        if not isinstance(expr.name, c.ID):
-            raise MnemoCompileError("callee non è un identificatore")
-        name = expr.name.name
+        expr, name = _resolve_indirect_callee(expr, ctx)
         if name == "malloc":
             if name not in ctx.extern_procs:
                 raise MnemoCompileError(
@@ -3593,9 +3765,8 @@ def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
 def _lower_funccall_with_ret(
     node: c.FuncCall, ctx: _Ctx, ret_sink: str | list[str] | None
 ) -> list[Instr]:
-    if not isinstance(node.name, c.ID):
-        raise MnemoCompileError("callee non è un identificatore")
-    name = node.name.name
+    node, name = _resolve_indirect_callee(node, ctx)
+    assert isinstance(node.name, c.ID)
     if name == "putchar":
         if ret_sink is not None:
             raise MnemoCompileError("putchar è void")
@@ -3813,9 +3984,7 @@ def _lower_return_aggregate(expr: c.Node, ctx: _Ctx) -> list[Instr]:
     if rw < 2:
         raise MnemoCompileError("return aggregato: errore interno")
     if isinstance(expr, c.FuncCall):
-        if not isinstance(expr.name, c.ID):
-            raise MnemoCompileError("return: callee non valido")
-        callee = expr.name.name
+        norm_ret, callee = _resolve_indirect_callee(expr, ctx)
         if ctx.file_ast is None or ctx.mem_layout is None:
             raise MnemoCompileError("return f(): contesto senza layout")
         fd_u = _get_funcdef(ctx.file_ast, callee)
@@ -3828,7 +3997,7 @@ def _lower_return_aggregate(expr: c.Node, ctx: _Ctx) -> list[Instr]:
             raise MnemoCompileError(
                 "return f(): tipo di ritorno incompatibile con la funzione corrente"
             )
-        return _lower_funccall_with_ret(expr, ctx, list(ctx.ret_vars)) + [IReturn()]
+        return _lower_funccall_with_ret(norm_ret, ctx, list(ctx.ret_vars)) + [IReturn()]
     if isinstance(expr, c.ID):
         vn = expr.name
         if vn not in ctx.struct_tag_of_var:
@@ -3912,22 +4081,14 @@ def _lower_expr_as_stmt(expr: c.Node, ctx: _Ctx) -> list[Instr]:
     if isinstance(expr, c.FuncCall):
         return _lower_funccall_with_ret(expr, ctx, None)
     if isinstance(expr, c.UnaryOp) and expr.op in ("p++", "p--", "++", "--"):
-        if not isinstance(expr.expr, c.ID):
-            raise MnemoCompileError("incremento/decremento solo su variabile")
-        v = expr.expr.name
-        if v not in ctx.int_locals:
-            raise MnemoCompileError(f"variabile non dichiarata: {v}")
-        delta = 1 if expr.op in ("p++", "++") else -1
-        rhs: c.Node
-        if delta == 1:
-            rhs = c.BinaryOp(
-                "+", c.ID(v), c.Constant("int", "1"), expr.coord
-            )
-        else:
-            rhs = c.BinaryOp(
-                "-", c.ID(v), c.Constant("int", "1"), expr.coord
-            )
-        return _lower_assign(_phys(ctx, v), rhs, ctx)
+        ins, _opv, tm = _lvalue_inc_dec_prefix_postfix(expr.expr, expr.op, ctx)
+        ctx.use_hist = True
+        out = list(ins)
+        fin = list(tm)
+        if fin:
+            ctx.use_scratch = True
+        out.extend([IHistPush(ctx.scratch, x) for x in reversed(fin)])
+        return out
     raise MnemoCompileError(
         f"espressione non ammessa come istruzione: {type(expr).__name__}"
     )
@@ -4586,82 +4747,154 @@ def _lower_if(node: c.If, ctx: _Ctx) -> list[Instr]:
     return _lower_if_from_expr(node.cond, then_instrs, else_instrs, ctx)
 
 
-def _sanitize_case_stmts(stmts: list[c.Node], case_label: str) -> list[c.Node]:
-    if not stmts:
-        return []
-    for i, s in enumerate(stmts):
-        if isinstance(s, c.Break):
-            if i != len(stmts) - 1:
-                raise MnemoCompileError(
-                    f"switch {case_label}: break solo in coda al case"
-                )
-            return list(stmts[:-1])
-    raise MnemoCompileError(
-        f"switch {case_label}: ogni case/default deve terminare con break "
-        f"(fall-through non supportato)"
-    )
+def _switch_case_label_str(it: c.Case, ctx: _Ctx) -> str:
+    if isinstance(it.expr, c.Constant):
+        return str(_const_int(it.expr))
+    if isinstance(it.expr, c.ID) and it.expr.name in ctx.enum_constants:
+        return str(ctx.enum_constants[it.expr.name])
+    raise MnemoCompileError("switch: case richiede costante intera o enumeratore")
 
 
-def _parse_switch_cases(
+def _parse_switch_segments(
     items: list[c.Node], ctx: _Ctx
-) -> list[tuple[str, list[c.Node]]]:
-    cases: list[tuple[str, list[c.Node]]] = []
+) -> list[_SwitchSeg]:
+    """Raggruppa etichette consecutive e costruisce i segmenti (fall-through C)."""
+    pending: list[str] = []
+    segments: list[_SwitchSeg] = []
     for it in items:
         if isinstance(it, c.Case):
-            if isinstance(it.expr, c.Constant):
-                lab = str(_const_int(it.expr))
-            elif isinstance(it.expr, c.ID) and it.expr.name in ctx.enum_constants:
-                lab = str(ctx.enum_constants[it.expr.name])
-            else:
-                raise MnemoCompileError(
-                    "switch: case richiede costante intera o enumeratore"
-                )
-            cases.append((lab, _sanitize_case_stmts(it.stmts, f"case {lab}")))
+            pending.append(_switch_case_label_str(it, ctx))
+            stmts = list(it.stmts or [])
+            if stmts:
+                segments.append(_SwitchSeg(list(pending), stmts))
+                pending.clear()
         elif isinstance(it, c.Default):
-            cases.append(
-                ("default", _sanitize_case_stmts(it.stmts, "default"))
-            )
+            pending.append("default")
+            stmts = list(it.stmts or [])
+            if stmts:
+                segments.append(_SwitchSeg(list(pending), stmts))
+                pending.clear()
         else:
             raise MnemoCompileError(
                 "nel corpo switch sono ammessi solo case e default"
             )
-    for i, (v, _) in enumerate(cases):
-        if v == "default" and i != len(cases) - 1:
-            raise MnemoCompileError("switch: default deve essere l'ultimo branch")
-    return cases
+    if pending:
+        raise MnemoCompileError(
+            "switch: case/default con etichette ma senza istruzioni (usa `;` o un blocco)"
+        )
+    return segments
 
 
-def _switch_chain(
+def _switch_flat_stmts_for_entry(
+    segments: list[_SwitchSeg], start_i: int
+) -> list[c.Node]:
+    """
+    Corpo C da eseguire entrando nel segmento `start_i`, con fall-through sui segmenti
+    successivi fino a un `break` in coda a un segmento o alla fine dello switch.
+    I `break` non vengono inclusi nell'output (solo terminano la catena).
+    """
+    acc: list[c.Node] = []
+    j = start_i
+    while j < len(segments):
+        ss = segments[j].stmts
+        for k, st in enumerate(ss):
+            if isinstance(st, c.Break):
+                if k != len(ss) - 1:
+                    raise MnemoCompileError(
+                        "switch: `break` deve essere l'ultima istruzione del case"
+                    )
+                return acc
+            acc.append(st)
+        j += 1
+    return acc
+
+
+def _reject_switch_flat_unstructured_break(flat: list[c.Node]) -> None:
+    """
+    `break` annidato (es. dentro `if`) richiederebbe gating per istruzione annidato in
+    `if (disc==v)` e rompe la reversibilità IF/FI della VM. Solo corpi «piatti».
+    """
+    if not flat:
+        return
+    coord = flat[0].coord
+    wrapped = c.Compound(block_items=list(flat), coord=coord)
+    if _has_break_targeting_loop(wrapped, False):
+        raise MnemoCompileError(
+            "switch: `break` solo in fondo al case (non dentro if/altri costrutti)"
+        )
+
+
+def _lower_switch_flat_body(segments: list[_SwitchSeg], start_i: int, ctx: _Ctx) -> list[Instr]:
+    flat = _switch_flat_stmts_for_entry(segments, start_i)
+    _reject_switch_flat_unstructured_break(flat)
+    out: list[Instr] = []
+    for s in flat:
+        out.extend(_lower_stmt(s, ctx))
+    return out
+
+
+def _switch_value_to_segment(
+    segments: list[_SwitchSeg],
+) -> dict[str, int]:
+    m: dict[str, int] = {}
+    for i, seg in enumerate(segments):
+        for v in seg.values:
+            if v == "default":
+                continue
+            if v in m:
+                raise MnemoCompileError(f"switch: etichetta case duplicata ({v})")
+            m[v] = i
+    return m
+
+
+def _emit_switch_if_chain(
     disc: str,
-    cases: list[tuple[str, list[c.Node]]],
+    sorted_vals: list[str],
+    val_to_seg: dict[str, int],
+    segments: list[_SwitchSeg],
+    default_i: int | None,
     ctx: _Ctx,
-    idx: int,
 ) -> list[Instr]:
-    if idx >= len(cases):
-        return []
-    val, stmts = cases[idx]
-    body: list[Instr] = []
-    for s in stmts:
-        body.extend(_lower_stmt(s, ctx))
-    if val == "default":
-        return body
-    rest = _switch_chain(disc, cases, ctx, idx + 1)
-    if not rest:
-        return [IIfKairos(disc, "==", val, body, None)]
-    return [IIfKairos(disc, "==", val, body, rest)]
+    if default_i is not None:
+        rest: list[Instr] = _lower_switch_flat_body(segments, default_i, ctx)
+    else:
+        rest = []
+    for v in reversed(sorted_vals):
+        si = val_to_seg[v]
+        body = _lower_switch_flat_body(segments, si, ctx)
+        rest = [IIfKairos(disc, "==", v, body, rest if rest else None)]
+    return rest
 
 
 def _lower_switch(node: c.Switch, ctx: _Ctx) -> list[Instr]:
     if not isinstance(node.stmt, c.Compound):
         raise MnemoCompileError("switch: il corpo deve essere { ... }")
     pre_d, disc_var, tm_d = _kairos_atom(node.cond, ctx)
-    cases = _parse_switch_cases(node.stmt.block_items or [], ctx)
-    if not cases:
+    segments = _parse_switch_segments(node.stmt.block_items or [], ctx)
+    if not segments:
         out = list(pre_d)
         _append_cond_cleanup(out, ctx, tm_d)
         return out
-    chain = _switch_chain(disc_var, cases, ctx, 0)
-    out = pre_d + chain
+
+    default_slots = [i for i, s in enumerate(segments) if "default" in s.values]
+    if len(default_slots) > 1:
+        raise MnemoCompileError("switch: più di un `default`")
+    default_i = default_slots[0] if default_slots else None
+
+    val_to_seg = _switch_value_to_segment(segments)
+    if not val_to_seg and default_i is None:
+        raise MnemoCompileError("switch: nessun `case` né `default`")
+
+    sorted_vals = sorted(val_to_seg.keys(), key=lambda k: int(k, 0))
+    chain = _emit_switch_if_chain(
+        disc_var,
+        sorted_vals,
+        val_to_seg,
+        segments,
+        default_i,
+        ctx,
+    )
+    out = list(pre_d) + chain
     _append_cond_cleanup(out, ctx, tm_d)
     return out
 
@@ -4714,7 +4947,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 ctx.decl_order.append(logical)
             ctx.var_types[logical] = node.type
             if node.init is not None:
-                raise MnemoCompileError("init union non supportato")
+                ini_u = node.init
+                if isinstance(ini_u, c.InitList):
+                    flat_u = _flatten_init_list(ini_u)
+                    if len(flat_u) != 1:
+                        raise MnemoCompileError("init union: un solo valore in `{ ... }`")
+                    return _lower_assign(_phys(ctx, logical), flat_u[0], ctx)
+                if isinstance(ini_u, c.ExprList):
+                    ini_u = _fold_exprlist_as_comma_chain(ini_u)
+                return _lower_assign(_phys(ctx, logical), ini_u, ctx)
             return []
 
         st_tag = _struct_tag_for_decl_type(node.type, ctx)
@@ -4736,7 +4977,22 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ctx.decl_order.append(loc)
                 ctx.var_types[loc] = fty
             if node.init is not None:
-                raise MnemoCompileError("init struct non supportato")
+                if not isinstance(node.init, c.InitList):
+                    raise MnemoCompileError("init struct: serve `{ ... }`")
+                flat_s = _flatten_init_list(node.init)
+                out_s: list[Instr] = []
+                ix = 0
+                for fn, fty in fields:
+                    if _type_node_is_pthread_mutex(fty, ctx.typedef_map):
+                        continue
+                    if ix >= len(flat_s):
+                        break
+                    loc = _struct_field_local(logical, fn)
+                    out_s.extend(_lower_assign(_phys(ctx, loc), flat_s[ix], ctx))
+                    ix += 1
+                if ix < len(flat_s):
+                    raise MnemoCompileError("init struct: troppi elementi in `{ ... }`")
+                return out_s
             return []
 
         ap = _try_parse_array_decl(node, ctx)
@@ -4802,6 +5058,33 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         if name is None:
             name = _enum_scalar_decl_name(node)
         if name is None:
+            fp_meta = _func_ptr_decl_meta(node, td)
+            if fp_meta is not None:
+                fp_name, _cfd = fp_meta
+                logical_fp = _scope_declare(ctx, fp_name)
+                ctx.int_locals.add(logical_fp)
+                if ctx.mem_layout is None:
+                    ctx.decl_order.append(logical_fp)
+                ctx.var_types[logical_fp] = node.type
+                ctx.func_ptr_vars.add(logical_fp)
+                ctx.use_hist = True
+                phy_fp = _phys(ctx, logical_fp)
+                out_fp: list[Instr] = [
+                    IHistPush(ctx.hist, phy_fp),
+                    IAddEq(phy_fp, Imm(0)),
+                ]
+                if node.init is not None:
+                    ini = node.init
+                    if isinstance(ini, c.ExprList):
+                        ini = _fold_exprlist_as_comma_chain(ini)
+                    tgt_fp = _parse_function_designator(ini, ctx)
+                    if tgt_fp is None:
+                        raise MnemoCompileError(
+                            "puntatore a funzione: inizializzatore deve essere "
+                            "`nome_funzione` o `&nome_funzione`"
+                        )
+                    ctx.func_ptr_alias[logical_fp] = tgt_fp
+                return out_fp
             pn = _int_ptr_var_decl_name(node, td)
             if pn is None:
                 pn = _struct_pointer_param_name(node, ctx)
@@ -4874,10 +5157,31 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
 
     if isinstance(node, c.Assignment):
         if (
+            isinstance(node.lvalue, c.ID)
+            and node.op == "="
+            and _scope_resolve(ctx, node.lvalue.name) in ctx.func_ptr_vars
+        ):
+            lhs_fp = _scope_resolve(ctx, node.lvalue.name)
+            rhs_fp = node.rvalue
+            if isinstance(rhs_fp, c.ExprList):
+                rhs_fp = _fold_exprlist_as_comma_chain(rhs_fp)
+            if isinstance(rhs_fp, c.ID):
+                rlog = _scope_resolve(ctx, rhs_fp.name)
+                if rlog in ctx.func_ptr_alias:
+                    ctx.func_ptr_alias[lhs_fp] = ctx.func_ptr_alias[rlog]
+                    return []
+            tgt_as = _parse_function_designator(rhs_fp, ctx)
+            if tgt_as is None:
+                raise MnemoCompileError(
+                    "assegnamento a puntatore a funzione: usa `g`, `&g`, o copia da "
+                    "un altro puntatore già inizializzato"
+                )
+            ctx.func_ptr_alias[lhs_fp] = tgt_as
+            return []
+        if (
             node.op == "="
             and isinstance(node.lvalue, c.ID)
             and isinstance(node.rvalue, c.FuncCall)
-            and isinstance(node.rvalue.name, c.ID)
         ):
             lhs = _scope_resolve(ctx, node.lvalue.name)
             if (
@@ -4885,7 +5189,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 and ctx.mem_layout is not None
                 and ctx.file_ast is not None
             ):
-                callee = node.rvalue.name.name
+                norm_sc, callee = _resolve_indirect_callee(node.rvalue, ctx)
                 fd_u = _get_funcdef(ctx.file_ast, callee)
                 if fd_u is not None and isinstance(fd_u.decl.type, c.FuncDecl):
                     callee_fd = fd_u.decl.type
@@ -4908,7 +5212,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             _phys(ctx, _struct_field_local(lhs, fn))
                             for fn, _ in fields
                         ]
-                        return _lower_funccall_with_ret(node.rvalue, ctx, sinks)
+                        return _lower_funccall_with_ret(norm_sc, ctx, sinks)
         if isinstance(node.lvalue, c.StructRef):
             if node.lvalue.type == "->":
                 if node.op == "=":
@@ -5050,18 +5354,12 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         return _lower_expr_as_stmt(node, ctx)
 
     if isinstance(node, c.FuncCall):
-        if not isinstance(node.name, c.ID):
-            raise MnemoCompileError("callee non è un identificatore")
+        node, nm = _resolve_indirect_callee(node, ctx)
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
-            if (
-                ctx.is_main
-                and isinstance(node.name, c.ID)
-                and node.name.name == "mnemo_pthread_parallel2"
-            ):
+            if ctx.is_main and nm == "mnemo_pthread_parallel2":
                 ctx.after_par_join = True
             return pthread_ins
-        nm = node.name.name
         if ctx.proc_returns_int.get(nm, False):
             if (
                 ctx.mem_layout is not None
@@ -5386,6 +5684,10 @@ def _lower_user_function(
     fd = fdef.decl.type
     if not isinstance(fd, c.FuncDecl):
         raise MnemoCompileError("definizione funzione malformata")
+    if _func_decl_has_variadic(fd):
+        raise MnemoCompileError(
+            f"{name}: definizioni con argomenti variadici (`...`) non supportate"
+        )
     body = fdef.body
     if body is None or not isinstance(body, c.Compound):
         raise MnemoCompileError("corpo funzione non è un blocco { ... }")

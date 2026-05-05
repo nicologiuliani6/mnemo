@@ -178,19 +178,6 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     raise TypeError(ins)
 
 
-def _is_unified_mem_local(name: str) -> bool:
-    """
-    Celle `__mn_memN` del registro globale Mnemo. La VM `push(v, hist)` azzera `v`;
-    nelle procedure utente queste celle sono spesso alias dei parametri del chiamante,
-    quindi l'epilogo non deve fare push sulla cella di ritorno (si usa `delocal int x x`).
-    """
-
-    if not name.startswith("__mn_mem"):
-        return False
-    suffix = name[8:]
-    return bool(suffix) and suffix.isdigit()
-
-
 def _emit_main(fn: Function) -> str:
     """
     Tutti gli interi di procedura: `local int … = 0`; in coda `push` (azzera) e `delocal int … = 0`.
@@ -237,8 +224,10 @@ def _emit_procedure(fn: Function) -> str:
     NULL in VM, `+=` / PUSHEQ falliscono). Chiusura: `push` azzera prima di
     `delocal int … = 0` (la VM rifiuta LOCAL aperte a END_PROC).
 
-    Per `__mn_memN`: niente `push` (non azzerare valori visti dal chiamante);
-    `delocal int x x` — il valore atteso è letto da `x` e coincide col corrente.
+    I parametri formali (inclusi `__mn_mem*`) non stanno in `fn.locals`: l'epilogo
+    riguarda solo i `local int` del corpo. Anche le celle `__mn_mem*` extra (es.
+    seconda partizione per `par`) usano la stessa forma `push` + `delocal … = 0`
+    accettata dal parser Kairos.
     """
     param_parts: list[str] = []
     for typ, name in fn.params:
@@ -273,11 +262,8 @@ def _emit_procedure(fn: Function) -> str:
         _emit_instr_seq(lines, b.instrs, body_indent)
 
     for _t, name in reversed(ints):
-        if _is_unified_mem_local(name):
-            lines.append(f"    delocal int {name} {name}")
-        else:
-            lines.append(f"    push({name}, {hist})")
-            lines.append(f"    delocal int {name} = 0")
+        lines.append(f"    push({name}, {hist})")
+        lines.append(f"    delocal int {name} = 0")
     for _t, name in reversed(channels):
         lines.append(f"    delocal channel {name} = empty")
 

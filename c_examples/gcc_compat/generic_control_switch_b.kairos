@@ -345,27 +345,24 @@ procedure main()
         push(__mn_mem1, __mn_hist)
         __mn_mem1 += 1
         if __mn_mem0 == 7 then
-            push(__mn_e0, __mn_hist)
-            __mn_e0 += __mn_mem1
-            __mn_e0 += 7
+            __mn_e2 += __mn_mem1
+            __mn_e2 += 7
             push(__mn_mem1, __mn_hist)
-            __mn_mem1 += __mn_e0
-            push(__mn_e0, __mn_scratch)
+            __mn_mem1 += __mn_e2
+            push(__mn_e2, __mn_scratch)
         else
             if __mn_mem0 == 8 then
-                push(__mn_e1, __mn_hist)
                 __mn_e1 += __mn_mem1
                 __mn_e1 += 8
                 push(__mn_mem1, __mn_hist)
                 __mn_mem1 += __mn_e1
                 push(__mn_e1, __mn_scratch)
             else
-                push(__mn_e2, __mn_hist)
-                __mn_e2 += __mn_mem1
-                __mn_e2 += 9
+                __mn_e0 += __mn_mem1
+                __mn_e0 += 9
                 push(__mn_mem1, __mn_hist)
-                __mn_mem1 += __mn_e2
-                push(__mn_e2, __mn_scratch)
+                __mn_mem1 += __mn_e0
+                push(__mn_e0, __mn_scratch)
             fi __mn_mem0 == 8
         fi __mn_mem0 == 7
         call __mn_putd(__mn_mem1)

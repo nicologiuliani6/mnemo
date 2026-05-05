@@ -955,6 +955,14 @@ def compute_program_mem_layout(
         if name is None:
             name = L._enum_scalar_decl_name(node)
         if name is None:
+            fp_meta = L._func_ptr_decl_meta(node, tdm)
+            if fp_meta is not None:
+                fp_name, _cfd = fp_meta
+                logical_fp = L._scope_declare(ctx, fp_name)
+                ctx.int_locals.add(logical_fp)
+                ctx.func_ptr_vars.add(logical_fp)
+                alloc(fn, logical_fp)
+                return
             pn = L._int_ptr_var_decl_name(node, tdm)
             if pn is None:
                 pn = L._struct_pointer_param_name(node, ctx)

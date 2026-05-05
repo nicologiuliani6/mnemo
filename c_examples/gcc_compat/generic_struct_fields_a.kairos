@@ -368,7 +368,6 @@ procedure main()
         __mn_mem0 += 10
         push(__mn_mem1, __mn_hist)
         __mn_mem1 += 5
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem0
         __mn_e0 += 3
         push(__mn_mem0, __mn_hist)
@@ -380,7 +379,6 @@ procedure main()
         push(__mn_mem1, __mn_hist)
         __mn_mem1 += __mn_e2
         push(__mn_e2, __mn_scratch)
-        push(__mn_e3, __mn_hist)
         __mn_e3 += __mn_mem0
         __mn_e3 += __mn_mem1
         push(__mn_mem2, __mn_hist)
@@ -391,7 +389,6 @@ procedure main()
         show(__mn_e4, char)
         __mn_e4 -= 10
         push(__mn_e4, __mn_scratch)
-        push(__mn_e5, __mn_hist)
         __mn_e5 += __mn_mem2
         __mn_e5 -= 20
         push(__mn_exit, __mn_hist)

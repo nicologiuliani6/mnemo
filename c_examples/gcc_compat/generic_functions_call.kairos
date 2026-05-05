@@ -429,7 +429,6 @@ procedure add3(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int _
     stack __mn_scratch
     local int __mn_e0 = 0
         // funzione C add3
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem2
         __mn_e0 += 3
         push(__mn_mem3, __mn_hist)

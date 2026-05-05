@@ -743,7 +743,6 @@ procedure main()
         __mn_mem1 += 3
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += 10
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem1
         __mn_e0 += 4
         push(__mn_mem1, __mn_hist)
@@ -767,7 +766,6 @@ procedure main()
         push(__mn_mem5, __mn_hist)
         __mn_mem5 += __mn_e5
         push(__mn_e5, __mn_scratch)
-        push(__mn_e6, __mn_hist)
         __mn_e6 += __mn_mem3
         __mn_e6 += 5
         push(__mn_mem3, __mn_hist)
@@ -792,7 +790,6 @@ procedure main()
         push(__mn_e13, __mn_hist)
         __mn_e13 += __mn_mem6
         call __mn_pool_load(__mn_e13, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_e12)
-        push(__mn_e14, __mn_hist)
         __mn_e14 += __mn_e12
         __mn_e14 += 2
         push(__mn_e15, __mn_hist)
@@ -807,25 +804,19 @@ procedure main()
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += 7
         call box_shlv(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12)
-        push(__mn_e16, __mn_hist)
         __mn_e16 += __mn_mem1
         __mn_e16 += __mn_mem2
-        push(__mn_e17, __mn_hist)
         __mn_e17 += __mn_e16
         __mn_e17 += __mn_mem3
-        push(__mn_e18, __mn_hist)
         __mn_e18 += __mn_e17
         __mn_e18 += __mn_mem4
-        push(__mn_e19, __mn_hist)
         __mn_e19 += __mn_e18
         __mn_e19 += __mn_mem5
         push(__mn_e21, __mn_hist)
         __mn_e21 += __mn_mem6
         call __mn_pool_load(__mn_e21, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_e20)
-        push(__mn_e22, __mn_hist)
         __mn_e22 += __mn_e19
         __mn_e22 += __mn_e20
-        push(__mn_e23, __mn_hist)
         __mn_e23 += __mn_e22
         __mn_e23 += __mn_mem7
         push(__mn_mem8, __mn_hist)
@@ -847,7 +838,6 @@ procedure main()
         __mn_e25 += __mn_mem6
         call __mn_pool_free(__mn_e25, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_pool_ctr)
         push(__mn_e25, __mn_scratch)
-        push(__mn_e26, __mn_hist)
         __mn_e26 += __mn_mem8
         __mn_e26 -= 50
         push(__mn_exit, __mn_hist)

@@ -368,14 +368,12 @@ procedure main()
             push(__mn_e4, __mn_scratch)
             push(__mn_e3, __mn_scratch)
             if __mn_e5 == 0 then
-                push(__mn_e1, __mn_hist)
                 __mn_e1 += __mn_mem1
                 __mn_e1 += __mn_mem0
                 push(__mn_mem1, __mn_hist)
                 __mn_mem1 += __mn_e1
                 push(__mn_e1, __mn_scratch)
             else
-                push(__mn_e2, __mn_hist)
                 __mn_e2 += __mn_mem1
                 __mn_e2 += 1
                 push(__mn_mem1, __mn_hist)
@@ -383,7 +381,6 @@ procedure main()
                 push(__mn_e2, __mn_scratch)
             fi __mn_e5 == 0
             push(__mn_e5, __mn_scratch)
-            push(__mn_e6, __mn_hist)
             __mn_e6 += __mn_mem0
             __mn_e6 += 1
             push(__mn_mem0, __mn_hist)

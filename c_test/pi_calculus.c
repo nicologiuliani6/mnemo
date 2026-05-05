@@ -63,5 +63,5 @@ int main(void) {
     mnemo_kairos_channel_t req;
     int msg = 10;
     mnemo_pthread_parallel2(server, client, &req, &req, &msg);
-    return msg;
+    return msg; //11
 }

@@ -478,7 +478,6 @@ procedure main()
                     fi __mn_mem4 == 2
                 fi __mn_mem4 == 1
             fi __mn_mem4 == 0
-            push(__mn_e7, __mn_hist)
             __mn_e7 += __mn_e6
             __mn_e7 += 1
             if __mn_mem4 == 0 then
@@ -502,7 +501,6 @@ procedure main()
             fi __mn_mem4 == 0
             push(__mn_e7, __mn_scratch)
             push(__mn_e6, __mn_scratch)
-            push(__mn_e5, __mn_hist)
             __mn_e5 += __mn_mem4
             __mn_e5 += 1
             push(__mn_mem4, __mn_hist)
@@ -515,13 +513,10 @@ procedure main()
                 __mn_e4 += 1
             fi __mn_mem4 < 4
         until __mn_e4 == 0
-        push(__mn_e8, __mn_hist)
         __mn_e8 += __mn_mem0
         __mn_e8 += __mn_mem1
-        push(__mn_e9, __mn_hist)
         __mn_e9 += __mn_e8
         __mn_e9 += __mn_mem2
-        push(__mn_e10, __mn_hist)
         __mn_e10 += __mn_e9
         __mn_e10 += __mn_mem3
         push(__mn_mem5, __mn_hist)

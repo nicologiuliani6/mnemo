@@ -9,7 +9,7 @@ alwaysApply: false
 
 # Mnemo — subset C vs C “normale”
 
-Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mnemo/compile.py`). Non è un compilatore C conforme allo standard. Questa nota elenca **cosa manca o è diverso** rispetto al C d’uso comune.
+Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mnemo/layout_collect.py`, `mnemo/compile.py`). Non è un compilatore C conforme allo standard. **Backlog e priorità**: vedi [`TODO.md`](../../TODO.md) nella root del repo. Questa nota elenca **limiti e differenze** rispetto al C d’uso comune.
 
 ## Tipi fondamentali
 
@@ -27,9 +27,9 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 ## Dichiarazioni e puntatori
 
 - Puntatori dichiarati nel subset: **`int *`**, **`unsigned *` / `unsigned int *`**, **`void *`** (un livello, dove previsto), e **`T *`** con **`T`** typedef di **`struct`** / **`union`** (un livello; stesso modello “handle” dei parametri). Più locali puntatore (es. più `malloc`) sono supportati tramite pool `__mn_pool_*`.
-- Niente **`char *`** generico o **`T *`** per tipi arbitrari (salvo il caso **`char **argv`** in `main`).
-- **`const`, `volatile`, `restrict`, `_Atomic`**: non c’è modello semantico C completo dopo il lowering.
-- **`static` / `extern` / linkage** e durata di storage come nel C standard.
+- **`char *`** con stringa letterale `"..."` e **`const char *`** con la stessa convenzione sono supportati per `printf`/`putchar` nel subset; non è il modello puntatori/stringhe del C completo.
+- **`const`, `volatile`, `restrict`, `_Atomic`**: spesso **accettati sintatticamente** (qualificatori su `TypeDecl`); **nessuna** semantica C completa (nessun enforcement const-correctness).
+- **`static` / `extern`**: Mnemo usa **una TU** verso Kairos; linkage e durata non coincidono con il C standard su più unità di traduzione.
 
 ## `main`, `argc`, `argv`
 
@@ -45,8 +45,8 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 ## Struct e union
 
-- **Passaggio struct/union per valore** come argomento → errore (usare campi scalari).
-- **Inizializzatori `{ ... }`** per variabili struct o union alla dichiarazione → non supportati.
+- **Passaggio struct per valore** (flatten sui campi) è supportato dove previsto dal layout; **union** per valore come singola parola.
+- **Inizializzatori `{ ... }`** alla dichiarazione: **struct** (lista in ordine di campi, senza designatori); **union** con **un** solo valore in `{ … }`.
 - **`struct.campo`**: `=` e assegnamenti composti (`+=`, `*=`, `^=`, `<<=`, … come per gli scalari).
 - **`p->campo`**: idem (`=` e composti).
 - **Union**: assegnamenti composti solo per un sottoinsieme di operatori; altri → errore.
@@ -58,9 +58,9 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 ## Operatori unari
 
-- Implementati in forme limitate: `-`, `*`, `&` (solo **`&id`** e **`&struct.campo`** con vincoli), **`~`** (come `(-1) ^ x`), `sizeof`, e **`++` / `--` solo come istruzione su identificatore**.
+- Implementati in forme limitate: `-`, `*`, `&` (solo **`&id`** e **`&struct.campo`** con vincoli), **`~`** (come `(-1) ^ x`), `sizeof`.
+- **`++` / `--`** (prefisso/postfisso) su **`ID`**, **`*p`**, **`a[i]`**, **`s.campo`**, **`p->campo`** (istruzione ed espressione), con ordine di side-effect allineato agli assegnamenti esistenti.
 - Altri unari → `operatore unario non supportato`.
-- **`++` / `--` in espressione** generica (prefisso/postfisso su `*p`, campi, ecc.) non è C generico.
 
 ## Operatori binari e logici
 
@@ -89,17 +89,18 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 ## Chiamate
 
-- Callee = **identificatore** `f(...)`; no puntatore-a-funzione come callee.
-- **Variadiche** (`...`): no.
+- Callee: nome diretto **`f(...)`**, oppure **puntatore a funzione** risolto a **compile-time**: variabile dichiarata `int (*p)(…)` con init **`g`** o **`&g`** (`g` dichiarata nello stesso file), più **`p(...)`** e **`(*p)(...)`**. Nessun puntatore a funzione calcolato a runtime generico.
+- **Variadiche** (`...`): nelle **definizioni** utente → errore; **dichiarazioni** con `...` (es. `printf`) restano per I/O built-in. Nessun `va_list`.
 - **`void`**: non come sotto-espressione (solo istruzione), con errori dedicati.
 
 ## `switch` / `case`
 
 - Corpo **`switch`** deve essere **`{ ... }`**.
-- **No fall-through** tra case (ogni case/default con disciplina `break` in coda, ecc.).
-- **`default`** deve essere **ultimo**.
+- **Fall-through** lineare tra `case`: supportato tramite **espansione a compile-time** dei corpi (catena `if disc==v` sulla VM reversibile).
+- **`default`**: ammesso; non è obbligatorio che sia ultimo.
+- **`break` annidato** dentro `if`/altri costrutti verso lo stesso `switch` → **errore** (servirebbe gating IF/FI non reversibile con lo schema attuale); solo `break` in **coda** al case / catena fall-through.
 - Corpo: solo **`case`** e **`default`**.
-- **`case`**: costante intera o enumeratore noto.
+- **`case`**: costante intera o enumeratore noto; etichette duplicate → errore.
 
 ## `for`
 
@@ -131,5 +132,5 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 - Tipi: `int`, `unsigned`, `bool`, puntatori `int*` / `void*` come da codice; struct/union con limiti sopra.
 - `main`: `int main(void)` o `int main(int argc, char **argv)`; `argc` da direttiva o CLI; `argv` fittizio.
-- Controllo: `if`, `while`, `do/while`, `for`, `switch` senza fall-through; no `goto`.
+- Controllo: `if`, `while`, `do/while`, `for`, `switch` (con limiti su `break` annidato); no `goto`.
 - Heap: `malloc`/`free` sul pool; dimensione con `--ptr-pool-size` / layout.

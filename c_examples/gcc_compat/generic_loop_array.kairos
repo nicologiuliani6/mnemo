@@ -509,14 +509,12 @@ procedure main()
                     fi __mn_mem5 == 2
                 fi __mn_mem5 == 1
             fi __mn_mem5 == 0
-            push(__mn_e8, __mn_hist)
             __mn_e8 += __mn_mem6
             __mn_e8 += __mn_e7
             push(__mn_mem6, __mn_hist)
             __mn_mem6 += __mn_e8
             push(__mn_e8, __mn_scratch)
             push(__mn_e7, __mn_scratch)
-            push(__mn_e6, __mn_hist)
             __mn_e6 += __mn_mem5
             __mn_e6 += 1
             push(__mn_mem5, __mn_hist)

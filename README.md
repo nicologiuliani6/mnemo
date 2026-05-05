@@ -310,7 +310,7 @@ Mnemo abbassa questi costrutti a **`par … and … rap`** (due thread Kairos):
 
 ## Mnemo rispetto al C standard
 
-Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E**, ma l’AST viene interpretato da un **subset** pensato per abbassare a **Kairos**. Qui: cosa puoi ragionevolmente aspettarti come in C, e cosa **manca** o **è diverso**.
+Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E**, ma l’AST viene interpretato da un **subset** pensato per abbassare a **Kairos**. Qui: cosa puoi ragionevolmente aspettarti come in C, e cosa **manca** o **è diverso**. **Backlog e limiti aggiornati**: file [`TODO.md`](TODO.md) nella root del repo; dettaglio regole Cursor in [`.cursor/rules/mnemo-c-subset.mdc`](.cursor/rules/mnemo-c-subset.mdc).
 
 ### C’è (in sintesi, come nel C “di tutti i giorni”)
 
@@ -322,9 +322,9 @@ Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E
 | **Puntatori** | `int *`, `void *`, ecc.; dereferenziazione `*p`, assegnamento `*p = …`; subset di `malloc` / `free` sul **pool** Mnemo. |
 | **Array** | Array statici e multidimensionali row-major; array parametro con decay a puntatore; inizializzatori in molti casi. |
 | **Operatori** | `+ - * / %`, unario `-`, confronti, AND/OR/NOT logici, `sizeof`, cast verso tipi supportati, `?:`, virgola `,`, `^` / `^=`. |
-| **Assegnamenti** | `=`, `+=`, `-=`, …, `++` / `--` come **istruzione** su `int`. |
-| **Controllo** | `if` / `else`, `while`, `do` / `while`, `for`, `break`, `continue`; `switch` / `case` / `default` con `break` obbligatorio a fine ramo. |
-| **Funzioni** | `void`, `int`, tipi scalari come sopra; chiamate e ricorsione (nei limiti di layout/VM); `main` come in C (con `argc` / `argv` **limitati**, vedi sotto). |
+| **Assegnamenti** | `=`, `+=`, `-=`, …, `++` / `--` su lvalue supportati (`x`, `*p`, `a[i]`, campi struct / `->`). |
+| **Controllo** | `if` / `else`, `while`, `do` / `while`, `for`, `break`, `continue`; `switch` con fall-through lineare e vincoli su `break` annidato (vedi subset rule). |
+| **Funzioni** | `void`, `int`, tipi scalari come sopra; chiamate e ricorsione; **puntatore a funzione** solo se risolto a compile-time (`p = f` / `&f`); `main` come in C (con `argc` / `argv` **limitati**, vedi sotto). |
 | **I/O minimo** | `putchar`, `printf` con **sottoinsieme** di formati (es. `%d`, `%c`, `%s` in scenari supportati); niente libc completa. |
 | **Concorrenza (astratta)** | ABI stile `pthread` / `mnemo_pthread_*` abbassate a `par` Kairos; mutex come **canali** nella VM. |
 
@@ -335,7 +335,7 @@ Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E
 | **C standard completo** | Nessuna garanzia di conformità ISO; molte regole e UB del C pieno **non** si applicano: vale il modello Kairos / IR. |
 | **Virgola mobile** | Nessun `float` / `double`. |
 | **VLA** | Array a lunghezza variabile (`int a[n]` con `n` runtime) non supportati. |
-| **Variadiche C** | Niente `f(...)` con `va_list` / `stdarg`; le variadiche sono solo lato **preprocessore** (es. macro `printf` in header che espandono prima del parse Mnemo). |
+| **Variadiche C** | Nessuna **definizione** utente con `...`; dichiarazioni built-in (es. `printf`) sì. Nessun `va_list` / `stdarg`. |
 | **`goto`**, **`setjmp`**, inline assembly | Non supportati. |
 | **Bit-field** | Non supportati. |
 | **`&` (indirizzo) generico** | Solo nel **subset** documentato (es. `&x`, `&struct.campo` dove il lowering lo ammette); non tutti gli indirizzi del C. |
@@ -346,7 +346,7 @@ Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E
 | **`main` e uscita** | Il valore di ritorno è propagato come `__mn_exit` nella VM, non sempre identico a `exit()` POSIX. |
 | **Thread** | Con **`mnemo run`** i “pthread” sono **thread Kairos** (`par`), non pthread del kernel; con **gcc** su `mps.h` senza `MNEMO` sono pthread reali **solo** dove l’header lo definisce. |
 | **Memoria** | Heap = **pool** a indici; puntatori sono **indici** nel modello, non indirizzi macchina. |
-| **Passaggio struct/union per valore** | Non nel subset attuale (oltre i casi esplicitamente supportati dal compilatore). |
+| **Passaggio struct per valore** | Supportato (flatten campi) dove il layout lo prevede; vedi test `c_examples/gcc_compat/`. |
 
 Per il dettaglio sintattico e i limiti pratici vedi la sezione seguente e i messaggi del compilatore (`mnemo compile`).
 
@@ -374,9 +374,9 @@ Per il dettaglio sintattico e i limiti pratici vedi la sezione seguente e i mess
 ### Espressioni e controllo
 
 - Aritmetica `+ - * / %`, unario `-`, `sizeof`, cast, `?:`, `,`, `^` / `^=`.
-- Assegnamenti `=`, `+=`, …, `++`/`--` come istruzione su `int`.
+- Assegnamenti `=`, `+=`, …, `++`/`--` su lvalue ammessi dal lowering.
 - `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`.
-- `switch`/`case`/`default` con `break` obbligatorio a fine ramo.
+- `switch`/`case`/`default` (fall-through lineare; `break` annidato in `if` verso lo stesso switch → errore).
 
 ### Non supportato (estratti)
 
@@ -384,7 +384,7 @@ Vedi anche [Mnemo rispetto al C standard](#mnemo-rispetto-al-c-standard).
 
 - VLA, **funzioni variadiche C**, `goto`, floating point, bit-field, `&` oltre il modello pool, molte estensioni GCC.
 - `stdio.h` nel preprocessato Mnemo: tipicamente **evitato** dove introduce `stdarg.h` non parsabile.
-- Passaggio/ritorno struct o union per valore oltre il subset; semantica UB del C pieno — valgono i vincoli delle procedure Kairos (es. divisori positivi dove richiesto).
+- Inizializzatori struct/union `{…}` oltre i casi implementati; parità ABI/padding con GCC; semantica UB del C pieno — valgono i vincoli delle procedure Kairos (es. divisori positivi dove richiesto).
 
 ---
 

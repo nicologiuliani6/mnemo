@@ -478,7 +478,6 @@ procedure main()
         push(__mn_mem5, __mn_hist)
         __mn_mem5 += __mn_e5
         push(__mn_e5, __mn_scratch)
-        push(__mn_e6, __mn_hist)
         __mn_e6 += __mn_mem2
         __mn_e6 += __mn_mem4
         push(__mn_mem6, __mn_hist)

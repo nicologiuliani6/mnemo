@@ -367,13 +367,11 @@ procedure main()
         __mn_mem1 += __mn_mem0
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += 99
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem1
         __mn_e0 += __mn_mem2
         push(__mn_mem1, __mn_hist)
         __mn_mem1 += __mn_e0
         push(__mn_e0, __mn_scratch)
-        push(__mn_e1, __mn_hist)
         __mn_e1 += __mn_mem1
         __mn_e1 += __mn_mem0
         push(__mn_mem1, __mn_hist)

@@ -393,7 +393,6 @@ procedure main()
         __mn_e2 += 10
         call __mn_mul_into(__mn_e3, __mn_mem0, __mn_e2)
         push(__mn_e2, __mn_scratch)
-        push(__mn_e4, __mn_hist)
         __mn_e4 += __mn_e3
         __mn_e4 += __mn_mem1
         push(__mn_mem2, __mn_hist)

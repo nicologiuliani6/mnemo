@@ -349,13 +349,11 @@ procedure main()
             __mn_e0 += 1
         fi __mn_mem0 < 5
         from __mn_e0 != 0 loop
-            push(__mn_e1, __mn_hist)
             __mn_e1 += __mn_mem1
             __mn_e1 += __mn_mem0
             push(__mn_mem1, __mn_hist)
             __mn_mem1 += __mn_e1
             push(__mn_e1, __mn_scratch)
-            push(__mn_e2, __mn_hist)
             __mn_e2 += __mn_mem0
             __mn_e2 += 1
             push(__mn_mem0, __mn_hist)

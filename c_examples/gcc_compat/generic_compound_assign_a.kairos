@@ -322,13 +322,11 @@ procedure main()
         __mn_pool_ctr += 1
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += 10
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem0
         __mn_e0 += 5
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += __mn_e0
         push(__mn_e0, __mn_scratch)
-        push(__mn_e1, __mn_hist)
         __mn_e1 += __mn_mem0
         __mn_e1 -= 3
         push(__mn_mem0, __mn_hist)

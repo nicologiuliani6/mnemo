@@ -341,7 +341,6 @@ procedure main()
         __mn_pool_ctr += 2
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += 14
-        push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem0
         __mn_e0 += 6
         push(__mn_mem1, __mn_hist)
@@ -352,7 +351,6 @@ procedure main()
         show(__mn_e1, char)
         __mn_e1 -= 10
         push(__mn_e1, __mn_scratch)
-        push(__mn_e2, __mn_hist)
         __mn_e2 += __mn_mem1
         __mn_e2 -= 10
         push(__mn_exit, __mn_hist)
