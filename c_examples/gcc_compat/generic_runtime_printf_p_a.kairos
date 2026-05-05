@@ -1,0 +1,342 @@
+// Sposta il valore di src in dst (src azzerato) usando uno stack locale come "garbage" / condotto.
+// La VM implementa `pop(dst, …)` come `*dst += valore`: per sostituire dst, azzeralo prima con
+// `push(dst, hist)` sullo stack Janus del caller, poi `call __mn_move_int(dst, src)`.
+procedure __mn_move_int(int dst, int src)
+    local stack __mn_g = nil
+    push(src, __mn_g)
+    pop(dst, __mn_g)
+    delocal stack __mn_g = nil
+
+// Prodotto: dst += a * b usando solo somme ripetute (Kairos non ha *).
+// b deve essere >= 0; a e b non vengono distrutti. (b == 0 → nessuna iterazione.)
+procedure __mn_mul_into(int dst, int a, int b)
+    local int i = 0
+    from i < b loop
+        i += 1
+        dst += a
+    until i == b
+    delocal int i = b
+
+// Divisione e resto: a, b interi con a >= 0 e b > 0; q = 0 e r = 0 all'ingresso.
+// Uscita: q = a/b, r = a%b, a = 0. Il dividendo viene spostato in r via __mn_move_int (stack locale).
+procedure __mn_divmod_nonneg(int a, int b, int q, int r)
+    call __mn_move_int(r, a)
+    from r >= b loop
+        r -= b
+        q += 1
+    until r < b
+
+// Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
+// Dopo le cifre, n viene ricostruito con __mn_mul_into (niente uncall su divmod).
+
+procedure __mn_putd_uint(int n)
+    local int ten = 0
+    ten += 10
+    local int qu = 0
+    local int rem = 0
+    if n >= ten then
+        call __mn_divmod_nonneg(n, ten, qu, rem)
+        call __mn_putd_uint(qu)
+        local int ch = 0
+        ch += rem
+        ch += 48
+        show(ch, char)
+        ch -= 48
+        ch -= rem
+        delocal int ch = 0
+        local int prod = 0
+        call __mn_mul_into(prod, qu, ten)
+        n += prod
+        n += rem
+        from prod > 0 loop
+            prod -= 1
+        until prod == 0
+        from qu > 0 loop
+            qu -= 1
+        until qu == 0
+        from rem > 0 loop
+            rem -= 1
+        until rem == 0
+        delocal int prod = 0
+    else
+        local int ch = 0
+        ch += n
+        ch += 48
+        show(ch, char)
+        ch -= 48
+        ch -= n
+        delocal int ch = 0
+    fi n >= ten
+    ten -= 10
+    delocal int rem = 0
+    delocal int qu = 0
+    delocal int ten = 0
+
+procedure __mn_putd(int n)
+    local int z = 0
+    if n < z then
+        local int hy = 0
+        hy += 45
+        show(hy, char)
+        hy -= 45
+        delocal int hy = 0
+        local int t = 0
+        t -= n
+        n += t
+        n <=> t
+        delocal int t = 0
+        call __mn_putd_uint(n)
+        local int t2 = 0
+        t2 -= n
+        n += t2
+        n <=> t2
+        delocal int t2 = 0
+    else
+        call __mn_putd_uint(n)
+    fi n < z
+    delocal int z = 0
+
+// Stampa intero non negativo in esadecimale minuscolo.
+// Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
+
+procedure __mn_putx_uint(int n)
+    local int base = 0
+    base += 16
+    local int qu = 0
+    local int rem = 0
+    if n >= base then
+        call __mn_divmod_nonneg(n, base, qu, rem)
+        call __mn_putx_uint(qu)
+        local int ch = 0
+        local int ten = 0
+        ten += 10
+        if rem >= ten then
+            ch += rem
+            ch += 87
+            show(ch, char)
+            ch -= 87
+            ch -= rem
+        else
+            ch += rem
+            ch += 48
+            show(ch, char)
+            ch -= 48
+            ch -= rem
+        fi rem >= ten
+        ten -= 10
+        delocal int ten = 0
+        delocal int ch = 0
+        local int prod = 0
+        call __mn_mul_into(prod, qu, base)
+        n += prod
+        n += rem
+        from prod > 0 loop
+            prod -= 1
+        until prod == 0
+        from qu > 0 loop
+            qu -= 1
+        until qu == 0
+        from rem > 0 loop
+            rem -= 1
+        until rem == 0
+        delocal int prod = 0
+    else
+        local int ch = 0
+        local int ten = 0
+        ten += 10
+        if n >= ten then
+            ch += n
+            ch += 87
+            show(ch, char)
+            ch -= 87
+            ch -= n
+        else
+            ch += n
+            ch += 48
+            show(ch, char)
+            ch -= 48
+            ch -= n
+        fi n >= ten
+        ten -= 10
+        delocal int ten = 0
+        delocal int ch = 0
+    fi n >= base
+    base -= 16
+    delocal int rem = 0
+    delocal int qu = 0
+    delocal int base = 0
+
+procedure __mn_putx(int n)
+    call __mn_putx_uint(n)
+
+// Pool puntatori Mnemo — generato, N=4 celle (__mn_mem0..__mn_mem3).
+// `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.
+// `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push
+// e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).
+
+procedure __mn_pool_alloc(int ctr, int out_slot)
+    stack __mn_hist
+    local int t = 0
+        t += ctr
+        push(out_slot, __mn_hist)
+        out_slot += t
+        ctr += 1
+        push(t, __mn_hist)
+    delocal int t = 0
+
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3)
+    stack __mn_hist
+    if slot == 0 then
+        push(__mn_mem0, __mn_hist)
+        __mn_mem0 += val
+    fi slot == 0
+    if slot == 1 then
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += val
+    fi slot == 1
+    if slot == 2 then
+        push(__mn_mem2, __mn_hist)
+        __mn_mem2 += val
+    fi slot == 2
+    if slot == 3 then
+        push(__mn_mem3, __mn_hist)
+        __mn_mem3 += val
+    fi slot == 3
+
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int out)
+    stack __mn_hist
+    if slot == 0 then
+        local int t = 0
+            t += __mn_mem0
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 0
+    if slot == 1 then
+        local int t = 0
+            t += __mn_mem1
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 1
+    if slot == 2 then
+        local int t = 0
+            t += __mn_mem2
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 2
+    if slot == 3 then
+        local int t = 0
+            t += __mn_mem3
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 3
+
+procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int ctr)
+    stack __mn_hist
+    local int ctr0 = 0
+        ctr0 += ctr
+        if slot == 0 then
+            push(__mn_mem0, __mn_hist)
+        fi slot == 0
+        if slot == 1 then
+            push(__mn_mem1, __mn_hist)
+        fi slot == 1
+        if slot == 2 then
+            push(__mn_mem2, __mn_hist)
+        fi slot == 2
+        if slot == 3 then
+            push(__mn_mem3, __mn_hist)
+        fi slot == 3
+        if slot == 0 then
+            if ctr0 == 1 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 1
+        fi slot == 0
+        if slot == 1 then
+            if ctr0 == 2 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 2
+        fi slot == 1
+        if slot == 2 then
+            if ctr0 == 3 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 3
+        fi slot == 2
+        if slot == 3 then
+            if ctr0 == 4 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 4
+        fi slot == 3
+        push(ctr0, __mn_hist)
+    delocal int ctr0 = 0
+
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_mem0 = 0
+    local int __mn_mem1 = 0
+    local int __mn_mem2 = 0
+    local int __mn_mem3 = 0
+    local int __mn_exit = 0
+    local int __mn_pool_ctr = 0
+    local int __mn_e0 = 0
+    local int __mn_e1 = 0
+    local int __mn_e2 = 0
+    local int __mn_e3 = 0
+    local int __mn_e4 = 0
+        // generato da Mnemo da C
+        __mn_pool_ctr += 0
+        __mn_e0 += 48
+        show(__mn_e0, char)
+        __mn_e0 -= 48
+        __mn_e1 += 120
+        show(__mn_e1, char)
+        __mn_e1 -= 120
+        __mn_e2 += 49
+        show(__mn_e2, char)
+        __mn_e2 -= 49
+        __mn_e3 += 97
+        show(__mn_e3, char)
+        __mn_e3 -= 97
+        __mn_e4 += 10
+        show(__mn_e4, char)
+        __mn_e4 -= 10
+        push(__mn_e4, __mn_scratch)
+        push(__mn_e3, __mn_scratch)
+        push(__mn_e2, __mn_scratch)
+        push(__mn_e1, __mn_scratch)
+        push(__mn_e0, __mn_scratch)
+        // return
+    push(__mn_e4, __mn_hist)
+    delocal int __mn_e4 = 0
+    push(__mn_e3, __mn_hist)
+    delocal int __mn_e3 = 0
+    push(__mn_e2, __mn_hist)
+    delocal int __mn_e2 = 0
+    push(__mn_e1, __mn_hist)
+    delocal int __mn_e1 = 0
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
+    push(__mn_pool_ctr, __mn_hist)
+    delocal int __mn_pool_ctr = 0
+    push(__mn_exit, __mn_hist)
+    delocal int __mn_exit = 0
+    push(__mn_mem3, __mn_hist)
+    delocal int __mn_mem3 = 0
+    push(__mn_mem2, __mn_hist)
+    delocal int __mn_mem2 = 0
+    push(__mn_mem1, __mn_hist)
+    delocal int __mn_mem1 = 0
+    push(__mn_mem0, __mn_hist)
+    delocal int __mn_mem0 = 0

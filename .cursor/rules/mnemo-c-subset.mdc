@@ -26,7 +26,7 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 ## Dichiarazioni e puntatori
 
-- Puntatori dichiarati nel subset: **`int *`**, **`unsigned *` / `unsigned int *`**, **`void *`** (un livello, dove previsto).
+- Puntatori dichiarati nel subset: **`int *`**, **`unsigned *` / `unsigned int *`**, **`void *`** (un livello, dove previsto), e **`T *`** con **`T`** typedef di **`struct`** / **`union`** (un livello; stesso modello “handle” dei parametri). Più locali puntatore (es. più `malloc`) sono supportati tramite pool `__mn_pool_*`.
 - Niente **`char *`** generico o **`T *`** per tipi arbitrari (salvo il caso **`char **argv`** in `main`).
 - **`const`, `volatile`, `restrict`, `_Atomic`**: non c’è modello semantico C completo dopo il lowering.
 - **`static` / `extern` / linkage** e durata di storage come nel C standard.
@@ -47,8 +47,8 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 - **Passaggio struct/union per valore** come argomento → errore (usare campi scalari).
 - **Inizializzatori `{ ... }`** per variabili struct o union alla dichiarazione → non supportati.
-- **`struct.campo`**: in assegnamento solo **`=`**, non `+=`, `*=`, ecc.
-- **`p->campo`**: solo **`=`**, non assegnamenti composti.
+- **`struct.campo`**: `=` e assegnamenti composti (`+=`, `*=`, `^=`, `<<=`, … come per gli scalari).
+- **`p->campo`**: idem (`=` e composti).
 - **Union**: assegnamenti composti solo per un sottoinsieme di operatori; altri → errore.
 - **Bit-field** nei struct: non nel modello (campi appiattiti a interi).
 
@@ -58,8 +58,8 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 ## Operatori unari
 
-- Implementati in forme limitate: `-`, `*`, `&` (solo **`&id`** e **`&struct.campo`** con vincoli), `sizeof`, e **`++` / `--` solo come istruzione su identificatore**.
-- Altri unari → `operatore unario non supportato` (es. **`~`** non gestito nel file).
+- Implementati in forme limitate: `-`, `*`, `&` (solo **`&id`** e **`&struct.campo`** con vincoli), **`~`** (come `(-1) ^ x`), `sizeof`, e **`++` / `--` solo come istruzione su identificatore**.
+- Altri unari → `operatore unario non supportato`.
 - **`++` / `--` in espressione** generica (prefisso/postfisso su `*p`, campi, ecc.) non è C generico.
 
 ## Operatori binari e logici
@@ -69,14 +69,14 @@ Mnemo compila un **sottoinsieme** di C verso **Kairos** (`mnemo/c_lower.py`, `mn
 
 ## Assegnamenti
 
-- Su **`ID`** scalare: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `^=`.
-- **Non supportati** su scalare: `&=`, `|=`, `<<=`, `>>=` → `assegnamento con … non supportato`.
-- **`array[i]`** e **`*p`**: in LHS solo **`=`**, non composti.
+- Su **`ID`** scalare: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `<<=`, `>>=`.
+- **Non supportati** su scalare: altri composti → `assegnamento con … non supportato`.
+- **`array[i]`** e **`*p`**: **`=`** e assegnamenti composti (stesso insieme di operatori degli scalari).
 - Molti lvalue → `lvalue non-ID non supportato`.
 
 ## Cast
 
-- Solo se `_cast_accepts_pointer_or_scalar`: **`void`**, puntatori **`void*` / `int*`**, scalari del subset; altro → `cast non supportato`.
+- Solo se `_cast_accepts_pointer_or_scalar`: **`void`**, puntatori **`void*` / `int*` / `T*`** (`T` struct o union typedef), scalari del subset; altro → `cast non supportato`.
 
 ## Indirizzo `&`
 

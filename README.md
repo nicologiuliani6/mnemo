@@ -143,9 +143,19 @@ Il **Makefile** di Mnemo usa `KAIROS_ROOT` con default `$(pwd)/../kairos`.
 | `make compile` | `mnemo dump-kairos` su tutti `c_examples/*.c` → `.kairos` |
 | `make test-unit` | `pytest` / unittest in `tests/` **senza** eseguire la VM |
 | `make test` | Compila esempi, richiede Kairos in `KAIROS_ROOT`, `make build-release`, esegue ogni `.kairos` con timeout |
+| `make test-gcc-compat` | Confronta `mnemo run` vs `gcc` su `c_examples/gcc_compat/generic_*.c` (stdout + exit code + warning gcc = fail) |
+| `make test-gcc-compat-stop` | Come sopra, ma si ferma al primo failure |
 | `make run FILE=c_examples/ex00_add_simple.c` | Compila ed esegue un singolo `.c` |
 | `make run FILE=… MAIN_ARGC=N` | Equivale a `--main-argc N` (senza spazi strani dopo `FILE=`) |
 | `make clean-kairos` | Rimuove `c_examples/*.kairos` generati |
+
+Note rapide per `test-gcc-compat`:
+
+- puoi passare argomenti al runner con `COMPAT_ARGS`, es.:
+  - `make test-gcc-compat COMPAT_ARGS='--stop-on-first-fail'`
+  - `make test-gcc-compat COMPAT_ARGS='--category control'`
+- categorie macro disponibili: `types`, `expr`, `control`, `ptr`, `struct_union`, `runtime`
+- artifact dei mismatch: `c_examples/gcc_compat/artifacts/*.json`
 
 ### CLI `mnemo`
 

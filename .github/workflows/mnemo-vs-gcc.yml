@@ -1,0 +1,52 @@
+name: mnemo-vs-gcc
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "c_examples/gcc_compat/**"
+      - "lib/**"
+      - "mnemo/**"
+      - "tests/**"
+      - "Makefile"
+      - ".github/workflows/mnemo-vs-gcc.yml"
+  pull_request:
+    paths:
+      - "c_examples/gcc_compat/**"
+      - "lib/**"
+      - "mnemo/**"
+      - "tests/**"
+      - "Makefile"
+      - ".github/workflows/mnemo-vs-gcc.yml"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    env:
+      KAIROS_ROOT: ${{ github.workspace }}/kairos
+    steps:
+      - name: Checkout Mnemo
+        uses: actions/checkout@v4
+
+      - name: Checkout Kairos VM
+        uses: actions/checkout@v4
+        with:
+          repository: nicologiuliani6/kairos
+          path: kairos
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Mnemo venv
+        run: make venv
+
+      - name: Build Kairos VM
+        run: make -C "$KAIROS_ROOT" build-release
+
+      - name: Run gcc parity suite
+        run: make test-gcc-compat
+
+      - name: Unit tests (no VM)
+        run: make test-unit

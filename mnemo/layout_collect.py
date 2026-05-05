@@ -896,13 +896,12 @@ def compute_program_mem_layout(
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("union: nome variabile mancante")
             varname = str(node.type.declname)
-            if varname in ctx.int_locals or varname in ctx.array_info:
-                raise MnemoCompileError(f"ridichiarazione: {varname}")
+            logical = L._scope_declare(ctx, varname)
             if ut not in ctx.union_specs:
                 raise MnemoCompileError(f"union {ut}: definizione mancante")
-            ctx.union_tag_of_var[varname] = ut
-            ctx.int_locals.add(varname)
-            alloc(fn, varname)
+            ctx.union_tag_of_var[logical] = ut
+            ctx.int_locals.add(logical)
+            alloc(fn, logical)
             return
 
         st_tag = L._struct_tag_for_decl_type(node.type, ctx)
@@ -910,16 +909,15 @@ def compute_program_mem_layout(
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("struct: nome variabile mancante")
             varname = str(node.type.declname)
-            if varname in ctx.int_locals or varname in ctx.array_info:
-                raise MnemoCompileError(f"ridichiarazione: {varname}")
+            logical = L._scope_declare(ctx, varname)
             fields = ctx.struct_specs.get(st_tag)
             if not fields:
                 raise MnemoCompileError(f"struct {st_tag}: definizione mancante")
-            ctx.struct_tag_of_var[varname] = st_tag
+            ctx.struct_tag_of_var[logical] = st_tag
             for fnm, fty in fields:
                 if L._type_node_is_pthread_mutex(fty, ctx.typedef_map):
                     continue
-                loc = L._struct_field_local(varname, fnm)
+                loc = L._struct_field_local(logical, fnm)
                 ctx.int_locals.add(loc)
                 alloc(fn, loc)
             return
@@ -928,24 +926,29 @@ def compute_program_mem_layout(
         if ap is not None:
             name, dims, esz = ap
             tot = int(math.prod(dims))
-            if name in ctx.array_info or name in ctx.int_locals:
-                raise MnemoCompileError(f"ridichiarazione: {name}")
-            ctx.array_info[name] = L._ArrayInfo(dims=dims, total=tot, elem_size=esz)
+            logical = L._scope_declare(ctx, name)
+            ctx.array_info[logical] = L._ArrayInfo(dims=dims, total=tot, elem_size=esz)
             for i in range(tot):
-                cell = L._array_elem_local(name, i)
+                cell = L._array_elem_local(logical, i)
                 ctx.int_locals.add(cell)
                 alloc(fn, cell)
             return
 
-        if isinstance(node.type, c.TypeDecl) and node.type.declname is not None:
-            imm = node.type.type
-            if isinstance(imm, c.IdentifierType) and len(imm.names) == 1:
-                if imm.names[0] == "pthread_mutex_t":
-                    varname = str(node.type.declname)
-                    if varname in ctx.int_locals or varname in ctx.array_info:
-                        raise MnemoCompileError(f"ridichiarazione: {varname}")
-                    ctx.int_locals.add(varname)
-                    return
+        imm_td = L._immediate_named_scalar_typedef(node)
+        if imm_td == "pthread_mutex_t":
+            if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
+                raise MnemoCompileError("pthread_mutex_t: nome variabile mancante")
+            varname = str(node.type.declname)
+            logical = L._scope_declare(ctx, varname)
+            ctx.int_locals.add(logical)
+            return
+        if imm_td == "mnemo_kairos_channel_t":
+            if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
+                raise MnemoCompileError("mnemo_kairos_channel_t: nome variabile mancante")
+            varname = str(node.type.declname)
+            logical = L._scope_declare(ctx, varname)
+            ctx.int_locals.add(logical)
+            return
 
         tdm = ctx.typedef_map
         name = L._scalar_decl_name(node, tdm)
@@ -954,13 +957,17 @@ def compute_program_mem_layout(
         if name is None:
             pn = L._int_ptr_var_decl_name(node, tdm)
             if pn is None:
+                pn = L._struct_pointer_param_name(node, ctx)
+            if pn is None:
                 raise MnemoCompileError(
                     f"dichiarazione non supportata: {type(node.type).__name__}"
                 )
             name = pn
             ros = L._char_ptr_string_literal_meta(node, tdm, fn)
             if ros is not None:
-                sbase, tot, _raw = ros
+                _ros_meta_base, tot, _raw = ros
+                logical = L._scope_declare(ctx, name)
+                sbase = f"__mn_ros_{fn}_{logical}"
                 if sbase in ctx.array_info:
                     raise MnemoCompileError(f"ridichiarazione: {sbase}")
                 ctx.array_info[sbase] = L._ArrayInfo(
@@ -972,10 +979,12 @@ def compute_program_mem_layout(
                         raise MnemoCompileError(f"ridichiarazione: {cell}")
                     ctx.int_locals.add(cell)
                     alloc(fn, cell)
-        if name in ctx.int_locals or name in ctx.array_info:
-            raise MnemoCompileError(f"ridichiarazione: {name}")
-        ctx.int_locals.add(name)
-        alloc(fn, name)
+                ctx.int_locals.add(logical)
+                alloc(fn, logical)
+                return
+        logical = L._scope_declare(ctx, name)
+        ctx.int_locals.add(logical)
+        alloc(fn, logical)
 
     def walk_stmt(node: c.Node | None, fn: str, ctx: L._Ctx) -> None:
         if node is None:
@@ -998,8 +1007,10 @@ def compute_program_mem_layout(
             walk_decl(node, fn, ctx)
             return
         if isinstance(node, c.Compound):
+            L._scope_enter(ctx)
             for sub in node.block_items or []:
                 walk_stmt(sub, fn, ctx)
+            L._scope_exit(ctx)
             return
         if isinstance(node, c.If):
             walk_stmt(node.iftrue, fn, ctx)
@@ -1056,7 +1067,9 @@ def compute_program_mem_layout(
         for rn in L._ret_slot_names(rw):
             alloc(fname, rn)
         if body is not None:
-            walk_stmt(body, fname, ctx)
+            L._scope_init_params(ctx, tuple(L._func_param_storage_names(fd, td, ctx)))
+            for sub in body.block_items or []:
+                walk_stmt(sub, fname, ctx)
 
     file_par1: set[str] = set()
     fs_ctx = L._Ctx()
@@ -1175,7 +1188,11 @@ def compute_program_mem_layout(
     ret_words["main"] = 0
     body = main_ext.body
     if body is not None and isinstance(body, c.Compound):
-        walk_stmt(body, "main", ctx_main)
+        L._scope_init_params(
+            ctx_main, [name for name, _ in L._main_locals_from_fd(mfd)]
+        )
+        for sub in body.block_items or []:
+            walk_stmt(sub, "main", ctx_main)
 
     heap_base = cursor
     total = heap_base + heap_pool_cells

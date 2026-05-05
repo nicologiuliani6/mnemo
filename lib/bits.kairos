@@ -23,6 +23,7 @@ procedure __mn_floor_div2_signed(int t, int q)
         call __mn_divmod_nonneg_div2(u, q, r)
         local int z = 0
         z -= q
+        push(q, __mn_hist)
         call __mn_move_int(q, z)
         local int sink = 0
         call __mn_move_int(sink, t)
@@ -91,6 +92,7 @@ procedure __mn_and_into(int dst, int a, int b)
         local int next_pow = 0
         next_pow += pow
         next_pow += pow
+        push(pow, __mn_hist)
         call __mn_move_int(pow, next_pow)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
@@ -124,6 +126,7 @@ procedure __mn_or_into(int dst, int a, int b)
         local int next_pow = 0
         next_pow += pow
         next_pow += pow
+        push(pow, __mn_hist)
         call __mn_move_int(pow, next_pow)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
@@ -140,6 +143,8 @@ procedure __mn_or_into(int dst, int a, int b)
     delocal int k = 0
 
 // dst += (x << n), n >= 0
+// `pop` nella VM fa `dst += valore`: prima di __mn_move_int(dst, src) va azzerato
+// `dst` con push(dst, stack), altrimenti pow diventa 1+2=3 e x<<1 diventa x*3.
 procedure __mn_shl_into(int dst, int x, int n)
     stack __mn_hist
     local int pow = 1
@@ -149,6 +154,7 @@ procedure __mn_shl_into(int dst, int x, int n)
         local int np = 0
         np += pow
         np += pow
+        push(pow, __mn_hist)
         call __mn_move_int(pow, np)
         push(np, __mn_hist)
         delocal int np = 0

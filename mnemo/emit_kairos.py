@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mnemo.ir import (
     Function,
+    Imm,
     IAddEq,
     IBranch,
     ICall,
@@ -43,9 +44,11 @@ def _emit_operand_for_expr(o: Operand) -> str:
 
 def _emit_instr_seq(lines: list[str], instrs: list[Instr], indent: str) -> None:
     """
-    Due IAddEq consecutivi sullo stesso `dst` (tipico di rhs `a + b` in _eval_expr)
-    diventano un solo `dst += ((a) + (b))` così la VM non ha una finestra tra due letture
-    di int condivisi nel PAR (Kairos → un solo PUSHEQ / resolve_expr parentesizzato).
+    Due IAddEq consecutivi sullo stesso `dst` possono fondersi in `dst += (a + b)` solo
+    se **entrambi** gli addendi sono costanti (`Imm`). Se uno è una `Var` (es. risultato di
+    `pool_load` o altra lettura), `dst += (v1 + v2)` in Kairos non replica due `+=` separati
+    e rompe espressioni come `*p + *q`.
+    Con due sole costanti, `(k1 + k2)` è puramente aritmetico e resta sicuro.
     """
     i = 0
     while i < len(instrs):
@@ -56,10 +59,10 @@ def _emit_instr_seq(lines: list[str], instrs: list[Instr], indent: str) -> None:
             and isinstance(instrs[i + 1], IAddEq)
             and ins.dst == instrs[i + 1].dst
             and str(ins.dst).startswith("__mn_e")
+            and isinstance(ins.rhs, Imm)
+            and isinstance(instrs[i + 1].rhs, Imm)
         ):
             nxt = instrs[i + 1]
-            # Una sola coppia di parentesi: `(a + b)` così resolve_expr legge lhs/rhs flat
-            # (evita `( (a) + (b) )` dove gli atomi tra parentesi rompono il parser).
             lines.append(
                 f"{indent}{ins.dst} += ({_emit_operand_for_expr(ins.rhs)}"
                 f" + {_emit_operand_for_expr(nxt.rhs)})"

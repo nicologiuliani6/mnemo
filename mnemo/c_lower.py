@@ -72,6 +72,8 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_pool_free",
         "__mn_putd",
         "__mn_putd_uint",
+        "__mn_putx",
+        "__mn_putx_uint",
     }
 )
 
@@ -100,6 +102,20 @@ PTHREAD_ABI_TWO_REGION_PAR = frozenset(
         "mnemo_pthread_parallel_with1",
     }
 )
+
+# Assegnamento composto: `lhs op= rhs` → RHS `lhs op rhs` (lhs letto prima del push in `_lower_assign`).
+_COMPOUND_ASSIGN_OPS: dict[str, str] = {
+    "+=": "+",
+    "-=": "-",
+    "*=": "*",
+    "/=": "/",
+    "%=": "%",
+    "^=": "^",
+    "&=": "&",
+    "|=": "|",
+    "<<=": "<<",
+    ">>=": ">>",
+}
 
 # mps.h: espansi al chiamante così i canali usano nomi reali (mps, req, …), non il parametro `m`.
 MPS_INLINE_AT_CALLSITE = frozenset(
@@ -457,6 +473,9 @@ class _Ctx:
     after_par_join: bool = False
     # char* = "…" → mappa nome puntatore → base array `__mn_ros_*` (per printf %s su quella variabile).
     char_ptr_string_base: dict[str, str] = field(default_factory=dict)
+    """Scope blocchi: ogni frame mappa nome C → nome logico slot (shadowing)."""
+    scope_stack: list[dict[str, str]] = field(default_factory=list)
+    shadow_uid: int = 0
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -472,6 +491,50 @@ class _Ctx:
         name = f"__mn_lc{self.loop_ct_i}"
         self.loop_ct_i += 1
         return name
+
+
+def _scope_ensure(ctx: _Ctx) -> None:
+    if not ctx.scope_stack:
+        ctx.scope_stack = [{}]
+
+
+def _scope_init_params(ctx: _Ctx, param_names: tuple[str, ...] | list[str]) -> None:
+    ctx.scope_stack = [{}]
+    ctx.shadow_uid = 0
+    for p in param_names:
+        ctx.scope_stack[-1][p] = p
+
+
+def _scope_enter(ctx: _Ctx) -> None:
+    _scope_ensure(ctx)
+    ctx.scope_stack.append({})
+
+
+def _scope_exit(ctx: _Ctx) -> None:
+    if len(ctx.scope_stack) > 1:
+        ctx.scope_stack.pop()
+
+
+def _scope_resolve(ctx: _Ctx, source: str) -> str:
+    _scope_ensure(ctx)
+    for frame in reversed(ctx.scope_stack):
+        if source in frame:
+            return frame[source]
+    return source
+
+
+def _scope_declare(ctx: _Ctx, source: str) -> str:
+    _scope_ensure(ctx)
+    if source in ctx.scope_stack[-1]:
+        raise MnemoCompileError(f"ridichiarazione: {source}")
+    logical = source
+    for frame in ctx.scope_stack[:-1]:
+        if source in frame:
+            logical = f"{source}__mn_sh{ctx.shadow_uid}"
+            ctx.shadow_uid += 1
+            break
+    ctx.scope_stack[-1][source] = logical
+    return logical
 
 
 def _ptr_pool_mem_names(ctx: _Ctx) -> tuple[str, ...]:
@@ -1732,11 +1795,13 @@ def _enum_scalar_decl_name(node: c.Decl) -> str | None:
 
 
 def _int_ptr_var_decl_name(node: c.Decl, td: dict[str, c.Node]) -> str | None:
-    """`int *p`, `unsigned *p`, `unsigned int *p` (un solo `*`)."""
+    """Puntatore a scalare (`int*`, `char*`, `unsigned*`, anche con più `*`)."""
     cur = node.type
     if not isinstance(cur, c.PtrDecl):
         return None
     inner = cur.type
+    while isinstance(inner, c.PtrDecl):
+        inner = inner.type
     if not isinstance(inner, c.TypeDecl):
         return None
     if not isinstance(inner.type, c.IdentifierType):
@@ -1789,7 +1854,8 @@ def _struct_pointer_param_name(node: c.Decl, ctx: _Ctx) -> str | None:
     return str(pointee.declname)
 
 
-def _cast_accepts_pointer_or_scalar(cast_node: c.Cast, td: dict[str, c.Node]) -> bool:
+def _cast_accepts_pointer_or_scalar(cast_node: c.Cast, ctx: _Ctx) -> bool:
+    td = ctx.typedef_map
     tt = cast_node.to_type
     if isinstance(tt, c.TypeDecl) and isinstance(tt.type, c.IdentifierType):
         if tt.type.names == ["void"]:
@@ -1803,20 +1869,45 @@ def _cast_accepts_pointer_or_scalar(cast_node: c.Cast, td: dict[str, c.Node]) ->
                 leaf = leaf.type
             if isinstance(leaf, c.TypeDecl) and isinstance(leaf.type, c.IdentifierType):
                 nms = leaf.type.names
-                return (
+                if (
                     nms == ["void"]
                     or nms == ["int"]
                     or nms == ["char"]
                     or _is_scalar_type_names(nms, td)
-                )
+                ):
+                    return True
+                if _struct_tag_for_decl_type(leaf, ctx) is not None:
+                    return True
+                if _union_tag_for_decl_type(leaf, ctx) is not None:
+                    return True
     return False
+
+
+def _decl_maybe_struct_typedef_pointer(node: c.Decl) -> bool:
+    """`T *x` con T non riconosciuto come puntatore scalare (es. typedef struct)."""
+    cur = node.type
+    if not isinstance(cur, c.PtrDecl):
+        return False
+    inner = cur.type
+    while isinstance(inner, c.PtrDecl):
+        inner = inner.type
+    if not isinstance(inner, c.TypeDecl) or inner.declname is None:
+        return False
+    if not isinstance(inner.type, c.IdentifierType):
+        return False
+    if _int_ptr_var_decl_name(node, {}) is not None:
+        return False
+    return True
 
 
 def _file_ast_needs_ptr_pool(ast: c.FileAST) -> bool:
     def walk(node: object) -> bool:
         if node is None:
             return False
-        if isinstance(node, c.Decl) and _int_ptr_var_decl_name(node, {}) is not None:
+        if isinstance(node, c.Decl) and (
+            _int_ptr_var_decl_name(node, {}) is not None
+            or _decl_maybe_struct_typedef_pointer(node)
+        ):
             return True
         if isinstance(node, c.UnaryOp) and node.op == "*":
             return True
@@ -2283,7 +2374,7 @@ def _char_ptr_string_literal_meta(
 
 def _parse_printf_format(fmt: str) -> list[tuple]:
     """
-    Segmenti printf: ('lit', testo), ('c',), ('d',), ('s',).
+    Segmenti printf: ('lit', testo), ('c',), ('d',), ('u',), ('x',), ('p',), ('s',).
     `%%` → ('lit', '%').
     """
     out: list[tuple] = []
@@ -2301,12 +2392,18 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
                 out.append(("c",))
             elif spec in ("d", "i"):
                 out.append(("d",))
+            elif spec == "u":
+                out.append(("u",))
+            elif spec == "x":
+                out.append(("x",))
+            elif spec == "p":
+                out.append(("p",))
             elif spec == "s":
                 out.append(("s",))
             else:
                 raise MnemoCompileError(
                     f"printf: conversione non supportata %{spec!r} "
-                    f"(supportati %%c %%d %%i %%s %%%% e testo)"
+                    f"(supportati %%c %%d %%i %%u %%x %%p %%s %%%% e testo)"
                 )
             i += 2
         else:
@@ -2351,6 +2448,9 @@ def _lower_putchar(expr: c.Node, ctx: _Ctx) -> list[Instr]:
 
 
 def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
+    def _format_hex_u32(v: int) -> str:
+        return format(v & 0xFFFFFFFF, "x")
+
     if not isinstance(node.name, c.ID):
         raise MnemoCompileError("printf: callee non valido")
     el = node.args
@@ -2396,7 +2496,7 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 tm_acc.extend(tm)
             else:
                 raise MnemoCompileError("printf %c: espressione non valida")
-        elif k == "d":
+        elif k in ("d", "u"):
             ex = exprs[arg_i]
             arg_i += 1
             if isinstance(ex, c.Constant):
@@ -2418,7 +2518,58 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     out.append(ICall("__mn_putd", [op.name]))
                     tm_acc.extend(tm)
                 else:
-                    raise MnemoCompileError("printf %d: espressione non valida")
+                    raise MnemoCompileError(f"printf %{k}: espressione non valida")
+        elif k == "x":
+            ex = exprs[arg_i]
+            arg_i += 1
+            if isinstance(ex, c.Constant):
+                val = _literal_int_widen(ex)
+                for ch in _format_hex_u32(val):
+                    ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
+                    out.extend(ins)
+                    tm_acc.extend(tt)
+            else:
+                ei, op, tm = _eval_expr(ex, ctx)
+                out.extend(ei)
+                if isinstance(op, Imm):
+                    for ch in _format_hex_u32(op.value):
+                        ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
+                        out.extend(ins)
+                        tm_acc.extend(tt)
+                    tm_acc.extend(tm)
+                elif isinstance(op, Var):
+                    out.append(ICall("__mn_putx", [op.name]))
+                    tm_acc.extend(tm)
+                else:
+                    raise MnemoCompileError("printf %x: espressione non valida")
+        elif k == "p":
+            ex = exprs[arg_i]
+            arg_i += 1
+            # Formato compatibile pratico: 0x + hex lowercase.
+            ins0, tt0 = _ir_emit_byte_as_show_char(ctx, ord("0"))
+            insx, ttx = _ir_emit_byte_as_show_char(ctx, ord("x"))
+            out.extend(ins0 + insx)
+            tm_acc.extend(tt0 + ttx)
+            if isinstance(ex, c.Constant):
+                val = _literal_int_widen(ex)
+                for ch in _format_hex_u32(val):
+                    ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
+                    out.extend(ins)
+                    tm_acc.extend(tt)
+            else:
+                ei, op, tm = _eval_expr(ex, ctx)
+                out.extend(ei)
+                if isinstance(op, Imm):
+                    for ch in _format_hex_u32(op.value):
+                        ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
+                        out.extend(ins)
+                        tm_acc.extend(tt)
+                    tm_acc.extend(tm)
+                elif isinstance(op, Var):
+                    out.append(ICall("__mn_putx", [op.name]))
+                    tm_acc.extend(tm)
+                else:
+                    raise MnemoCompileError("printf %p: espressione non valida")
         elif k == "s":
             ex = exprs[arg_i]
             arg_i += 1
@@ -2668,21 +2819,22 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Imm(_literal_int_widen(expr)), []
 
     if isinstance(expr, c.ID):
-        if expr.name in ctx.struct_tag_of_var:
+        log = _scope_resolve(ctx, expr.name)
+        if log in ctx.struct_tag_of_var:
             raise MnemoCompileError(
                 f"{expr.name!r} è una struct: usa {expr.name}.campo"
             )
-        if expr.name in ctx.union_tag_of_var:
+        if log in ctx.union_tag_of_var:
             raise MnemoCompileError(
                 f"{expr.name!r} è una union: usa {expr.name}.campo"
             )
-        if expr.name in ctx.array_info:
-            if not ctx.array_info[expr.name].array_decay_pointer:
+        if log in ctx.array_info:
+            if not ctx.array_info[log].array_decay_pointer:
                 raise MnemoCompileError(
                     f"l'array {expr.name!r} non è un valore scalare: usa {expr.name}[…]"
                 )
-        if expr.name in ctx.int_locals:
-            return [], Var(_phys(ctx, expr.name)), []
+        if log in ctx.int_locals:
+            return [], Var(_phys(ctx, log)), []
         if expr.name in ctx.enum_constants:
             return [], Imm(ctx.enum_constants[expr.name]), []
         raise MnemoCompileError(f"identificatore non dichiarato: {expr.name!r}")
@@ -2691,7 +2843,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         if expr.type == "->":
             if not isinstance(expr.name, c.ID) or not isinstance(expr.field, c.ID):
                 raise MnemoCompileError("`->`: sintassi non supportata")
-            p = expr.name.name
+            p = _scope_resolve(ctx, expr.name.name)
             if p not in ctx.int_locals:
                 raise MnemoCompileError(f"puntatore non dichiarato: {p!r}")
             pty = ctx.var_types.get(p)
@@ -2704,7 +2856,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
             off_w = _field_word_offset(tag, mangled, ctx)
             _register_ptr_pool_locals(ctx)
-            ei, op, tm = _eval_expr(c.ID(p, expr.coord), ctx)
+            ei, op, tm = _eval_expr(c.ID(expr.name.name, expr.coord), ctx)
             t_slot = ctx.fresh_temp()
             t_out = ctx.fresh_temp()
             ctx.use_hist = True
@@ -2717,52 +2869,54 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             ins = pre + _ir_pool_load_call(ctx, t_slot, t_out)
             return ins, Var(t_out), tm + [t_slot, t_out]
         base, path = _structref_base_and_path(expr)
+        base_log = _scope_resolve(ctx, base)
         mangled = "__".join(path)
-        if base in ctx.union_tag_of_var:
+        if base_log in ctx.union_tag_of_var:
             if len(path) != 1:
                 raise MnemoCompileError("union: un solo livello di campo")
             field = path[0]
-            tag = ctx.union_tag_of_var[base]
+            tag = ctx.union_tag_of_var[base_log]
             spec = ctx.union_specs.get(tag)
             if not spec:
                 raise MnemoCompileError(f"union {tag!r}: metadati mancanti")
             fnames = [fn for fn, _ in spec]
             if field not in fnames:
                 raise MnemoCompileError(f"union {tag}: membro {field!r} assente")
-            if base not in ctx.int_locals:
+            if base_log not in ctx.int_locals:
                 raise MnemoCompileError(f"union {base!r}: storage mancante")
-            return [], Var(_phys(ctx, base)), []
-        if base not in ctx.struct_tag_of_var:
+            return [], Var(_phys(ctx, base_log)), []
+        if base_log not in ctx.struct_tag_of_var:
             raise MnemoCompileError(f"{base!r} non è una variabile struct")
-        tag = ctx.struct_tag_of_var[base]
+        tag = ctx.struct_tag_of_var[base_log]
         spec = ctx.struct_specs.get(tag)
         if not spec:
             raise MnemoCompileError(f"struct {tag!r}: metadati mancanti")
         field_names = [fn for fn, _ in spec]
         if mangled not in field_names:
             raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
-        cell = _struct_field_local(base, mangled)
+        cell = _struct_field_local(base_log, mangled)
         if cell not in ctx.int_locals:
             raise MnemoCompileError(f"campo struct interno mancante: {cell!r}")
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
         base, subs = _flatten_array_ref_chain(expr)
-        if base not in ctx.array_info:
+        base_log = _scope_resolve(ctx, base)
+        if base_log not in ctx.array_info:
             raise MnemoCompileError(
                 f"{base!r} non è un array dichiarato (es. int {base}[N] o int {base}[R][C])"
             )
-        info = ctx.array_info[base]
+        info = ctx.array_info[base_log]
         if len(subs) != len(info.dims):
             raise MnemoCompileError(
                 f"array {base!r}: servono {len(info.dims)} indici, ne ho {len(subs)}"
             )
         coord = getattr(expr, "coord", None)
         if info.array_decay_pointer:
-            return _eval_decay_array_elem_read(base, subs, info, ctx, coord)
+            return _eval_decay_array_elem_read(base_log, subs, info, ctx, coord)
         if all(isinstance(s, c.Constant) for s in subs):
             lin = _const_row_major_linear(subs, info.dims)
-            return [], Var(_phys(ctx, _array_elem_local(base, lin))), []
+            return [], Var(_phys(ctx, _array_elem_local(base_log, lin))), []
         idx_expr = _c_row_major_index_ast(subs, info.dims, coord)
         pre_l, op_ix, tm_l = _eval_expr(idx_expr, ctx)
         if isinstance(op_ix, Imm):
@@ -2777,7 +2931,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         bodies = [
             [
                 IHistPush(ctx.hist, t_dest),
-                IAddEq(t_dest, Var(_phys(ctx, _array_elem_local(base, kk)))),
+                IAddEq(t_dest, Var(_phys(ctx, _array_elem_local(base_log, kk)))),
             ]
             for kk in range(info.total)
         ]
@@ -2792,6 +2946,24 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return chain, Var(out), [out]
 
     if isinstance(expr, c.UnaryOp):
+        if expr.op == "+":
+            # Unary plus: semantica identica all'operando.
+            return _eval_expr(expr.expr, ctx)
+        if expr.op == "!":
+            lc = ctx.fresh_temp()
+            t = ctx.fresh_temp()
+            # lc diventa 1 se expr e' vera, altrimenti resta 0.
+            # Risultato di !expr: 1 - lc.
+            ins = [IConst(lc, 0)]
+            ins.extend(_build_truth_incr_lc(expr.expr, lc, ctx))
+            ins.extend([IConst(t, 1), ISubEq(t, Var(lc))])
+            return ins, Var(t), [lc, t]
+        if expr.op == "~":
+            i0, op0, t0 = _eval_expr(expr.expr, ctx)
+            t = ctx.fresh_temp()
+            # ~x = (-1) ^ x
+            ins = i0 + [ISubEq(t, Imm(1)), IXorEq(t, op0)]
+            return ins, Var(t), t0 + [t]
         if expr.op == "-":
             inner = expr.expr
             if isinstance(inner, c.Constant):
@@ -2805,29 +2977,30 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             if isinstance(inner, c.Typename):
                 return [], Imm(_sizeof_of_c_type_node(inner, ctx)), []
             if isinstance(inner, c.ID):
-                if inner.name in ctx.struct_tag_of_var:
-                    tag = ctx.struct_tag_of_var[inner.name]
+                log = _scope_resolve(ctx, inner.name)
+                if log in ctx.struct_tag_of_var:
+                    tag = ctx.struct_tag_of_var[log]
                     return [], Imm(_sizeof_struct_tag(tag, ctx)), []
-                if inner.name in ctx.union_tag_of_var:
-                    tag = ctx.union_tag_of_var[inner.name]
+                if log in ctx.union_tag_of_var:
+                    tag = ctx.union_tag_of_var[log]
                     return [], Imm(_sizeof_union_tag(tag, ctx)), []
-                if inner.name in ctx.array_info:
-                    info = ctx.array_info[inner.name]
+                if log in ctx.array_info:
+                    info = ctx.array_info[log]
                     return [], Imm(info.total * info.elem_size), []
-                if inner.name in ctx.array_param_names:
+                if log in ctx.array_param_names:
                     return [], Imm(_SIZEOF_POINTER), []
-                if inner.name not in ctx.var_types:
+                if log not in ctx.var_types:
                     raise MnemoCompileError(
                         f"sizeof({inner.name}): serve un tipo in (…) o una variabile già dichiarata"
                     )
-                return [], Imm(_sizeof_of_c_type_node(ctx.var_types[inner.name], ctx)), []
+                return [], Imm(_sizeof_of_c_type_node(ctx.var_types[log], ctx)), []
             raise MnemoCompileError(
                 "sizeof: supportati solo `sizeof (tipo)` e `sizeof nome_variabile`"
             )
         if expr.op == "&":
             inner = expr.expr
             if isinstance(inner, c.ID):
-                n = inner.name
+                n = _scope_resolve(ctx, inner.name)
                 if n in ctx.slot_index:
                     return [], Imm(ctx.slot_index[n]), []
                 if n in ctx.struct_tag_of_var:
@@ -2839,18 +3012,19 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                     cell = _struct_field_local(n, first)
                     if cell not in ctx.slot_index:
                         raise MnemoCompileError(
-                            f"&{n}: indirizzo (primo campo) non disponibile"
+                            f"&{inner.name}: indirizzo (primo campo) non disponibile"
                         )
                     return [], Imm(ctx.slot_index[cell]), []
-                raise MnemoCompileError(f"&{n}: indirizzo non disponibile")
+                raise MnemoCompileError(f"&{inner.name}: indirizzo non disponibile")
             if isinstance(inner, c.StructRef) and inner.type == ".":
                 base, path = _structref_base_and_path(inner)
+                base_log = _scope_resolve(ctx, base)
                 mangled = "__".join(path)
-                if base not in ctx.struct_tag_of_var:
+                if base_log not in ctx.struct_tag_of_var:
                     raise MnemoCompileError(
                         f"&.{mangled!r}: base non è una variabile struct"
                     )
-                cell = _struct_field_local(base, mangled)
+                cell = _struct_field_local(base_log, mangled)
                 if cell not in ctx.slot_index:
                     raise MnemoCompileError(
                         f"&{base}.{mangled}: indirizzo slot non disponibile"
@@ -2881,6 +3055,11 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         raise MnemoCompileError(f"operatore unario non supportato: {expr.op!r}")
 
     if isinstance(expr, c.BinaryOp):
+        if expr.op in ("&&", "||"):
+            lc = ctx.fresh_temp()
+            ins = [IConst(lc, 0)]
+            ins.extend(_build_truth_incr_lc(expr, lc, ctx))
+            return ins, Var(lc), [lc]
         if expr.op == ",":
             i1, o1, tm1 = _eval_expr(expr.left, ctx)
             ctx.use_hist = True
@@ -3036,7 +3215,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         raise MnemoCompileError(f"operatore binario non supportato: {expr.op!r}")
 
     if isinstance(expr, c.Cast):
-        if _cast_accepts_pointer_or_scalar(expr, ctx.typedef_map):
+        if _cast_accepts_pointer_or_scalar(expr, ctx):
             return _eval_expr(expr.expr, ctx)
         raise MnemoCompileError("cast non supportato")
 
@@ -3766,9 +3945,10 @@ def _lower_struct_arrow_assign(lhs: c.StructRef, rhs: c.Node, ctx: _Ctx) -> list
     if not isinstance(lhs.name, c.ID) or not isinstance(lhs.field, c.ID):
         raise MnemoCompileError("`->`: sintassi non supportata")
     p = lhs.name.name
-    if p not in ctx.int_locals:
+    pl = _scope_resolve(ctx, p)
+    if pl not in ctx.int_locals:
         raise MnemoCompileError(f"puntatore non dichiarato: {p!r}")
-    pty = ctx.var_types.get(p)
+    pty = ctx.var_types.get(pl)
     if pty is None:
         raise MnemoCompileError(f"`{p}`: tipo mancante per ->")
     tag = _pointee_struct_tag(pty, ctx)
@@ -3834,17 +4014,23 @@ def _lower_deref_assign_phys(ptr_phys: str, rhs: c.Node, ctx: _Ctx) -> list[Inst
 
 
 def _lower_assign(lhs: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
-    if isinstance(rhs, c.ID) and rhs.name in ctx.array_info:
-        ainf = ctx.array_info[rhs.name]
-        if not ainf.array_decay_pointer:
-            first = _array_elem_local(rhs.name, 0)
-            k = ctx.slot_index.get(first)
-            if k is None:
-                raise MnemoCompileError(
-                    f"array {rhs.name!r}: indirizzo base assente nel layout"
-                )
-            ctx.use_hist = True
-            return [IHistPush(ctx.hist, lhs), IAddEq(lhs, Imm(k))]
+    if isinstance(rhs, c.ID):
+        rlog = _scope_resolve(ctx, rhs.name)
+        if rlog in ctx.array_info:
+            ainf = ctx.array_info[rlog]
+        else:
+            ainf = None
+    else:
+        ainf = None
+    if ainf is not None and isinstance(rhs, c.ID) and not ainf.array_decay_pointer:
+        first = _array_elem_local(rlog, 0)
+        k = ctx.slot_index.get(first)
+        if k is None:
+            raise MnemoCompileError(
+                f"array {rhs.name!r}: indirizzo base assente nel layout"
+            )
+        ctx.use_hist = True
+        return [IHistPush(ctx.hist, lhs), IAddEq(lhs, Imm(k))]
     ei, op, temps = _eval_expr(rhs, ctx)
     ctx.use_hist = True
     if temps:
@@ -3858,15 +4044,16 @@ def _lower_assign(lhs: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
 def _lower_array_subscript_assign(
     base: str, subs: list[c.Node], rhs: c.Node, ctx: _Ctx
 ) -> list[Instr]:
-    if base not in ctx.array_info:
+    blog = _scope_resolve(ctx, base)
+    if blog not in ctx.array_info:
         raise MnemoCompileError(f"array {base!r} non dichiarato")
-    info = ctx.array_info[base]
+    info = ctx.array_info[blog]
     if len(subs) != len(info.dims):
         raise MnemoCompileError(
             f"array {base!r}: servono {len(info.dims)} indici nell'lvalue"
         )
     if info.array_decay_pointer:
-        return _lower_decay_array_subscript_assign(base, subs, rhs, info, ctx)
+        return _lower_decay_array_subscript_assign(blog, subs, rhs, info, ctx)
     ei, op, tm_r = _eval_expr(rhs, ctx)
     ctx.use_hist = True
     if isinstance(op, Imm):
@@ -3882,7 +4069,7 @@ def _lower_array_subscript_assign(
 
     if all(isinstance(s, c.Constant) for s in subs):
         lin = _const_row_major_linear(subs, info.dims)
-        cell = _array_elem_local(base, lin)
+        cell = _array_elem_local(blog, lin)
         cp = _phys(ctx, cell)
         out = pre_r + [IHistPush(ctx.hist, cp), IAddEq(cp, Var(val))]
         for tmp in reversed(tm_r):
@@ -3901,8 +4088,8 @@ def _lower_array_subscript_assign(
 
     bodies = [
         [
-            IHistPush(ctx.hist, _phys(ctx, _array_elem_local(base, kk))),
-            IAddEq(_phys(ctx, _array_elem_local(base, kk)), Var(val)),
+            IHistPush(ctx.hist, _phys(ctx, _array_elem_local(blog, kk))),
+            IAddEq(_phys(ctx, _array_elem_local(blog, kk)), Var(val)),
         ]
         for kk in range(info.total)
     ]
@@ -3931,8 +4118,9 @@ def _kairos_atom(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], str, list[str]]:
     ):
         return [], str(-_const_int(expr.expr)), []
     if isinstance(expr, c.ID):
-        if expr.name in ctx.int_locals:
-            return [], _phys(ctx, expr.name), []
+        log = _scope_resolve(ctx, expr.name)
+        if log in ctx.int_locals:
+            return [], _phys(ctx, log), []
         if expr.name in ctx.enum_constants:
             return [], str(ctx.enum_constants[expr.name]), []
         raise MnemoCompileError(
@@ -3953,8 +4141,9 @@ def _lower_predicate_simple(
         pre, g, tm = _lower_predicate_simple(expr.expr, ctx)
         return pre, _negate_guard(g), tm
     if isinstance(expr, c.ID):
-        if expr.name in ctx.int_locals:
-            return [], (expr.name, "!=", "0"), []
+        log = _scope_resolve(ctx, expr.name)
+        if log in ctx.int_locals:
+            return [], (_phys(ctx, log), "!=", "0"), []
         if expr.name in ctx.enum_constants:
             v = ctx.enum_constants[expr.name]
             if v == 0:
@@ -4062,12 +4251,6 @@ def _reset_lc_val(lc: str, ctx: _Ctx) -> list[Instr]:
     return [IHistPush(ctx.hist, lc), IAddEq(lc, Imm(0))]
 
 
-def _flatten_stmt_to_list(stmt: c.Node) -> list[c.Node]:
-    if isinstance(stmt, c.Compound):
-        return list(stmt.block_items or [])
-    return [stmt]
-
-
 def _has_break_targeting_loop(stmt: c.Node | None, inside_inner: bool) -> bool:
     if stmt is None:
         return False
@@ -4170,10 +4353,15 @@ def _lower_while(node: c.While, ctx: _Ctx) -> list[Instr]:
     lc = ctx.fresh_temp()
     cond = node.cond if node.cond is not None else c.Constant("int", "1")
     noop_ct = _loop_body_continue_is_noop(node.stmt)
+    body_scope = not noop_ct and isinstance(node.stmt, c.Compound)
     stmts = (
         []
         if noop_ct
-        else _flatten_stmt_to_list(node.stmt)
+        else (
+            list(node.stmt.block_items or [])
+            if isinstance(node.stmt, c.Compound)
+            else [node.stmt]
+        )
     )
     need_br = _has_break_targeting_loop(node.stmt, False)
     need_ct = _has_continue_targeting_loop(node.stmt, False) and not noop_ct
@@ -4182,7 +4370,14 @@ def _lower_while(node: c.While, ctx: _Ctx) -> list[Instr]:
 
     ctx.loop_stack.append(_LoopFrame(br_v, ct_v))
     try:
-        core = _lower_stmt_list_tail_continue(stmts, ctx, ct_v)
+        if body_scope:
+            _scope_enter(ctx)
+            try:
+                core = _lower_stmt_list_tail_continue(stmts, ctx, ct_v)
+            finally:
+                _scope_exit(ctx)
+        else:
+            core = _lower_stmt_list_tail_continue(stmts, ctx, ct_v)
         if need_ct:
             assert ct_v is not None
             core = [ILocalBlock(ct_v, core + _reset_lc_val(ct_v, ctx))]
@@ -4209,10 +4404,15 @@ def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
     lc = ctx.fresh_temp()
     cond = node.cond if node.cond is not None else c.Constant("int", "1")
     noop_ct = _loop_body_continue_is_noop(node.stmt)
+    body_scope = not noop_ct and isinstance(node.stmt, c.Compound)
     stmts = (
         []
         if noop_ct
-        else _flatten_stmt_to_list(node.stmt)
+        else (
+            list(node.stmt.block_items or [])
+            if isinstance(node.stmt, c.Compound)
+            else [node.stmt]
+        )
     )
     need_br = _has_break_targeting_loop(node.stmt, False)
     need_ct = _has_continue_targeting_loop(node.stmt, False) and not noop_ct
@@ -4221,7 +4421,14 @@ def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
 
     ctx.loop_stack.append(_LoopFrame(br_v, ct_v))
     try:
-        core = _lower_stmt_list_tail_continue(stmts, ctx, ct_v)
+        if body_scope:
+            _scope_enter(ctx)
+            try:
+                core = _lower_stmt_list_tail_continue(stmts, ctx, ct_v)
+            finally:
+                _scope_exit(ctx)
+        else:
+            core = _lower_stmt_list_tail_continue(stmts, ctx, ct_v)
         if need_ct:
             assert ct_v is not None
             core = [ILocalBlock(ct_v, core + _reset_lc_val(ct_v, ctx))]
@@ -4268,10 +4475,13 @@ def _lower_for(node: c.For, ctx: _Ctx) -> list[Instr]:
     noop_ct = _loop_body_continue_is_noop(node.stmt)
     if noop_ct:
         body_only: list[c.Node] = []
+        body_scope_for = False
     elif isinstance(node.stmt, c.Compound):
         body_only = list(node.stmt.block_items or [])
+        body_scope_for = True
     else:
         body_only = [node.stmt]
+        body_scope_for = False
 
     lc = ctx.fresh_temp()
     need_br = _has_break_targeting_loop(node.stmt, False)
@@ -4283,7 +4493,14 @@ def _lower_for(node: c.For, ctx: _Ctx) -> list[Instr]:
 
     ctx.loop_stack.append(_LoopFrame(br_v, ct_v))
     try:
-        core = _lower_stmt_list_tail_continue(body_only, ctx, ct_v)
+        if body_scope_for:
+            _scope_enter(ctx)
+            try:
+                core = _lower_stmt_list_tail_continue(body_only, ctx, ct_v)
+            finally:
+                _scope_exit(ctx)
+        else:
+            core = _lower_stmt_list_tail_continue(body_only, ctx, ct_v)
         if need_ct:
             assert ct_v is not None
             core = [ILocalBlock(ct_v, core + _reset_lc_val(ct_v, ctx))]
@@ -4358,8 +4575,6 @@ def _lower_compound_block_items(items: list[c.Node], ctx: _Ctx) -> list[Instr]:
 def _lower_substmt(stmt: c.Node | None, ctx: _Ctx) -> list[Instr]:
     if stmt is None:
         return []
-    if isinstance(stmt, c.Compound):
-        return _lower_compound_block_items(list(stmt.block_items or []), ctx)
     return _lower_stmt(stmt, ctx)
 
 
@@ -4490,21 +4705,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("union: nome variabile mancante")
             varname = str(node.type.declname)
-            if (
-                varname in ctx.int_locals
-                or varname in ctx.channel_kairos
-                or varname in ctx.array_info
-                or varname in ctx.struct_tag_of_var
-                or varname in ctx.union_tag_of_var
-            ):
-                raise MnemoCompileError(f"ridichiarazione: {varname}")
+            logical = _scope_declare(ctx, varname)
             if ut not in ctx.union_specs:
                 raise MnemoCompileError(f"union {ut}: definizione mancante")
-            ctx.union_tag_of_var[varname] = ut
-            ctx.int_locals.add(varname)
+            ctx.union_tag_of_var[logical] = ut
+            ctx.int_locals.add(logical)
             if ctx.mem_layout is None:
-                ctx.decl_order.append(varname)
-            ctx.var_types[varname] = node.type
+                ctx.decl_order.append(logical)
+            ctx.var_types[logical] = node.type
             if node.init is not None:
                 raise MnemoCompileError("init union non supportato")
             return []
@@ -4514,22 +4722,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("struct: nome variabile mancante")
             varname = str(node.type.declname)
-            if (
-                varname in ctx.int_locals
-                or varname in ctx.channel_kairos
-                or varname in ctx.array_info
-                or varname in ctx.struct_tag_of_var
-                or varname in ctx.union_tag_of_var
-            ):
-                raise MnemoCompileError(f"ridichiarazione: {varname}")
+            logical = _scope_declare(ctx, varname)
             fields = ctx.struct_specs.get(st_tag)
             if not fields:
                 raise MnemoCompileError(f"struct {st_tag}: definizione mancante")
-            ctx.struct_tag_of_var[varname] = st_tag
+            ctx.struct_tag_of_var[logical] = st_tag
             for fn, fty in fields:
                 if _type_node_is_pthread_mutex(fty, ctx.typedef_map):
                     continue
-                loc = _struct_field_local(varname, fn)
+                loc = _struct_field_local(logical, fn)
                 ctx.int_locals.add(loc)
                 if ctx.mem_layout is None:
                     ctx.decl_order.append(loc)
@@ -4542,12 +4743,11 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         if ap is not None:
             name, dims, esz = ap
             tot = int(math.prod(dims))
-            if name in ctx.array_info or name in ctx.int_locals:
-                raise MnemoCompileError(f"ridichiarazione: {name}")
-            ctx.array_info[name] = _ArrayInfo(dims=dims, total=tot, elem_size=esz)
-            ctx.var_types[name] = node.type
+            logical = _scope_declare(ctx, name)
+            ctx.array_info[logical] = _ArrayInfo(dims=dims, total=tot, elem_size=esz)
+            ctx.var_types[logical] = node.type
             for i in range(tot):
-                cell = _array_elem_local(name, i)
+                cell = _array_elem_local(logical, i)
                 ctx.int_locals.add(cell)
                 if ctx.mem_layout is None:
                     ctx.decl_order.append(cell)
@@ -4560,7 +4760,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     if j >= tot:
                         break
                     out.extend(
-                        _lower_assign(_phys(ctx, _array_elem_local(name, j)), el, ctx)
+                        _lower_assign(
+                            _phys(ctx, _array_elem_local(logical, j)), el, ctx
+                        )
                     )
                 return out
             raise MnemoCompileError(
@@ -4572,18 +4774,11 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("pthread_mutex_t: nome variabile mancante")
             name = str(node.type.declname)
-            if (
-                name in ctx.int_locals
-                or name in ctx.channel_kairos
-                or name in ctx.array_info
-                or name in ctx.struct_tag_of_var
-                or name in ctx.union_tag_of_var
-            ):
-                raise MnemoCompileError(f"ridichiarazione: {name}")
-            kai = f"__mn_mtx_{name}"
-            ctx.channel_kairos[name] = kai
-            ctx.channel_decl_order.append(name)
-            ctx.var_types[name] = node.type
+            logical = _scope_declare(ctx, name)
+            kai = f"__mn_mtx_{logical}"
+            ctx.channel_kairos[logical] = kai
+            ctx.channel_decl_order.append(logical)
+            ctx.var_types[logical] = node.type
             if node.init is not None:
                 raise MnemoCompileError("pthread_mutex_t: niente inizializzatore")
             return []
@@ -4593,18 +4788,11 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("mnemo_kairos_channel_t: nome variabile mancante")
             name = str(node.type.declname)
-            if (
-                name in ctx.int_locals
-                or name in ctx.channel_kairos
-                or name in ctx.array_info
-                or name in ctx.struct_tag_of_var
-                or name in ctx.union_tag_of_var
-            ):
-                raise MnemoCompileError(f"ridichiarazione: {name}")
-            kai = f"__mn_kch_{name}"
-            ctx.channel_kairos[name] = kai
-            ctx.channel_decl_order.append(name)
-            ctx.var_types[name] = node.type
+            logical = _scope_declare(ctx, name)
+            kai = f"__mn_kch_{logical}"
+            ctx.channel_kairos[logical] = kai
+            ctx.channel_decl_order.append(logical)
+            ctx.var_types[logical] = node.type
             if node.init is not None:
                 raise MnemoCompileError("mnemo_kairos_channel_t: niente inizializzatore")
             return []
@@ -4616,22 +4804,19 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         if name is None:
             pn = _int_ptr_var_decl_name(node, td)
             if pn is None:
+                pn = _struct_pointer_param_name(node, ctx)
+            if pn is None:
                 raise MnemoCompileError(
                     f"dichiarazione non supportata: {type(node.type).__name__}"
                 )
             name = pn
             ptr_lit = _char_ptr_string_literal_meta(node, td, ctx.fn_name)
             if ptr_lit is not None:
-                sbase, tot, b = ptr_lit
+                _ros_meta_base, tot, b = ptr_lit
+                logical = _scope_declare(ctx, name)
+                sbase = f"__mn_ros_{ctx.fn_name}_{logical}"
                 if sbase in ctx.array_info:
                     raise MnemoCompileError(f"ridichiarazione: {sbase}")
-                if (
-                    name in ctx.int_locals
-                    or name in ctx.channel_kairos
-                    or name in ctx.struct_tag_of_var
-                    or name in ctx.union_tag_of_var
-                ):
-                    raise MnemoCompileError(f"ridichiarazione: {name}")
                 ctx.array_info[sbase] = _ArrayInfo(
                     dims=(tot,), total=tot, elem_size=1
                 )
@@ -4642,11 +4827,11 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ctx.int_locals.add(cell)
                     if ctx.mem_layout is None:
                         ctx.decl_order.append(cell)
-                ctx.int_locals.add(name)
+                ctx.int_locals.add(logical)
                 if ctx.mem_layout is None:
-                    ctx.decl_order.append(name)
-                ctx.var_types[name] = node.type
-                ctx.char_ptr_string_base[name] = sbase
+                    ctx.decl_order.append(logical)
+                ctx.var_types[logical] = node.type
+                ctx.char_ptr_string_base[logical] = sbase
                 out: list[Instr] = []
                 for i, byte in enumerate(b):
                     out.extend(
@@ -4670,21 +4855,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         "layout: indirizzo base stringa letterale mancante"
                     )
                 ctx.use_hist = True
-                phy = _phys(ctx, name)
+                phy = _phys(ctx, logical)
                 out.extend([IHistPush(ctx.hist, phy), IAddEq(phy, Imm(k))])
                 return out
-        if (
-            name in ctx.int_locals
-            or name in ctx.channel_kairos
-            or name in ctx.array_info
-            or name in ctx.struct_tag_of_var
-            or name in ctx.union_tag_of_var
-        ):
-            raise MnemoCompileError(f"ridichiarazione: {name}")
-        ctx.int_locals.add(name)
+        logical = _scope_declare(ctx, name)
+        ctx.int_locals.add(logical)
         if ctx.mem_layout is None:
-            ctx.decl_order.append(name)
-        ctx.var_types[name] = node.type
+            ctx.decl_order.append(logical)
+        ctx.var_types[logical] = node.type
         if node.init is None:
             return []
         if isinstance(node.init, c.InitList):
@@ -4692,7 +4870,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         rhs_init = node.init
         if isinstance(rhs_init, c.ExprList):
             rhs_init = _fold_exprlist_as_comma_chain(rhs_init)
-        return _lower_assign(_phys(ctx, name), rhs_init, ctx)
+        return _lower_assign(_phys(ctx, logical), rhs_init, ctx)
 
     if isinstance(node, c.Assignment):
         if (
@@ -4701,7 +4879,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             and isinstance(node.rvalue, c.FuncCall)
             and isinstance(node.rvalue.name, c.ID)
         ):
-            lhs = node.lvalue.name
+            lhs = _scope_resolve(ctx, node.lvalue.name)
             if (
                 lhs in ctx.struct_tag_of_var
                 and ctx.mem_layout is not None
@@ -4733,56 +4911,80 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         return _lower_funccall_with_ret(node.rvalue, ctx, sinks)
         if isinstance(node.lvalue, c.StructRef):
             if node.lvalue.type == "->":
-                if node.op != "=":
-                    raise MnemoCompileError("ptr->campo: solo `=` (niente += …)")
-                return _lower_struct_arrow_assign(node.lvalue, node.rvalue, ctx)
+                if node.op == "=":
+                    return _lower_struct_arrow_assign(node.lvalue, node.rvalue, ctx)
+                if node.op in _COMPOUND_ASSIGN_OPS:
+                    coord = node.coord
+                    rhs = c.BinaryOp(
+                        _COMPOUND_ASSIGN_OPS[node.op],
+                        node.lvalue,
+                        node.rvalue,
+                        coord,
+                    )
+                    return _lower_struct_arrow_assign(node.lvalue, rhs, ctx)
+                raise MnemoCompileError(
+                    f"ptr->campo: assegnamento con {node.op!r} non supportato"
+                )
             base, path = _structref_base_and_path(node.lvalue)
+            base_log = _scope_resolve(ctx, base)
             mangled = "__".join(path)
-            if base in ctx.union_tag_of_var:
+            if base_log in ctx.union_tag_of_var:
                 if len(path) != 1:
                     raise MnemoCompileError("union: un solo livello di campo")
                 field = path[0]
-                tag = ctx.union_tag_of_var[base]
+                tag = ctx.union_tag_of_var[base_log]
                 spec = ctx.union_specs.get(tag)
                 if not spec or field not in [fn for fn, _ in spec]:
                     raise MnemoCompileError(f"union {tag}: membro {field!r} assente")
-                compound_u = {
-                    "+=": "+",
-                    "-=": "-",
-                    "*=": "*",
-                    "/=": "/",
-                    "%=": "%",
-                    "^=": "^",
-                }
                 if node.op == "=":
-                    return _lower_assign(_phys(ctx, base), node.rvalue, ctx)
-                if node.op in compound_u:
+                    return _lower_assign(_phys(ctx, base_log), node.rvalue, ctx)
+                if node.op in _COMPOUND_ASSIGN_OPS:
                     rhs = c.BinaryOp(
-                        compound_u[node.op],
+                        _COMPOUND_ASSIGN_OPS[node.op],
                         node.lvalue,
                         node.rvalue,
                         node.coord,
                     )
-                    return _lower_assign(_phys(ctx, base), rhs, ctx)
+                    return _lower_assign(_phys(ctx, base_log), rhs, ctx)
                 raise MnemoCompileError(f"assegnamento union con {node.op!r} non supportato")
-            if base not in ctx.struct_tag_of_var:
+            if base_log not in ctx.struct_tag_of_var:
                 raise MnemoCompileError(f"{base!r} non è una variabile struct")
-            tag = ctx.struct_tag_of_var[base]
+            tag = ctx.struct_tag_of_var[base_log]
             spec = ctx.struct_specs.get(tag)
             if not spec or mangled not in [fn for fn, _ in spec]:
                 raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
-            cell = _struct_field_local(base, mangled)
-            if node.op != "=":
-                raise MnemoCompileError("struct: solo `=` (niente += …)")
-            return _lower_assign(_phys(ctx, cell), node.rvalue, ctx)
+            cell = _struct_field_local(base_log, mangled)
+            if node.op == "=":
+                return _lower_assign(_phys(ctx, cell), node.rvalue, ctx)
+            if node.op in _COMPOUND_ASSIGN_OPS:
+                coord = node.coord
+                rhs = c.BinaryOp(
+                    _COMPOUND_ASSIGN_OPS[node.op],
+                    node.lvalue,
+                    node.rvalue,
+                    coord,
+                )
+                return _lower_assign(_phys(ctx, cell), rhs, ctx)
+            raise MnemoCompileError(
+                f"struct: assegnamento con {node.op!r} non supportato"
+            )
         if isinstance(node.lvalue, c.ArrayRef):
             base, subs = _flatten_array_ref_chain(node.lvalue)
-            if node.op != "=":
-                raise MnemoCompileError("array[…]: solo `=` (niente += …)")
-            return _lower_array_subscript_assign(base, subs, node.rvalue, ctx)
+            if node.op == "=":
+                return _lower_array_subscript_assign(base, subs, node.rvalue, ctx)
+            if node.op in _COMPOUND_ASSIGN_OPS:
+                coord = node.coord
+                rhs = c.BinaryOp(
+                    _COMPOUND_ASSIGN_OPS[node.op],
+                    node.lvalue,
+                    node.rvalue,
+                    coord,
+                )
+                return _lower_array_subscript_assign(base, subs, rhs, ctx)
+            raise MnemoCompileError(
+                f"array[…]: assegnamento con {node.op!r} non supportato"
+            )
         if isinstance(node.lvalue, c.UnaryOp) and node.lvalue.op == "*":
-            if node.op != "=":
-                raise MnemoCompileError("assegnamento a *p: solo `=` (niente += …)")
             ei_p, op_p, tm_p = _eval_expr(node.lvalue.expr, ctx)
             if isinstance(op_p, Imm):
                 tmp = ctx.fresh_temp()
@@ -4796,25 +4998,39 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if ptrn not in ctx.int_locals:
                 raise MnemoCompileError("lvalue *expr: operando non dichiarato")
             ctx.use_hist = True
-            rest = _lower_deref_assign_phys(ptrn, node.rvalue, ctx)
+            if node.op == "=":
+                rhs = node.rvalue
+            elif node.op in _COMPOUND_ASSIGN_OPS:
+                rhs = c.BinaryOp(
+                    _COMPOUND_ASSIGN_OPS[node.op],
+                    node.lvalue,
+                    node.rvalue,
+                    node.coord,
+                )
+            else:
+                raise MnemoCompileError(
+                    f"assegnamento a *p con {node.op!r} non supportato"
+                )
+            rest = _lower_deref_assign_phys(ptrn, rhs, ctx)
             post = [IHistPush(ctx.scratch, x) for x in reversed(tm_p)]
             if tm_p:
                 ctx.use_scratch = True
             return ei_p + rest + post
         if not isinstance(node.lvalue, c.ID):
             raise MnemoCompileError("lvalue non-ID non supportato")
-        lhs = node.lvalue.name
+        lhs = _scope_resolve(ctx, node.lvalue.name)
         if lhs not in ctx.int_locals:
-            raise MnemoCompileError(f"assegnamento a variabile non dichiarata: {lhs}")
+            raise MnemoCompileError(
+                f"assegnamento a variabile non dichiarata: {node.lvalue.name}"
+            )
         if node.op == "=":
             return _lower_assign(_phys(ctx, lhs), node.rvalue, ctx)
-        compound = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%", "^=": "^"}
-        if node.op in compound:
+        if node.op in _COMPOUND_ASSIGN_OPS:
             coord = node.coord
             # Nota Janus: `_lower_assign` fa eval(rhs) *prima* di push(lhs) che azzera lhs.
             # Per `sum += i` serve rhs = sum+i così il totale è calcolato prima del push.
             rhs = c.BinaryOp(
-                compound[node.op],
+                _COMPOUND_ASSIGN_OPS[node.op],
                 c.ID(_phys(ctx, lhs), coord),
                 node.rvalue,
                 coord,
@@ -4954,7 +5170,10 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         return [IReturn()]
 
     if isinstance(node, c.Compound):
-        return _lower_compound_block_items(list(node.block_items or []), ctx)
+        _scope_enter(ctx)
+        out = _lower_compound_block_items(list(node.block_items or []), ctx)
+        _scope_exit(ctx)
+        return out
 
     raise MnemoCompileError(f"istruzione non supportata: {type(node).__name__}")
 
@@ -4994,6 +5213,17 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
                         "mul.kairos",
                         "divmod.kairos",
                         "putd.kairos",
+                        "putx.kairos",
+                    }
+                )
+        if isinstance(node, c.Assignment):
+            if node.op in ("<<=", ">>=", "&=", "|="):
+                needed.update(
+                    {
+                        "helpers.kairos",
+                        "mul.kairos",
+                        "divmod.kairos",
+                        "bits.kairos",
                     }
                 )
         if isinstance(node, c.BinaryOp):
@@ -5034,6 +5264,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
         "mod.kairos",
         "bits.kairos",
         "putd.kairos",
+        "putx.kairos",
         "ptr_pool.kairos",
     ]
     return [name for name in order if name in needed]
@@ -5085,6 +5316,7 @@ def infer_lib_files_from_calls(
         "mod.kairos",
         "bits.kairos",
         "putd.kairos",
+        "putx.kairos",
         "ptr_pool.kairos",
     ]
     head = [n for n in order if n in needed]
@@ -5231,6 +5463,7 @@ def _lower_user_function(
     ctx.param_storage_order = tuple(_func_param_storage_names(fd, file_td, pm))
 
     _register_param_var_types(ctx, fd)
+    _scope_init_params(ctx, ctx.param_storage_order)
 
     ch_pi_formals: list[tuple[str, str]] = []
     for p in fd.args.params if fd.args else []:
@@ -5409,6 +5642,7 @@ def lower_file_to_program(
     if _file_ast_needs_ptr_pool(ast):
         instrs.append(IConst(_PTR_POOL_CTR, layout.heap_base))
 
+    _scope_init_params(ctx, [name for name, _role in main_param_setup])
     instrs.extend(
         _lower_compound_block_items(list(body.block_items or []), ctx)
     )
