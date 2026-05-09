@@ -37,14 +37,16 @@ class TestParallelTwoRegions(unittest.TestCase):
         self.assertIsNotNone(m1, "manca call fib_right")
         args0 = [x.strip() for x in m0.group(1).split(",")]
         args1 = [x.strip() for x in m1.group(1).split(",")]
-        s = len(args0)
-        self.assertEqual(len(args1), s, "due rami devono avere S argomenti __mn_mem")
+        mem0 = [x for x in args0 if re.fullmatch(r"__mn_mem\d+", x)]
+        mem1 = [x for x in args1 if re.fullmatch(r"__mn_mem\d+", x)]
+        s = len(mem0)
+        self.assertEqual(len(mem1), s, "due rami devono avere S argomenti __mn_mem")
 
         def idx(atom: str) -> int:
             return int(atom.replace("__mn_mem", ""))
 
         for i in range(s):
-            a0, a1 = idx(args0[i]), idx(args1[i])
+            a0, a1 = idx(mem0[i]), idx(mem1[i])
             if a0 == a1:
                 continue
             self.assertEqual(

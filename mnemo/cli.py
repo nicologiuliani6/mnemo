@@ -95,6 +95,14 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="scrive anche stem.kairos accanto al .c (il sorgente Kairos testuale)",
     )
+    p_c.add_argument(
+        "--opt-uncall-user-calls",
+        action="store_true",
+        help=(
+            "su chiamate da main→f definite nello .c (f non ricorsiva): dopo call, "
+            "copia XOR del risultato (int) poi uncall; void → call + uncall"
+        ),
+    )
     p_c.set_defaults(handler=_cmd_compile)
 
     p_dk = sub.add_parser(
@@ -133,6 +141,11 @@ def main(argv: list[str] | None = None) -> None:
         metavar="N",
         help="come per compile",
     )
+    p_dk.add_argument(
+        "--opt-uncall-user-calls",
+        action="store_true",
+        help="come compile",
+    )
     p_dk.set_defaults(handler=_cmd_dump_kairos)
 
     p_r = sub.add_parser(
@@ -158,6 +171,11 @@ def main(argv: list[str] | None = None) -> None:
         default=4,
         metavar="N",
         help="come per compile: dimensione pool puntatori",
+    )
+    p_r.add_argument(
+        "--opt-uncall-user-calls",
+        action="store_true",
+        help="come compile",
     )
     p_r.add_argument(
         "-v",
@@ -190,6 +208,7 @@ def _cmd_compile(args: argparse.Namespace) -> None:
             args.input,
             main_argc=args.main_argc,
             ptr_pool_size=args.ptr_pool_size,
+            opt_uncall_user_calls=args.opt_uncall_user_calls,
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -233,6 +252,7 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
             args.input,
             main_argc=args.main_argc,
             ptr_pool_size=args.ptr_pool_size,
+            opt_uncall_user_calls=args.opt_uncall_user_calls,
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -304,6 +324,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             args.input,
             main_argc=args.main_argc,
             ptr_pool_size=args.ptr_pool_size,
+            opt_uncall_user_calls=args.opt_uncall_user_calls,
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)

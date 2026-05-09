@@ -19,6 +19,7 @@ from mnemo.ir import (
     IAddEq,
     IBranch,
     ICall,
+    IUncall,
     IComment,
     IConst,
     ICopy,
@@ -80,7 +81,9 @@ def _iter_ast_nodes(node: c.Node | None) -> Sequence[c.Node]:
 def _keep_name_atom(n: str) -> bool:
     if re.fullmatch(r"__mn_mem\d+", n):
         return True
-    if n in ("__mn_hist", "__mn_exit"):
+    if re.fullmatch(r"__mn_pb\d+_(hist|scratch)", n):
+        return True
+    if n in ("__mn_hist", "__mn_scratch", "__mn_exit"):
         return True
     if n.startswith("__mn_mtx_"):
         return True
@@ -93,8 +96,6 @@ def _should_rename_atom(n: str) -> bool:
     if n.startswith("__mn_il"):
         return False
     if n.startswith("__mn_e") or n.startswith("__mn_lc") or n.startswith("__mn_v_"):
-        return True
-    if n == "__mn_scratch":
         return True
     return False
 
@@ -137,6 +138,11 @@ def _rename_one_instr(ins: Instr, ren: Callable[[str], str]) -> Instr:
         return IStoreRev(ren(ins.dst), ren(ins.src), ren(ins.hist))
     if isinstance(ins, ICall):
         return ICall(
+            ins.proc,
+            [ren(a) if _should_rename_atom(a) else a for a in ins.args],
+        )
+    if isinstance(ins, IUncall):
+        return IUncall(
             ins.proc,
             [ren(a) if _should_rename_atom(a) else a for a in ins.args],
         )

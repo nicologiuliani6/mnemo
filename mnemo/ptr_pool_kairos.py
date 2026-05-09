@@ -35,8 +35,7 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
         "// `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push",
         "// e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).",
         "",
-        "procedure __mn_pool_alloc(int ctr, int out_slot)",
-        "    stack __mn_hist",
+        "procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)",
         "    local int t = 0",
         "        t += ctr",
         "        push(out_slot, __mn_hist)",
@@ -45,8 +44,7 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
         "        push(t, __mn_hist)",
         "    delocal int t = 0",
         "",
-        f"procedure __mn_pool_store(int slot, int val, {mem_params})",
-        "    stack __mn_hist",
+        f"procedure __mn_pool_store(int slot, int val, {mem_params}, stack __mn_hist, stack __mn_scratch)",
     ]
 
     for i in range(n):
@@ -62,8 +60,7 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
     lines.extend(
         [
             "",
-            f"procedure __mn_pool_load(int slot, {mem_params}, int out)",
-            "    stack __mn_hist",
+            f"procedure __mn_pool_load(int slot, {mem_params}, int out, stack __mn_hist, stack __mn_scratch)",
         ]
     )
 
@@ -84,8 +81,7 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
     lines.extend(
         [
             "",
-            f"procedure __mn_pool_free(int slot, {mem_params}, int ctr)",
-            "    stack __mn_hist",
+            f"procedure __mn_pool_free(int slot, {mem_params}, int ctr, stack __mn_hist, stack __mn_scratch)",
             "    local int ctr0 = 0",
             "        ctr0 += ctr",
         ]
@@ -131,8 +127,7 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
         f"// Pool puntatori Mnemo — generato (bancato), N={n}, bank={bsz}, n_banks={n_banks}.",
         "// Limite VM su argomenti di call / parametri di procedura.",
         "",
-        "procedure __mn_pool_alloc(int ctr, int out_slot)",
-        "    stack __mn_hist",
+        "procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)",
         "    local int t = 0",
         "        t += ctr",
         "        push(out_slot, __mn_hist)",
@@ -147,8 +142,9 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
         start = bi * bsz
         end = min(n, start + bsz)
         mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
-        lines.append(f"procedure __mn_pool_store_b{bi}(int lslot, int val, {mem_params})")
-        lines.append("    stack __mn_hist")
+        lines.append(
+            f"procedure __mn_pool_store_b{bi}(int lslot, int val, {mem_params}, stack __mn_hist, stack __mn_scratch)"
+        )
         for j in range(start, end):
             rel = j - start
             lines.extend(
@@ -165,8 +161,9 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
         start = bi * bsz
         end = min(n, start + bsz)
         mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
-        lines.append(f"procedure __mn_pool_load_b{bi}(int lslot, {mem_params}, int out)")
-        lines.append("    stack __mn_hist")
+        lines.append(
+            f"procedure __mn_pool_load_b{bi}(int lslot, {mem_params}, int out, stack __mn_hist, stack __mn_scratch)"
+        )
         for j in range(start, end):
             rel = j - start
             lines.extend(
@@ -187,8 +184,9 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
         start = bi * bsz
         end = min(n, start + bsz)
         mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
-        lines.append(f"procedure __mn_pool_free_b{bi}(int lslot, {mem_params}, int ctr)")
-        lines.append("    stack __mn_hist")
+        lines.append(
+            f"procedure __mn_pool_free_b{bi}(int lslot, {mem_params}, int ctr, stack __mn_hist, stack __mn_scratch)"
+        )
         lines.append("    local int ctr0 = 0")
         lines.append("        ctr0 += ctr")
         for j in range(start, end):

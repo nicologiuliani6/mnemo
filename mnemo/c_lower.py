@@ -37,6 +37,7 @@ from mnemo.ir import (
     Function,
     IAddEq,
     ICall,
+    IUncall,
     IComment,
     IConst,
     IFromUntilKairos,
@@ -152,6 +153,34 @@ def _func_body_uses_two_region_parallel(ast: c.FileAST, fname: str) -> bool:
                 elif ch is not None:
                     stack.append(ch)
         return False
+    return False
+
+
+def _func_is_recursive_user(ast: c.FileAST | None, fname: str) -> bool:
+    """Ricorsione diretta o worker `parallel2(f, f, …)`: call+uncall da main non è applicabile."""
+    if ast is None:
+        return False
+    fdef = _get_funcdef(ast, fname)
+    if fdef is None or fdef.body is None:
+        return False
+    stack: list[c.Node | None] = [fdef.body]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if isinstance(n, c.FuncCall) and isinstance(n.name, c.ID):
+            if n.name.name == fname:
+                return True
+            if n.name.name == "mnemo_pthread_parallel2" and n.args is not None:
+                exprs = list(n.args.exprs) if isinstance(n.args, c.ExprList) else [n.args]
+                for ex in exprs[:2]:
+                    if isinstance(ex, c.ID) and ex.name == fname:
+                        return True
+        for _na, ch in n.children():
+            if isinstance(ch, list):
+                stack.extend(ch)
+            elif ch is not None:
+                stack.append(ch)
     return False
 
 
@@ -511,6 +540,8 @@ class _Ctx:
     file_scope_channel_order: tuple[str, ...] = ()
     """Dopo `mnemo_pthread_parallel2` in main: letture campi worker-1 usano la 2ª partizione."""
     after_par_join: bool = False
+    """Logici (non-file-scope) letti dalla partizione 1 dopo `parallel2` nel frame corrente."""
+    local_partition1_read_logicals: set[str] = field(default_factory=set)
     # char* = "…" → mappa nome puntatore → base array `__mn_ros_*` (per printf %s su quella variabile).
     char_ptr_string_base: dict[str, str] = field(default_factory=dict)
     """Slot logici dichiarati come puntatore a funzione (`int (*p)(int)`)."""
@@ -522,6 +553,13 @@ class _Ctx:
     shadow_uid: int = 0
     """`&x` almeno una volta: non usare `__mn_v_x` in `_phys` (pool aggiorna `__mn_mem*`)."""
     addr_taken_logicals: set[str] = field(default_factory=set)
+    """Stack Janus distinti per ogni ramo di `par` (la VM rifiuta lo stesso id in due branch)."""
+    par_branch_stack_uid: int = 0
+    par_branch_stack_names: list[str] = field(default_factory=list)
+    # opt_uncall_user_calls: da main, call → xor-snapshot rit. → uncall (no ricorsione diretta/parallel2 f,f).
+    opt_uncall_user_calls: bool = False
+    """Nomi delle procedure dove l'IR (from/until, par, π) non tollera uncall con questa VM."""
+    uncall_excluded_via_vm_targets: frozenset[str] = field(default_factory=frozenset)
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -537,6 +575,24 @@ class _Ctx:
         name = f"__mn_lc{self.loop_ct_i}"
         self.loop_ct_i += 1
         return name
+
+
+def _kairos_stack_actuals(ctx: _Ctx) -> list[str]:
+    """Argomenti `stack` passati al callee (stessa coppia del frame chiamante; `main` è l'unico senza formali)."""
+    return [ctx.hist, ctx.scratch]
+
+
+def _fresh_par_branch_stack_pair(ctx: _Ctx) -> tuple[str, str]:
+    """
+    Coppia `(hist, scratch)` dichiarabile come `local stack` sul chiamante: obbligatoria per
+    `par` Kairos perché due rami non possono ricevere gli stessi identificatori di stack del caller.
+    """
+    i = ctx.par_branch_stack_uid
+    ctx.par_branch_stack_uid += 1
+    h = f"__mn_pb{i}_hist"
+    s = f"__mn_pb{i}_scratch"
+    ctx.par_branch_stack_names.extend([h, s])
+    return h, s
 
 
 def _scope_ensure(ctx: _Ctx) -> None:
@@ -652,7 +708,10 @@ def _ir_pool_divmod_slot(
     ctx.use_hist = True
     pre: list[Instr] = [
         IConst(t_b, POOL_BANK_SIZE),
-        ICall("__mn_divmod_nonneg", [slot_var, t_b, t_q, t_r]),
+        ICall(
+            "__mn_divmod_nonneg",
+            [slot_var, t_b, t_q, t_r] + _kairos_stack_actuals(ctx),
+        ),
     ]
     return pre, t_b, t_q, t_r
 
@@ -665,13 +724,14 @@ def _bank_chain_pool_calls(
 ) -> list[Instr]:
     """Albero di confronti su `t_q` (indice banca): meno `if` sequenziali che una catena lineare."""
     nb = _n_pool_banks(ctx)
+    stk = _kairos_stack_actuals(ctx)
     if nb == 1:
-        return [ICall(f"{proc_base}_b0", build_args(0))]
+        return [ICall(f"{proc_base}_b0", build_args(0) + stk)]
 
     def tree(lo: int, hi: int) -> list[Instr]:
         if hi - lo == 1:
             k = lo
-            return [ICall(f"{proc_base}_b{k}", build_args(k))]
+            return [ICall(f"{proc_base}_b{k}", build_args(k) + stk)]
         mid = (lo + hi) // 2
         left = tree(lo, mid)
         right = tree(mid, hi)
@@ -685,7 +745,9 @@ def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
         return [
             ICall(
                 "__mn_pool_store",
-                [slot_var, val_var] + list(_ptr_pool_mem_names(ctx)),
+                [slot_var, val_var]
+                + list(_ptr_pool_mem_names(ctx))
+                + _kairos_stack_actuals(ctx),
             )
         ]
     pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
@@ -703,7 +765,10 @@ def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
         return [
             ICall(
                 "__mn_pool_load",
-                [slot_var] + list(_ptr_pool_mem_names(ctx)) + [out_var],
+                [slot_var]
+                + list(_ptr_pool_mem_names(ctx))
+                + [out_var]
+                + _kairos_stack_actuals(ctx),
             )
         ]
     pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
@@ -721,7 +786,10 @@ def _ir_pool_free_call(ctx: _Ctx, slot_var: str) -> list[Instr]:
         return [
             ICall(
                 "__mn_pool_free",
-                [slot_var] + list(_ptr_pool_mem_names(ctx)) + [_PTR_POOL_CTR],
+                [slot_var]
+                + list(_ptr_pool_mem_names(ctx))
+                + [_PTR_POOL_CTR]
+                + _kairos_stack_actuals(ctx),
             )
         ]
     pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
@@ -743,12 +811,17 @@ def _phys(ctx: _Ctx, logical: str) -> str:
     hit = ctx.mem_phys.get(logical)
     if hit is not None:
         if (
-            ctx.fn_name == "main"
-            and ctx.after_par_join
+            ctx.after_par_join
             and ctx.mem_layout is not None
             and (
-                logical in ctx.mem_layout.main_partition1_read_logicals
-                or logical in ctx.mem_layout.file_scope_partition1
+                (
+                    ctx.fn_name == "main"
+                    and (
+                        logical in ctx.mem_layout.main_partition1_read_logicals
+                        or logical in ctx.mem_layout.file_scope_partition1
+                    )
+                )
+                or logical in ctx.local_partition1_read_logicals
             )
         ):
             idx = ctx.slot_index.get(logical)
@@ -1415,7 +1488,22 @@ def _pthread_assign_worker_params(
     s = layout.total_cells
     pre: list[Instr] = []
     pre.extend(lead_arg)
+
+    # Snapshot di tutti gli argomenti prima di qualsiasi store nei __mn_mem* del worker:
+    # evita che un assegnamento precoce (es. n := n-1) alteri i successivi (es. n-2).
+    snap_vals: list[tuple[str, str]] = []
     for ex, log_key in zip(flat_exprs, param_logs):
+        ei, op, tm = _eval_expr(ex, ctx)
+        t_snap = ctx.fresh_temp()
+        pre.extend(ei)
+        pre.append(IHistPush(ctx.hist, t_snap))
+        pre.append(IAddEq(t_snap, op if isinstance(op, Imm) else Var(op.name)))
+        if tm:
+            ctx.use_scratch = True
+            pre.extend([IHistPush(ctx.scratch, x) for x in reversed(tm)])
+        snap_vals.append((log_key, t_snap))
+
+    for log_key, t_snap in snap_vals:
         key = (fname, log_key)
         if key not in layout.slot_of:
             raise MnemoCompileError(
@@ -1424,8 +1512,66 @@ def _pthread_assign_worker_params(
         idx = layout.slot_of[key]
         phys = mem_partition_index * s + idx
         dst = f"__mn_mem{phys}"
-        pre.extend(_lower_assign(dst, ex, ctx))
+        pre.extend(_lower_assign(dst, c.ID(t_snap, None), ctx))
+    if snap_vals:
+        ctx.use_scratch = True
+        pre.extend([IHistPush(ctx.scratch, t) for _k, t in reversed(snap_vals)])
     return pre
+
+
+def _pthread_worker_param_assign_plan(
+    fname: str,
+    raw_exprs: list[c.Node],
+    ctx: _Ctx,
+    *,
+    mem_partition_index: int,
+) -> tuple[list[Instr], list[tuple[str, c.Node]]]:
+    """Piano assegnamenti parametri worker: `lead` + coppie (dst_phys, expr)."""
+    if ctx.file_ast is None or ctx.mem_layout is None:
+        raise MnemoCompileError("worker PAR: layout memoria mancante")
+    fdef = _get_funcdef(ctx.file_ast, fname)
+    if fdef is None:
+        raise MnemoCompileError(f"worker PAR: {fname!r} non è definita nel file")
+    fd = fdef.decl.type
+    if not isinstance(fd, c.FuncDecl):
+        raise MnemoCompileError("worker PAR: firma non valida")
+    pm = _Ctx()
+    pm.typedef_map = dict(ctx.typedef_map)
+    pm.struct_specs = dict(ctx.struct_specs)
+    pm.union_specs = dict(ctx.union_specs)
+    pm.enum_constants = dict(ctx.enum_constants)
+    pm.array_param_names = set()
+    groups = _func_param_slot_groups(fd, ctx.typedef_map, pm)
+    param_logs = _func_param_storage_names(fd, ctx.typedef_map, pm)
+    if len(groups) != len(raw_exprs):
+        raise MnemoCompileError(
+            f"worker `{fname}`: servono {len(groups)} argomenti formali, ne ho {len(raw_exprs)}"
+        )
+    fg: list[list[str]] = []
+    fr: list[c.Node] = []
+    for g, e in zip(groups, raw_exprs):
+        if _func_param_group_is_pi_channel(g, fd, ctx.typedef_map):
+            continue
+        fg.append(g)
+        fr.append(e)
+    layout = ctx.mem_layout
+    lead_arg, flat_exprs = _flatten_user_call_arguments(fr, fg, ctx, layout)
+    if len(flat_exprs) != len(param_logs):
+        raise MnemoCompileError(
+            f"worker `{fname}`: mismatch tra argomenti appiattiti e slot nel layout"
+        )
+    s = layout.total_cells
+    pairs: list[tuple[str, c.Node]] = []
+    for ex, log_key in zip(flat_exprs, param_logs):
+        key = (fname, log_key)
+        if key not in layout.slot_of:
+            raise MnemoCompileError(
+                f"worker `{fname}`: slot parametro {log_key!r} assente nel layout"
+            )
+        idx = layout.slot_of[key]
+        phys = mem_partition_index * s + idx
+        pairs.append((f"__mn_mem{phys}", ex))
+    return lead_arg, pairs
 
 
 def _premirror_main_partition1_reads_before_par(ctx: _Ctx) -> list[Instr]:
@@ -1456,6 +1602,60 @@ def _premirror_main_partition1_reads_before_par(ctx: _Ctx) -> list[Instr]:
         dst = f"__mn_mem{s + midx}"
         out.append(IComment(f"pre-PAR mirror `{log}`: {dst} += {src}"))
         out.extend(_lower_assign(dst, c.ID(src, coord), ctx))
+    return out
+
+
+def _mark_parallel2_right_partition_reads(ctx: _Ctx, raw_exprs: list[c.Node]) -> None:
+    """
+    In funzioni non-main, se il worker destro riceve `&x`, dopo il join le letture di `x`
+    devono usare la partizione destra (`__mn_mem{S+idx}`), coerente con i parametri del
+    secondo ramo.
+    """
+    if ctx.mem_layout is None:
+        return
+    for ex in raw_exprs:
+        if not isinstance(ex, c.UnaryOp) or ex.op != "&":
+            continue
+        inner = ex.expr
+        if not isinstance(inner, c.ID):
+            continue
+        log = _scope_resolve(ctx, inner.name)
+        if log in ctx.slot_index:
+            ctx.local_partition1_read_logicals.add(log)
+
+
+def _parallel2_retvalue_copies_to_addr_taken(
+    ctx: _Ctx,
+    fname: str,
+    raw_exprs: list[c.Node],
+    *,
+    mem_partition_index: int,
+) -> list[Instr]:
+    """
+    Se un worker `parallel2` restituisce `int` e un argomento è `&x`,
+    copia il valore di ritorno nella variabile puntata (`x`) dopo il join.
+    Questo rende usabile anche il pattern ricorsivo stile `fib(int n, int *ret)`.
+    """
+    if ctx.mem_layout is None:
+        return []
+    if ctx.mem_layout.ret_words.get(fname, 0) != 1:
+        return []
+    ret_key = (fname, MN_RET)
+    if ret_key not in ctx.mem_layout.slot_of:
+        return []
+    s = ctx.mem_layout.total_cells
+    ret_idx = ctx.mem_layout.slot_of[ret_key]
+    ret_phys = mem_partition_index * s + ret_idx
+    src = c.ID(f"__mn_mem{ret_phys}", None)
+    out: list[Instr] = []
+    for ex in raw_exprs:
+        if not isinstance(ex, c.UnaryOp) or ex.op != "&" or not isinstance(ex.expr, c.ID):
+            continue
+        log = _scope_resolve(ctx, ex.expr.name)
+        if log not in ctx.slot_index:
+            continue
+        dst = f"__mn_mem{ctx.slot_index[log]}"
+        out.extend(_lower_assign(dst, src, ctx))
     return out
 
 
@@ -1509,7 +1709,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             )
         mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
         chx = _file_scope_channel_actuals(ctx)
-        return [IPar([[ICall(f0, mem_args + chx)]])]
+        stk = _kairos_stack_actuals(ctx)
+        return [IPar([[ICall(f0, mem_args + chx + stk)]])]
 
     if nm == "mnemo_pthread_start1":
         if ctx.mem_layout is None:
@@ -1530,7 +1731,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
         chx = _file_scope_channel_actuals(ctx)
         ctx.use_hist = True
-        return pre + [IPar([[ICall(f0, mem_args + chx)]])]
+        stk = _kairos_stack_actuals(ctx)
+        return pre + [IPar([[ICall(f0, mem_args + chx + stk)]])]
 
     if nm == "mnemo_pthread_parallel_with":
         if ctx.mem_layout is None:
@@ -1559,11 +1761,23 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
                 "mnemo_pthread_parallel_with: la continuazione deve essere `void g(void)`"
             )
         chx = _file_scope_channel_actuals(ctx)
+        wh, ws = _fresh_par_branch_stack_pair(ctx)
+        ch_h, ch_s = _fresh_par_branch_stack_pair(ctx)
         return [
             IPar(
                 [
-                    [ICall(f_work, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
-                    [ICall(f_cont, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
+                    [
+                        ICall(
+                            f_work,
+                            _parallel_branch_mem_actuals(ctx, left=False) + chx + [wh, ws],
+                        )
+                    ],
+                    [
+                        ICall(
+                            f_cont,
+                            _parallel_branch_mem_actuals(ctx, left=True) + chx + [ch_h, ch_s],
+                        )
+                    ],
                 ]
             )
         ]
@@ -1595,11 +1809,23 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         )
         ctx.use_hist = True
         chx = _file_scope_channel_actuals(ctx)
+        wh, ws = _fresh_par_branch_stack_pair(ctx)
+        ch_h, ch_s = _fresh_par_branch_stack_pair(ctx)
         return pre + [
             IPar(
                 [
-                    [ICall(f_work, _parallel_branch_mem_actuals(ctx, left=False) + chx)],
-                    [ICall(f_cont, _parallel_branch_mem_actuals(ctx, left=True) + chx)],
+                    [
+                        ICall(
+                            f_work,
+                            _parallel_branch_mem_actuals(ctx, left=False) + chx + [wh, ws],
+                        )
+                    ],
+                    [
+                        ICall(
+                            f_cont,
+                            _parallel_branch_mem_actuals(ctx, left=True) + chx + [ch_h, ch_s],
+                        )
+                    ],
                 ]
             )
         ]
@@ -1652,33 +1878,68 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             )
         raw0 = exprs[2 : 2 + len(g0)]
         raw1 = exprs[2 + len(g0) :]
+        # Fallback sequenziale solo se questo frame è uno dei due worker: altrimenti
+        # `IPar(left=f0,right=f1)` partiziona `__mn_mem*` in due finestre da S celle
+        # (compile.py: physical = 2·S). Con `parallel2(f,f,...)` dentro `f`, ogni livello
+        # ricorsivo richiederebbe un nuovo split completo sulla metà disponibile ⇒ in
+        # generale serve spazio Ω(2^profondità) celle fisiche che non allochiamo; il
+        # fallback evita aliasing col ramo sibling (wrong result ~0 vs atteso).
+        recursive_fallback = ctx.fn_name in {f0, f1}
         pre: list[Instr] = []
         pre.extend(_premirror_main_partition1_reads_before_par(ctx))
         if expected_len > 2:
-            pre.extend(_pthread_assign_worker_params(f0, raw0, ctx, mem_partition_index=0))
-            pre.extend(_pthread_assign_worker_params(f1, raw1, ctx, mem_partition_index=1))
+            lead0, pairs0 = _pthread_worker_param_assign_plan(
+                f0, raw0, ctx, mem_partition_index=0
+            )
+            lead1, pairs1 = _pthread_worker_param_assign_plan(
+                f1, raw1, ctx, mem_partition_index=1
+            )
+            pre.extend(lead0)
+            pre.extend(lead1)
+            snap_pairs = pairs0 + pairs1
+            snap_vals: list[tuple[str, str]] = []
+            for dst, ex in snap_pairs:
+                ei, op, tm = _eval_expr(ex, ctx)
+                t_snap = ctx.fresh_temp()
+                pre.extend(ei)
+                pre.append(IHistPush(ctx.hist, t_snap))
+                pre.append(IAddEq(t_snap, op if isinstance(op, Imm) else Var(op.name)))
+                if tm:
+                    ctx.use_scratch = True
+                    pre.extend([IHistPush(ctx.scratch, x) for x in reversed(tm)])
+                snap_vals.append((dst, t_snap))
+            for dst, t_snap in snap_vals:
+                pre.extend(_lower_assign(dst, c.ID(t_snap, None), ctx))
+            if snap_vals:
+                ctx.use_scratch = True
+                pre.extend([IHistPush(ctx.scratch, t) for _d, t in reversed(snap_vals)])
             ctx.use_hist = True
         chx = _file_scope_channel_actuals(ctx)
         pi0 = _call_pi_channel_kairos_names(fd0, raw0, ctx)
         pi1 = _call_pi_channel_kairos_names(fd1, raw1, ctx)
-        return pre + [
-            IPar(
-                [
-                    [
-                        ICall(
-                            f0,
-                            _parallel_branch_mem_actuals(ctx, left=True) + pi0 + chx,
-                        )
-                    ],
-                    [
-                        ICall(
-                            f1,
-                            _parallel_branch_mem_actuals(ctx, left=False) + pi1 + chx,
-                        )
-                    ],
-                ]
+        left_mem_actuals = _parallel_branch_mem_actuals(ctx, left=True)
+        right_mem_actuals = _parallel_branch_mem_actuals(ctx, left=False)
+        lh, ls = _fresh_par_branch_stack_pair(ctx)
+        rh, rs = _fresh_par_branch_stack_pair(ctx)
+        left_args = left_mem_actuals + pi0 + chx + [lh, ls]
+        right_args = right_mem_actuals + pi1 + chx + [rh, rs]
+        left_call = ICall(f0, left_args)
+        right_call = ICall(f1, right_args)
+        post: list[Instr] = []
+        post.extend(
+            _parallel2_retvalue_copies_to_addr_taken(
+                ctx, f0, raw0, mem_partition_index=0
             )
-        ]
+        )
+        post.extend(
+            _parallel2_retvalue_copies_to_addr_taken(
+                ctx, f1, raw1, mem_partition_index=1
+            )
+        )
+        if recursive_fallback:
+            return pre + [IComment("parallel2 ricorsivo: fallback sequenziale"), left_call, right_call] + post
+        par = IPar([[left_call], [right_call]])
+        return pre + [par] + post
 
     if nm == "pthread_mutex_init":
         if len(exprs) != 2:
@@ -2584,7 +2845,9 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.append(ICall("__mn_putd", [op.name]))
+                    out.append(
+                        ICall("__mn_putd", [op.name] + _kairos_stack_actuals(ctx))
+                    )
                     tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError(f"printf %{k}: espressione non valida")
@@ -2607,7 +2870,9 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.append(ICall("__mn_putx", [op.name]))
+                    out.append(
+                        ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx))
+                    )
                     tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError("printf %x: espressione non valida")
@@ -2635,7 +2900,9 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.append(ICall("__mn_putx", [op.name]))
+                    out.append(
+                        ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx))
+                    )
                     tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError("printf %p: espressione non valida")
@@ -3314,7 +3581,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pa, a_name, ca = _eval_to_arg_var(expr.left, ctx)
             pb, b_name, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
-            pre = pa + pb + [ICall("__mn_mul_into", [t, a_name, b_name])]
+            pre = pa + pb + [
+                ICall(
+                    "__mn_mul_into",
+                    [t, a_name, b_name] + _kairos_stack_actuals(ctx),
+                )
+            ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
                 ctx.use_scratch = True
@@ -3329,7 +3601,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 pa
                 + pb
                 + [IHistPush(ctx.hist, t_a), IAddEq(t_a, Var(va))]
-                + [ICall("__mn_divmod_nonneg", [t_a, vb, t_q, t_r])]
+                + [
+                    ICall(
+                        "__mn_divmod_nonneg",
+                        [t_a, vb, t_q, t_r] + _kairos_stack_actuals(ctx),
+                    )
+                ]
             )
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_r, t_a])]
             ctx.use_hist = True
@@ -3344,7 +3621,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 pa
                 + pb
                 + [IHistPush(ctx.hist, t_a), IAddEq(t_a, Var(va))]
-                + [ICall("__mn_mod_nonneg", [t_a, vb, t_r])]
+                + [
+                    ICall(
+                        "__mn_mod_nonneg",
+                        [t_a, vb, t_r] + _kairos_stack_actuals(ctx),
+                    )
+                ]
             )
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_a])]
             ctx.use_hist = True
@@ -3354,7 +3636,9 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
-            pre = pa + pb + [ICall("__mn_and_into", [t, va, vb])]
+            pre = pa + pb + [
+                ICall("__mn_and_into", [t, va, vb] + _kairos_stack_actuals(ctx))
+            ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
                 ctx.use_scratch = True
@@ -3363,7 +3647,9 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
-            pre = pa + pb + [ICall("__mn_or_into", [t, va, vb])]
+            pre = pa + pb + [
+                ICall("__mn_or_into", [t, va, vb] + _kairos_stack_actuals(ctx))
+            ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
                 ctx.use_scratch = True
@@ -3372,7 +3658,9 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
-            pre = pa + pb + [ICall("__mn_shl_into", [t, va, vb])]
+            pre = pa + pb + [
+                ICall("__mn_shl_into", [t, va, vb] + _kairos_stack_actuals(ctx))
+            ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
                 ctx.use_scratch = True
@@ -3381,7 +3669,9 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
-            pre = pa + pb + [ICall("__mn_shr_into", [t, va, vb])]
+            pre = pa + pb + [
+                ICall("__mn_shr_into", [t, va, vb] + _kairos_stack_actuals(ctx))
+            ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
                 ctx.use_scratch = True
@@ -3407,7 +3697,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 raise MnemoCompileError("malloc deve restituire un puntatore (void* / int*)")
             _register_ptr_pool_locals(ctx)
             t = ctx.fresh_temp()
-            ins = [ICall("__mn_pool_alloc", [_PTR_POOL_CTR, t])]
+            ins = [
+                ICall(
+                    "__mn_pool_alloc",
+                    [_PTR_POOL_CTR, t] + _kairos_stack_actuals(ctx),
+                )
+            ]
             return ins, Var(t), [t]
         if name not in ctx.extern_procs:
             raise MnemoCompileError(
@@ -3756,6 +4051,43 @@ def _resolve_pi_channel_endpoint(expr: c.Node, ctx: _Ctx) -> str:
     )
 
 
+def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
+    """
+    `uncall` sul bytecode generato da Mnemo può fare POP su storico vuoto se il callee
+    contiene costrutti non invertibili con la VM Kairos attuale (par, π, `from…until` con
+    `if` annidati, ecc.). Finché `invert_op_to_line` non garantisce identità sugli stack
+    per questo lowering, si esclude dall'ottimizzazione.
+    """
+
+    def rec(seq: list[Instr]) -> bool:
+        for ins in seq:
+            if isinstance(ins, IPar):
+                if any(rec(br) for br in ins.branches):
+                    return True
+            elif isinstance(ins, IIfKairos):
+                if rec(ins.then_instrs):
+                    return True
+                if ins.else_instrs is not None and rec(ins.else_instrs):
+                    return True
+            elif isinstance(ins, IFromUntilKairos):
+                return True
+            elif isinstance(ins, ILocalBlock):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, (ISsend, ISrecv)):
+                return True
+        return False
+
+    return rec(instrs)
+
+
+def _user_procedure_uncall_excluded_via_vm(fn: Function) -> bool:
+    """True ⇒ non applicare --opt-uncall-user-calls alle chiamate verso fn."""
+    return any(
+        _instr_list_uncall_unsafe_via_vm(b.instrs) for b in fn.blocks
+    )
+
+
 def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
     if isinstance(expr, c.UnaryOp) and expr.op == "&" and isinstance(expr.expr, c.ID):
         return _phys(ctx, expr.expr.name)
@@ -3908,6 +4240,45 @@ def _lower_funccall_with_ret(
                 pre_uc.extend(_lower_assign(dst, ex, ctx))
             mem_args = [f"__mn_mem{i}" for i in range(layout.total_cells)]
             pi_suffix = _call_pi_channel_kairos_names(callee_fd, orig_exprs, ctx)
+            ctx.use_hist = True
+            chx = _file_scope_channel_actuals(ctx)
+            stk = _kairos_stack_actuals(ctx)
+            rec = _func_is_recursive_user(ctx.file_ast, name)
+            ir_blk = name in ctx.uncall_excluded_via_vm_targets
+            apply_uncall_opt = (
+                ctx.opt_uncall_user_calls
+                and wants
+                and ret_sink is not None
+                and rw_c >= 1
+                and ctx.fn_name == "main"
+                and not rec
+                and not ir_blk
+            )
+            apply_void_uncall_opt = (
+                ctx.opt_uncall_user_calls
+                and not wants
+                and ret_sink is None
+                and rw_c == 0
+                and ctx.fn_name == "main"
+                and not rec
+                and not ir_blk
+            )
+            ret_snap_temps: list[tuple[str, str]] = []
+            opt_mid: list[Instr] = []
+            if apply_uncall_opt:
+                rnames_snap = _ret_slot_names(rw_c)
+                for rn in rnames_snap:
+                    ri_snap = layout.slot_of[(name, rn)]
+                    rphys = f"__mn_mem{ri_snap}"
+                    t_snap = ctx.fresh_temp()
+                    opt_mid.append(IXorEq(t_snap, Var(rphys)))
+                    ret_snap_temps.append((rn, t_snap))
+                opt_mid.append(
+                    IUncall(
+                        name,
+                        mem_args + pi_suffix + chx + stk,
+                    )
+                )
             post_uc: list[Instr] = []
             if wants and ret_sink is not None:
                 rnames = _ret_slot_names(rw_c)
@@ -3919,11 +4290,16 @@ def _lower_funccall_with_ret(
                             f"{name}: ritorno di {rw_c} parole: usare "
                             f"`struct s = {name}(…);` o `return {name}(…)`"
                         )
-                    ri = layout.slot_of[(name, rnames[0])]
-                    rphys = f"__mn_mem{ri}"
-                    post_uc.extend(
-                        _lower_assign(ret_sink, c.ID(rphys, coord), ctx)
-                    )
+                    src_id = None
+                    if apply_uncall_opt:
+                        src_id = next(
+                            (t for rn, t in ret_snap_temps if rn == rnames[0]),
+                            None,
+                        )
+                    if src_id is None:
+                        ri = layout.slot_of[(name, rnames[0])]
+                        src_id = f"__mn_mem{ri}"
+                    post_uc.extend(_lower_assign(ret_sink, c.ID(src_id, coord), ctx))
                 else:
                     if len(ret_sink) != rw_c:
                         raise MnemoCompileError(
@@ -3931,14 +4307,21 @@ def _lower_funccall_with_ret(
                             f"ne ho {len(ret_sink)}"
                         )
                     for dst, rn in zip(ret_sink, rnames):
-                        ri = layout.slot_of[(name, rn)]
-                        rphys = f"__mn_mem{ri}"
-                        post_uc.extend(
-                            _lower_assign(dst, c.ID(rphys, coord), ctx)
-                        )
-            ctx.use_hist = True
-            chx = _file_scope_channel_actuals(ctx)
-            return pre_uc + [ICall(name, mem_args + pi_suffix + chx)] + post_uc
+                        src_id = None
+                        if apply_uncall_opt:
+                            src_id = next(
+                                (t for k, t in ret_snap_temps if k == rn), None
+                            )
+                        if src_id is None:
+                            ri = layout.slot_of[(name, rn)]
+                            src_id = f"__mn_mem{ri}"
+                        post_uc.extend(_lower_assign(dst, c.ID(src_id, coord), ctx))
+            call_uc: list[Instr] = [ICall(name, mem_args + pi_suffix + chx + stk)]
+            if apply_uncall_opt:
+                call_uc.extend(opt_mid)
+            elif apply_void_uncall_opt:
+                call_uc.append(IUncall(name, mem_args + pi_suffix + chx + stk))
+            return pre_uc + call_uc + post_uc
 
     if wants and ret_sink is None:
         raise MnemoCompileError(f"{name} restituisce un valore: uso interno errato")
@@ -3975,7 +4358,7 @@ def _lower_funccall_with_ret(
     if to_clear:
         ctx.use_scratch = True
     post = [IHistPush(ctx.scratch, t) for t in reversed(to_clear)]
-    return pre + [ICall(name, arg_names)] + post
+    return pre + [ICall(name, arg_names + _kairos_stack_actuals(ctx))] + post
 
 
 def _lower_return_aggregate(expr: c.Node, ctx: _Ctx) -> list[Instr]:
@@ -4348,6 +4731,16 @@ def _truth_lc_incr(ctx: _Ctx, lc: str) -> list[Instr]:
     return [IHistPush(ctx.hist, lc), IAddEq(lc, Imm(1))]
 
 
+def _truth_lc_keep(ctx: _Ctx, lc: str) -> list[Instr]:
+    """
+    Ramo else bilanciato rispetto a _truth_lc_incr: sempre push(lc, hist) e add 0 su lc,
+    così invertendo la VM non deve distinguere dal then che aveva lc+=1 dopo lo stesso push.
+    """
+
+    ctx.use_hist = True
+    return [IHistPush(ctx.hist, lc), IAddEq(lc, Imm(0))]
+
+
 def _lower_if_from_expr(
     expr: c.Node,
     then_instrs: list[Instr],
@@ -4388,7 +4781,15 @@ def _build_truth_incr_lc(expr: c.Node, lc: str, ctx: _Ctx) -> list[Instr]:
         )
     pre, g, tm = _lower_predicate_simple(expr, ctx)
     lh, op, rh = g
-    out: list[Instr] = pre + [IIfKairos(lh, op, rh, _truth_lc_incr(ctx, lc), None)]
+    out: list[Instr] = pre + [
+        IIfKairos(
+            lh,
+            op,
+            rh,
+            _truth_lc_incr(ctx, lc),
+            _truth_lc_keep(ctx, lc),
+        )
+    ]
     _append_cond_cleanup(out, ctx, tm)
     return out
 
@@ -5357,7 +5758,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         node, nm = _resolve_indirect_callee(node, ctx)
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
-            if ctx.is_main and nm == "mnemo_pthread_parallel2":
+            if nm == "mnemo_pthread_parallel2" and any(
+                isinstance(ins, IPar) for ins in pthread_ins
+            ):
                 ctx.after_par_join = True
             return pthread_ins
         if ctx.proc_returns_int.get(nm, False):
@@ -5645,7 +6048,7 @@ def _register_file_scope_struct_union_tags(
             ctx.struct_tag_of_var[vn] = st_tag
 
 
-def _locals_list(ctx: _Ctx) -> list[tuple[str, str]]:
+def _locals_list(ctx: _Ctx, *, for_main: bool = True) -> list[tuple[str, str]]:
     locals_list: list[tuple[str, str]] = []
     for n in ctx.decl_order:
         locals_list.append(("int", n))
@@ -5656,9 +6059,13 @@ def _locals_list(ctx: _Ctx) -> list[tuple[str, str]]:
         key=lambda s: int(s[6:]),
     ):
         locals_list.append(("int", n))
-    if ctx.use_hist:
+    for pn in ctx.par_branch_stack_names:
+        locals_list.append(("stack", pn))
+    if for_main:
+        # Ogni `ICall` a procedure user/lib passa `_kairos_stack_actuals` (hist + scratch):
+        # `main` deve dichiararli sempre, anche se `use_scratch` non è mai stato impostato
+        # (la VM segnala `__mn_scratch` non def se solo la procedura callee usa scratch).
         locals_list.append(("stack", ctx.hist))
-    if ctx.use_scratch:
         locals_list.append(("stack", ctx.scratch))
     return locals_list
 
@@ -5788,10 +6195,17 @@ def _lower_user_function(
     ch_formals = [
         ("channel", ctx.channel_kairos[m]) for m in ctx.file_scope_channel_order
     ]
+    stack_formals: list[tuple[str, str]] = [
+        ("stack", ctx.hist),
+        ("stack", ctx.scratch),
+    ]
     return Function(
         name=name,
-        params=[("int", p) for p in param_order] + ch_pi_formals + ch_formals,
-        locals=_locals_list(ctx),
+        params=[("int", p) for p in param_order]
+        + ch_pi_formals
+        + ch_formals
+        + stack_formals,
+        locals=_locals_list(ctx, for_main=False),
         blocks=[Block("entry", [IComment(f"funzione C {name}")] + instrs)],
     )
 
@@ -5803,6 +6217,7 @@ def lower_file_to_program(
     ptr_pool_size: int = 4,
     layout: ProgramMemLayout | None = None,
     physical_mem_cells: int | None = None,
+    opt_uncall_user_calls: bool = False,
 ) -> Program:
     if not (1 <= ptr_pool_size <= PTR_POOL_MAX):
         raise MnemoCompileError(
@@ -5883,6 +6298,10 @@ def lower_file_to_program(
                 )
             )
 
+    bad_uncall_via_vm = frozenset(
+        fn.name for fn in user_fns if _user_procedure_uncall_excluded_via_vm(fn)
+    )
+
     main_phys = (
         phys
         if (
@@ -5912,6 +6331,8 @@ def lower_file_to_program(
         physical_mem_cells=main_phys,
         heap_base=layout.heap_base,
         defined_user_functions=du,
+        opt_uncall_user_calls=opt_uncall_user_calls,
+        uncall_excluded_via_vm_targets=bad_uncall_via_vm,
     )
     _bind_ctx_layout(ctx, layout, "main")
     ctx.file_scope_channel_order = fs_ch_order

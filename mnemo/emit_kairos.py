@@ -7,12 +7,14 @@ v0: `main` con dichiarazioni `int` per le locals; altre procedure senza locals e
 
 from __future__ import annotations
 
+from mnemo.kairos_reserved import kairos_escape_id
 from mnemo.ir import (
     Function,
     Imm,
     IAddEq,
     IBranch,
     ICall,
+    IUncall,
     IComment,
     IConst,
     ICopy,
@@ -109,7 +111,13 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         return
     if isinstance(ins, ICall):
         args = ", ".join(ins.args)
-        lines.append(f"{indent}call {ins.proc}({args})")
+        pname = kairos_escape_id(ins.proc)
+        lines.append(f"{indent}call {pname}({args})")
+        return
+    if isinstance(ins, IUncall):
+        args = ", ".join(ins.args)
+        pname = kairos_escape_id(ins.proc)
+        lines.append(f"{indent}uncall {pname}({args})")
         return
     if isinstance(ins, ILabel):
         lines.append(f"{indent}// label {ins.name}")
@@ -178,6 +186,12 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     raise TypeError(ins)
 
 
+def _stack_names_from_fn(fn: Function) -> set[str]:
+    return {n for t, n in fn.locals if t == "stack"} | {
+        n for t, n in fn.params if t == "stack"
+    }
+
+
 def _emit_main(fn: Function) -> str:
     """
     Tutti gli interi di procedura: `local int … = 0`; in coda `push` (azzera) e `delocal int … = 0`.
@@ -186,7 +200,7 @@ def _emit_main(fn: Function) -> str:
     """
     lines: list[str] = ["procedure main()"]
     stacks = [(t, n) for t, n in fn.locals if t == "stack"]
-    stack_names = {n for _t, n in stacks}
+    stack_names = _stack_names_from_fn(fn)
     channels = [(t, n) for t, n in fn.locals if t == "channel"]
     ints = [(t, n) for t, n in fn.locals if t == "int"]
     hist = "__mn_hist"
@@ -233,12 +247,15 @@ def _emit_procedure(fn: Function) -> str:
     for typ, name in fn.params:
         if typ == "channel":
             param_parts.append(f"channel {name}")
+        elif typ == "stack":
+            param_parts.append(f"stack {name}")
         else:
             param_parts.append(f"int {name}")
     params = ", ".join(param_parts)
-    lines: list[str] = [f"procedure {fn.name}({params})"]
+    pname = kairos_escape_id(fn.name)
+    lines: list[str] = [f"procedure {pname}({params})"]
     stacks = [(t, n) for t, n in fn.locals if t == "stack"]
-    stack_names = {n for _t, n in stacks}
+    stack_names = _stack_names_from_fn(fn)
     channels = [(t, n) for t, n in fn.locals if t == "channel"]
     ints = [(t, n) for t, n in fn.locals if t == "int"]
     hist = "__mn_hist"

@@ -169,9 +169,11 @@ mnemo dump-kairos sorgente.c --stdout
 mnemo compile sorgente.c -v                 # stampa comando gcc e path
 mnemo compile sorgente.c --main-argc N
 mnemo compile sorgente.c --ptr-pool-size N  # default 4; tetto in kairos_limits.py
+mnemo compile sorgente.c --opt-uncall-user-calls  # main→f (f non ricorsiva): XOR risultato + uncall dopo call
 
 mnemo run sorgente.c
 mnemo run sorgente.c --main-argc N --ptr-pool-size N -v
+mnemo run sorgente.c --opt-uncall-user-calls
 mnemo run sorgente.c --kairosapp /percorso/kairosapp
 
 mnemo dump-ir
@@ -219,7 +221,9 @@ file.c
 [ python -m src.kairos ]  ──  frontend Kairos → bytecode → libvm.so
 ```
 
-L’**IR** è definito in `mnemo/ir.py` (costanti, `+=`/`-=`, `IHistPush`, `IIfKairos`, `IFromUntilKairos`, `ILocalBlock`, `IPar`, canali, ecc.).
+L’**IR** è definito in `mnemo/ir.py` (costanti, `+=`/`-=`, `IHistPush`, `IIfKairos`, `IFromUntilKairos`, `ILocalBlock`, `IPar`, `IUncall`, canali, ecc.). Opzione **`--opt-uncall-user-calls`**: chiamate **`main` → `f`** con `f` nel medesimo `.c`, **`f` non ricorsiva**, e corpo senza cicli Kairos **`from…until`** (l’inversore `invert_op_to_line` in `vm_invert.h` della VM Kairos può ancora non ripristinare **`__mn_hist`** / **`__mn_scratch`** al termine della procedura quando il corpo abbina **`from`** e **`if`**, ad esempio dopo un **`for`**), né **`par`**, **`ssend`/`srecv`**: allora **`void f()`** → `call f` + `uncall f`; **`int f()`** → `call f`, XOR del risultato in un temporaneo, `uncall f`, poi lettura dal temp. Ricorsione diretta o `parallel2(f, f, …)` sempre escluse ([`fib`](c_test/fib.c)). Esempi: [`c_test/uncall_smoke.c`](c_test/uncall_smoke.c), [`c_test/uncall_id.c`](c_test/uncall_id.c).
+
+- `mnemo_pthread_parallel2`: con **due worker distinti nel file** viene emesso Kairos **`par`** e la memoria viene raddoppiata a **`2·S`** celle (`compile.py`). Con **`parallel2(f, f, …)` dentro lo stesso `f`**, ogni ricorsione che entrasse davvero in `par` richiederebbe altre partizioni sulla metà disponibile ⇒ in generale **`O(2^profondità)`** celle; allochiamo solo **`2·S`**, quindi quel caso resta **sequenziale** (due `call` in serie) così risultati restano corretti (`c_test/fib.c`).
 
 ---
 

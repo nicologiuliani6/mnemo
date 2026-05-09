@@ -1,14 +1,14 @@
 // Stampa intero non negativo in esadecimale minuscolo.
 // Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
 
-procedure __mn_putx_uint(int n)
+procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
     local int base = 0
     base += 16
     local int qu = 0
     local int rem = 0
     if n >= base then
-        call __mn_divmod_nonneg(n, base, qu, rem)
-        call __mn_putx_uint(qu)
+        call __mn_divmod_nonneg(n, base, qu, rem, __mn_hist, __mn_scratch)
+        call __mn_putx_uint(qu, __mn_hist, __mn_scratch)
         local int ch = 0
         local int ten = 0
         ten += 10
@@ -29,7 +29,7 @@ procedure __mn_putx_uint(int n)
         delocal int ten = 0
         delocal int ch = 0
         local int prod = 0
-        call __mn_mul_into(prod, qu, base)
+        call __mn_mul_into(prod, qu, base, __mn_hist, __mn_scratch)
         n += prod
         n += rem
         from prod > 0 loop
@@ -68,5 +68,5 @@ procedure __mn_putx_uint(int n)
     delocal int qu = 0
     delocal int base = 0
 
-procedure __mn_putx(int n)
-    call __mn_putx_uint(n)
+procedure __mn_putx(int n, stack __mn_hist, stack __mn_scratch)
+    call __mn_putx_uint(n, __mn_hist, __mn_scratch)

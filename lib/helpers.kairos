@@ -1,7 +1,7 @@
 // Sposta il valore di src in dst (src azzerato) usando uno stack locale come "garbage" / condotto.
 // La VM implementa `pop(dst, …)` come `*dst += valore`: per sostituire dst, azzeralo prima con
 // `push(dst, hist)` sullo stack Janus del caller, poi `call __mn_move_int(dst, src)`.
-procedure __mn_move_int(int dst, int src)
+procedure __mn_move_int(int dst, int src, stack __mn_hist, stack __mn_scratch)
     local stack __mn_g = nil
     push(src, __mn_g)
     pop(dst, __mn_g)

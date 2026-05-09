@@ -110,7 +110,11 @@ KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA = "// KAIROS_ALLOW_PAR_SHARED_INT\n"
 
 
 def compile_c_to_kairos(
-    path: str, *, main_argc: int | None = None, ptr_pool_size: int = 4
+    path: str,
+    *,
+    main_argc: int | None = None,
+    ptr_pool_size: int = 4,
+    opt_uncall_user_calls: bool = False,
 ) -> str:
     try:
         with open(path, encoding="utf-8") as f:
@@ -146,6 +150,7 @@ def compile_c_to_kairos(
         ptr_pool_size=ptr_pool_size,
         layout=layout,
         physical_mem_cells=physical_mem_cells,
+        opt_uncall_user_calls=opt_uncall_user_calls,
     )
     prog = maybe_inline_user_functions(
         ast, prog, total_mem_cells=layout.total_cells

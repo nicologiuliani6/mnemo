@@ -3,30 +3,29 @@
 // Convenzione: gli *_into fanno dst += f(...) assumendo dst partenza dal caller.
 
 // Chiamate con divisore 2: le `call` Kairos accettano solo identificatori, non `2` letterale.
-procedure __mn_divmod_nonneg_div2(int a, int q, int r)
+procedure __mn_divmod_nonneg_div2(int a, int q, int r, stack __mn_hist, stack __mn_scratch)
     local int two = 0
     two += 1
     two += 1
-    call __mn_divmod_nonneg(a, two, q, r)
+    call __mn_divmod_nonneg(a, two, q, r, __mn_hist, __mn_scratch)
     delocal int two = 2
 
 // q = floor(t/2) con semantica divisione intera C su int; azzera t.
-procedure __mn_floor_div2_signed(int t, int q)
-    stack __mn_hist
+procedure __mn_floor_div2_signed(int t, int q, stack __mn_hist, stack __mn_scratch)
     local int r = 0
     if t >= 0 then
-        call __mn_divmod_nonneg_div2(t, q, r)
+        call __mn_divmod_nonneg_div2(t, q, r, __mn_hist, __mn_scratch)
     else
         local int u = 0
         u -= t
         u += 1
-        call __mn_divmod_nonneg_div2(u, q, r)
+        call __mn_divmod_nonneg_div2(u, q, r, __mn_hist, __mn_scratch)
         local int z = 0
         z -= q
         push(q, __mn_hist)
-        call __mn_move_int(q, z)
+        call __mn_move_int(q, z, __mn_hist, __mn_scratch)
         local int sink = 0
-        call __mn_move_int(sink, t)
+        call __mn_move_int(sink, t, __mn_hist, __mn_scratch)
         push(sink, __mn_hist)
         delocal int sink = 0
         push(z, __mn_hist)
@@ -38,15 +37,14 @@ procedure __mn_floor_div2_signed(int t, int q)
     delocal int r = 0
 
 // Bit k (0=LSB) dopo k shift aritmetici su a (semantica come int C).
-procedure __mn_bit_k_signed(int a, int k, int bit_out)
-    stack __mn_hist
+procedure __mn_bit_k_signed(int a, int k, int bit_out, stack __mn_hist, stack __mn_scratch)
     local int t = 0
     t += a
     local int i = 0
     from i < k loop
         i += 1
         local int q = 0
-        call __mn_floor_div2_signed(t, q)
+        call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
         t += q
         push(q, __mn_hist)
         delocal int q = 0
@@ -54,12 +52,12 @@ procedure __mn_bit_k_signed(int a, int k, int bit_out)
     local int qf = 0
     local int rf = 0
     if t >= 0 then
-        call __mn_divmod_nonneg_div2(t, qf, rf)
+        call __mn_divmod_nonneg_div2(t, qf, rf, __mn_hist, __mn_scratch)
         bit_out += rf
     else
         local int u = 0
         u -= t
-        call __mn_divmod_nonneg_div2(u, qf, rf)
+        call __mn_divmod_nonneg_div2(u, qf, rf, __mn_hist, __mn_scratch)
         bit_out += rf
         push(u, __mn_hist)
         delocal int u = 0
@@ -74,15 +72,14 @@ procedure __mn_bit_k_signed(int a, int k, int bit_out)
     delocal int t = 0
 
 // dst += (a & b) — bit-a-bit su 31 iterazioni (LSB… , come interi con bit signed).
-procedure __mn_and_into(int dst, int a, int b)
-    stack __mn_hist
+procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
     from k < 31 loop
         local int abit = 0
         local int bbit = 0
-        call __mn_bit_k_signed(a, k, abit)
-        call __mn_bit_k_signed(b, k, bbit)
+        call __mn_bit_k_signed(a, k, abit, __mn_hist, __mn_scratch)
+        call __mn_bit_k_signed(b, k, bbit, __mn_hist, __mn_scratch)
         if abit != 0 then
             if bbit != 0 then
                 dst += pow
@@ -93,7 +90,7 @@ procedure __mn_and_into(int dst, int a, int b)
         next_pow += pow
         next_pow += pow
         push(pow, __mn_hist)
-        call __mn_move_int(pow, next_pow)
+        call __mn_move_int(pow, next_pow, __mn_hist, __mn_scratch)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
         push(bbit, __mn_hist)
@@ -107,15 +104,14 @@ procedure __mn_and_into(int dst, int a, int b)
     delocal int k = 0
 
 // dst += (a | b)
-procedure __mn_or_into(int dst, int a, int b)
-    stack __mn_hist
+procedure __mn_or_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
     from k < 31 loop
         local int abit = 0
         local int bbit = 0
-        call __mn_bit_k_signed(a, k, abit)
-        call __mn_bit_k_signed(b, k, bbit)
+        call __mn_bit_k_signed(a, k, abit, __mn_hist, __mn_scratch)
+        call __mn_bit_k_signed(b, k, bbit, __mn_hist, __mn_scratch)
         local int s = 0
         s += abit
         s += bbit
@@ -127,7 +123,7 @@ procedure __mn_or_into(int dst, int a, int b)
         next_pow += pow
         next_pow += pow
         push(pow, __mn_hist)
-        call __mn_move_int(pow, next_pow)
+        call __mn_move_int(pow, next_pow, __mn_hist, __mn_scratch)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
         push(s, __mn_hist)
@@ -145,8 +141,7 @@ procedure __mn_or_into(int dst, int a, int b)
 // dst += (x << n), n >= 0
 // `pop` nella VM fa `dst += valore`: prima di __mn_move_int(dst, src) va azzerato
 // `dst` con push(dst, stack), altrimenti pow diventa 1+2=3 e x<<1 diventa x*3.
-procedure __mn_shl_into(int dst, int x, int n)
-    stack __mn_hist
+procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scratch)
     local int pow = 1
     local int i = 0
     from i < n loop
@@ -155,26 +150,25 @@ procedure __mn_shl_into(int dst, int x, int n)
         np += pow
         np += pow
         push(pow, __mn_hist)
-        call __mn_move_int(pow, np)
+        call __mn_move_int(pow, np, __mn_hist, __mn_scratch)
         push(np, __mn_hist)
         delocal int np = 0
     until i == n
-    call __mn_mul_into(dst, x, pow)
+    call __mn_mul_into(dst, x, pow, __mn_hist, __mn_scratch)
     push(i, __mn_hist)
     delocal int i = 0
     push(pow, __mn_hist)
     delocal int pow = 0
 
 // dst += (x >> n) aritmetico
-procedure __mn_shr_into(int dst, int x, int n)
-    stack __mn_hist
+procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scratch)
     local int t = 0
     t += x
     local int i = 0
     from i < n loop
         i += 1
         local int q = 0
-        call __mn_floor_div2_signed(t, q)
+        call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
         t += q
         push(q, __mn_hist)
         delocal int q = 0

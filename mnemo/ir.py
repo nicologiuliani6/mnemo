@@ -107,6 +107,12 @@ class ICall:
 
 
 @dataclass
+class IUncall:
+    proc: str
+    args: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ILabel:
     name: str
 
@@ -208,6 +214,7 @@ Instr = Union[
     IHistPush,
     IStoreRev,
     ICall,
+    IUncall,
     ILabel,
     IBranch,
     IJump,
@@ -235,7 +242,7 @@ class Block:
 @dataclass
 class Function:
     name: str
-    params: list[tuple[str, str]]  # (tipo_ir, nome) es. ("int", "x")
+    params: list[tuple[str, str]]  # ("int"|"channel"|"stack", nome)
     locals: list[tuple[str, str]] = field(default_factory=list)  # variabili locali dichiarate
     blocks: list[Block] = field(default_factory=list)
 

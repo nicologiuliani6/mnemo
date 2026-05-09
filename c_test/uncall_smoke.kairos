@@ -1,0 +1,24 @@
+procedure noop(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, stack __mn_hist, stack __mn_scratch)
+    // funzione C noop
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    local int __mn_mem0 = 0
+    local int __mn_mem1 = 0
+    local int __mn_mem2 = 0
+    local int __mn_mem3 = 0
+    local int __mn_exit = 0
+        // generato da Mnemo da C
+        call noop(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_hist, __mn_scratch)
+        uncall noop(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_hist, __mn_scratch)
+        // return
+    push(__mn_exit, __mn_hist)
+    delocal int __mn_exit = 0
+    push(__mn_mem3, __mn_hist)
+    delocal int __mn_mem3 = 0
+    push(__mn_mem2, __mn_hist)
+    delocal int __mn_mem2 = 0
+    push(__mn_mem1, __mn_hist)
+    delocal int __mn_mem1 = 0
+    push(__mn_mem0, __mn_hist)
+    delocal int __mn_mem0 = 0
