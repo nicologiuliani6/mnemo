@@ -287,13 +287,12 @@ def _parse_main_exit_from_kairos_stdout(stdout: str) -> int | None:
     """
     head, sep, _ = stdout.partition("=== VM dump ===")
     block = head if sep else stdout
-    m = re.search(
-        r"^(__mn_exit|__mn_mem\d+):\s*(-?\d+)\s*$",
-        block,
-        re.MULTILINE,
-    )
-    if m:
-        return int(m.group(2))
+    # Solo __mn_exit: con --opt-uncall-user-calls compaiono molte righe tipo __mn_memN (show)
+    # prima del return da main — il primo match altrimenti darebbe codice di uscita errato (es. 245).
+    for line in block.splitlines():
+        m = re.match(r"^__mn_exit:\s*(-?\d+)\s*$", line)
+        if m:
+            return int(m.group(1))
     return None
 
 

@@ -104,6 +104,36 @@ def _program_uses_ptr_pool(prog: Program) -> bool:
     return False
 
 
+def _instr_list_uses_floor_snap_instr(instrs: list[Instr]) -> bool:
+    stack: list[list[Instr]] = [instrs]
+    while stack:
+        cur = stack.pop()
+        for ins in cur:
+            if isinstance(ins, ICall) and ins.proc == "__mn_hist_floor_snap":
+                return True
+            if isinstance(ins, IIfKairos):
+                stack.append(ins.then_instrs or [])
+                if ins.else_instrs:
+                    stack.append(ins.else_instrs)
+            elif isinstance(ins, IFromUntilKairos):
+                stack.append(ins.body_instrs or [])
+            elif isinstance(ins, ILocalBlock):
+                stack.append(ins.body_instrs or [])
+            elif isinstance(ins, IPar):
+                for br in ins.branches or []:
+                    stack.append(br)
+    return False
+
+
+def _program_uses_hist_floor_snap(prog: Program) -> bool:
+    """IR con `call __mn_hist_floor_snap` (--opt-uncall-user-calls) → prelude `mn_hist_floor_snap.kairos`."""
+    return any(
+        _instr_list_uses_floor_snap_instr(b.instrs)
+        for fn in prog.functions
+        for b in fn.blocks
+    )
+
+
 # Prima riga del .kairos: il frontend Kairos la rimuove e disattiva il check
 # «race su int nel PAR» (serve per variabili file-scope condivise + mutex Mnemo).
 KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA = "// KAIROS_ALLOW_PAR_SHARED_INT\n"
@@ -157,6 +187,8 @@ def compile_c_to_kairos(
     )
     if _program_uses_ptr_pool(prog):
         lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])
+    if _program_uses_hist_floor_snap(prog):
+        lib_names = _merge_lib_lists(["mn_hist_floor_snap.kairos"], lib_names)
     try:
         prelude = load_prelude_kairos(
             lib_names,

@@ -3,8 +3,7 @@
 // `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push
 // e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).
 
-procedure __mn_pool_alloc(int ctr, int out_slot)
-    stack __mn_hist
+procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)
     local int t = 0
         t += ctr
         push(out_slot, __mn_hist)
@@ -13,8 +12,7 @@ procedure __mn_pool_alloc(int ctr, int out_slot)
         push(t, __mn_hist)
     delocal int t = 0
 
-procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8)
-    stack __mn_hist
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += val
@@ -52,8 +50,7 @@ procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int _
         __mn_mem8 += val
     fi slot == 8
 
-procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int out)
-    stack __mn_hist
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int out, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         local int t = 0
             t += __mn_mem0
@@ -127,8 +124,7 @@ procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
         delocal int t = 0
     fi slot == 8
 
-procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int ctr)
-    stack __mn_hist
+procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int ctr, stack __mn_hist, stack __mn_scratch)
     local int ctr0 = 0
         ctr0 += ctr
         if slot == 0 then
@@ -215,9 +211,11 @@ procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
         push(ctr0, __mn_hist)
     delocal int ctr0 = 0
 
-procedure fib(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8)
-    stack __mn_hist
-    stack __mn_scratch
+procedure fib(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, stack __mn_hist, stack __mn_scratch)
+    stack __mn_pb0_hist
+    stack __mn_pb0_scratch
+    stack __mn_pb1_hist
+    stack __mn_pb1_scratch
     local int __mn_mem9 = 0
     local int __mn_mem10 = 0
     local int __mn_mem11 = 0
@@ -243,12 +241,12 @@ procedure fib(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __
         if __mn_mem0 <= 1 then
             push(__mn_e1, __mn_hist)
             __mn_e1 += __mn_mem1
-            call __mn_pool_load(__mn_e1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_e0)
+            call __mn_pool_load(__mn_e1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_e0, __mn_hist, __mn_scratch)
             __mn_e2 += __mn_e0
             __mn_e2 += 1
             push(__mn_e3, __mn_hist)
             __mn_e3 += __mn_mem1
-            call __mn_pool_store(__mn_e3, __mn_e2, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8)
+            call __mn_pool_store(__mn_e3, __mn_e2, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_hist, __mn_scratch)
             push(__mn_e3, __mn_scratch)
             push(__mn_e2, __mn_scratch)
             push(__mn_e0, __mn_scratch)
@@ -284,8 +282,8 @@ procedure fib(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __
             push(__mn_e6, __mn_scratch)
             push(__mn_e5, __mn_scratch)
             // parallel2 ricorsivo: fallback sequenziale
-            call fib(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8)
-            call fib(__mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17)
+            call fib(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_pb0_hist, __mn_pb0_scratch)
+            call fib(__mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_pb1_hist, __mn_pb1_scratch)
             push(__mn_mem3, __mn_hist)
             __mn_mem3 += __mn_mem2
             push(__mn_mem4, __mn_hist)
@@ -362,7 +360,7 @@ procedure main()
         __mn_mem1 += 0
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += 0
-        call fib(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8)
+        call fib(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_hist, __mn_scratch)
         push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem2
         push(__mn_exit, __mn_hist)

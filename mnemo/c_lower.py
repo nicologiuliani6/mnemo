@@ -556,7 +556,8 @@ class _Ctx:
     """Stack Janus distinti per ogni ramo di `par` (la VM rifiuta lo stesso id in due branch)."""
     par_branch_stack_uid: int = 0
     par_branch_stack_names: list[str] = field(default_factory=list)
-    # opt_uncall_user_calls: da main, call → xor-snapshot rit. → uncall (no ricorsione diretta/parallel2 f,f).
+    # opt_uncall_user_calls: call → snap XOR di tutti i __mn_mem* → uncall → ripristino valori
+    # post-call (xor-swap ×3); stack/canali kairos fuori dai mem non si snapshottano (uncall gestisce gli stack).
     opt_uncall_user_calls: bool = False
     """Nomi delle procedure dove l'IR (from/until, par, π) non tollera uncall con questa VM."""
     uncall_excluded_via_vm_targets: frozenset[str] = field(default_factory=frozenset)
@@ -4053,10 +4054,9 @@ def _resolve_pi_channel_endpoint(expr: c.Node, ctx: _Ctx) -> str:
 
 def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
     """
-    `uncall` sul bytecode generato da Mnemo può fare POP su storico vuoto se il callee
-    contiene costrutti non invertibili con la VM Kairos attuale (par, π, `from…until` con
-    `if` annidati, ecc.). Finché `invert_op_to_line` non garantisce identità sugli stack
-    per questo lowering, si esclude dall'ottimizzazione.
+    True se il callee contiene costrutti che l'inversore Kairos non deve elidere in
+    `call`+`uncall` (PAR, canali, …). Il corpo dei `from…until` viene ispezionato in
+    ricorsione come then/else degli `if`.
     """
 
     def rec(seq: list[Instr]) -> bool:
@@ -4070,9 +4070,15 @@ def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
                 if ins.else_instrs is not None and rec(ins.else_instrs):
                     return True
             elif isinstance(ins, IFromUntilKairos):
-                return True
+                if rec(ins.body_instrs):
+                    return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ICall):
+                # XOR+uncall ottimizzato su tutte le __mn_mem*: incompatibile col pool
+                # monolitico (__mn_pool_*), che condivide celle memoria con il chiamante.
+                if ins.proc.startswith("__mn_pool_"):
                     return True
             elif isinstance(ins, (ISsend, ISrecv)):
                 return True
@@ -4086,6 +4092,53 @@ def _user_procedure_uncall_excluded_via_vm(fn: Function) -> bool:
     return any(
         _instr_list_uncall_unsafe_via_vm(b.instrs) for b in fn.blocks
     )
+
+
+def _function_ir_calls_proc_in(fn: Function, names: set[str]) -> bool:
+    """True se il corpo IR contiene un ICall verso una delle `names`."""
+
+    def rec(seq: list[Instr]) -> bool:
+        for ins in seq:
+            if isinstance(ins, IPar):
+                if any(rec(br) for br in ins.branches):
+                    return True
+            elif isinstance(ins, IIfKairos):
+                if rec(ins.then_instrs):
+                    return True
+                if ins.else_instrs is not None and rec(ins.else_instrs):
+                    return True
+            elif isinstance(ins, IFromUntilKairos):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ILocalBlock):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ICall):
+                if ins.proc in names:
+                    return True
+        return False
+
+    return any(rec(b.instrs) for b in fn.blocks)
+
+
+def _uncall_excluded_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
+    """
+    Chiusura: direttamente unsafe (pool, par, …) oppure che chiama una funzione già
+    esclusa. Lo XOR ottimizzato su tutte le __mn_mem* non commuta con callees esclusi.
+    """
+    blocked: set[str] = {
+        n for n, f in probe_map.items() if _user_procedure_uncall_excluded_via_vm(f)
+    }
+    changed = True
+    while changed:
+        changed = False
+        for n, f in probe_map.items():
+            if n in blocked:
+                continue
+            if _function_ir_calls_proc_in(f, blocked):
+                blocked.add(n)
+                changed = True
+    return frozenset(blocked)
 
 
 def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
@@ -4250,7 +4303,6 @@ def _lower_funccall_with_ret(
                 and wants
                 and ret_sink is not None
                 and rw_c >= 1
-                and ctx.fn_name == "main"
                 and not rec
                 and not ir_blk
             )
@@ -4259,26 +4311,30 @@ def _lower_funccall_with_ret(
                 and not wants
                 and ret_sink is None
                 and rw_c == 0
-                and ctx.fn_name == "main"
                 and not rec
                 and not ir_blk
             )
-            ret_snap_temps: list[tuple[str, str]] = []
-            opt_mid: list[Instr] = []
-            if apply_uncall_opt:
-                rnames_snap = _ret_slot_names(rw_c)
-                for rn in rnames_snap:
-                    ri_snap = layout.slot_of[(name, rn)]
-                    rphys = f"__mn_mem{ri_snap}"
-                    t_snap = ctx.fresh_temp()
-                    opt_mid.append(IXorEq(t_snap, Var(rphys)))
-                    ret_snap_temps.append((rn, t_snap))
-                opt_mid.append(
-                    IUncall(
-                        name,
-                        mem_args + pi_suffix + chx + stk,
-                    )
+            uncall_with_restore: list[Instr] = []
+            snap_pairs: list[tuple[int, str]] = []
+            if apply_uncall_opt or apply_void_uncall_opt:
+                for kk in range(layout.total_cells):
+                    t_cell = ctx.fresh_temp()
+                    snap_pairs.append((kk, t_cell))
+                    uncall_with_restore.append(IXorEq(t_cell, Var(f"__mn_mem{kk}")))
+                uncall_with_restore.append(
+                    IUncall(name, mem_args + pi_suffix + chx + stk)
                 )
+                for kk, t_cell in snap_pairs:
+                    mk = f"__mn_mem{kk}"
+                    v_m = Var(mk)
+                    v_t = Var(t_cell)
+                    uncall_with_restore.extend(
+                        [
+                            IXorEq(mk, v_t),
+                            IXorEq(t_cell, v_m),
+                            IXorEq(mk, v_t),
+                        ]
+                    )
             post_uc: list[Instr] = []
             if wants and ret_sink is not None:
                 rnames = _ret_slot_names(rw_c)
@@ -4290,15 +4346,8 @@ def _lower_funccall_with_ret(
                             f"{name}: ritorno di {rw_c} parole: usare "
                             f"`struct s = {name}(…);` o `return {name}(…)`"
                         )
-                    src_id = None
-                    if apply_uncall_opt:
-                        src_id = next(
-                            (t for rn, t in ret_snap_temps if rn == rnames[0]),
-                            None,
-                        )
-                    if src_id is None:
-                        ri = layout.slot_of[(name, rnames[0])]
-                        src_id = f"__mn_mem{ri}"
+                    ri = layout.slot_of[(name, rnames[0])]
+                    src_id = f"__mn_mem{ri}"
                     post_uc.extend(_lower_assign(ret_sink, c.ID(src_id, coord), ctx))
                 else:
                     if len(ret_sink) != rw_c:
@@ -4307,20 +4356,15 @@ def _lower_funccall_with_ret(
                             f"ne ho {len(ret_sink)}"
                         )
                     for dst, rn in zip(ret_sink, rnames):
-                        src_id = None
-                        if apply_uncall_opt:
-                            src_id = next(
-                                (t for k, t in ret_snap_temps if k == rn), None
-                            )
-                        if src_id is None:
-                            ri = layout.slot_of[(name, rn)]
-                            src_id = f"__mn_mem{ri}"
+                        ri = layout.slot_of[(name, rn)]
+                        src_id = f"__mn_mem{ri}"
                         post_uc.extend(_lower_assign(dst, c.ID(src_id, coord), ctx))
-            call_uc: list[Instr] = [ICall(name, mem_args + pi_suffix + chx + stk)]
-            if apply_uncall_opt:
-                call_uc.extend(opt_mid)
-            elif apply_void_uncall_opt:
-                call_uc.append(IUncall(name, mem_args + pi_suffix + chx + stk))
+            call_uc: list[Instr] = []
+            if apply_uncall_opt or apply_void_uncall_opt:
+                call_uc.append(ICall("__mn_hist_floor_snap", [ctx.hist]))
+            call_uc.append(ICall(name, mem_args + pi_suffix + chx + stk))
+            if apply_uncall_opt or apply_void_uncall_opt:
+                call_uc.extend(uncall_with_restore)
             return pre_uc + call_uc + post_uc
 
     if wants and ret_sink is None:
@@ -6086,6 +6130,8 @@ def _lower_user_function(
     file_enums: dict[str, int],
     file_scope_channel_order: tuple[str, ...] = (),
     file_scope_channel_kairos: dict[str, str] | None = None,
+    opt_uncall_user_calls: bool = False,
+    uncall_excluded_via_vm_targets: frozenset[str] = frozenset(),
 ) -> Function:
     name = fdef.decl.name
     fd = fdef.decl.type
@@ -6121,6 +6167,8 @@ def _lower_user_function(
         physical_mem_cells=physical_mem_cells,
         heap_base=layout.heap_base,
         defined_user_functions=defined_user_functions,
+        opt_uncall_user_calls=opt_uncall_user_calls,
+        uncall_excluded_via_vm_targets=uncall_excluded_via_vm_targets,
     )
     _bind_ctx_layout(ctx, layout, name)
     ctx.file_scope_channel_order = file_scope_channel_order
@@ -6263,7 +6311,7 @@ def lower_file_to_program(
             f"physical_mem_cells ({phys}) < layout.total_cells ({layout.total_cells})"
         )
 
-    user_fns: list[Function] = []
+    user_fn_specs: list[tuple[c.FuncDef, int]] = []
     for ext in ast.ext:
         if isinstance(ext, c.FuncDef) and ext.decl.name != "main":
             fname = ext.decl.name or ""
@@ -6279,28 +6327,40 @@ def lower_file_to_program(
             fn_phys = (
                 phys if (needs_par_body or needs_par1_read) else layout.total_cells
             )
-            user_fns.append(
-                _lower_user_function(
-                    ext,
-                    callable_names,
-                    proc_returns_int,
-                    defined_user_functions=du,
-                    layout=layout,
-                    file_ast=ast,
-                    ptr_pool_size=ptr_pool_size,
-                    physical_mem_cells=fn_phys,
-                    file_td=file_td,
-                    file_specs=file_specs,
-                    file_unions=file_unions,
-                    file_enums=file_enums,
-                    file_scope_channel_order=fs_ch_order,
-                    file_scope_channel_kairos=file_scope_channel_kairos,
-                )
-            )
+            user_fn_specs.append((ext, fn_phys))
 
-    bad_uncall_via_vm = frozenset(
-        fn.name for fn in user_fns if _user_procedure_uncall_excluded_via_vm(fn)
-    )
+    def _lower_one_user(ext_phys: tuple[c.FuncDef, int], *, opt_uc: bool, uc_excl: frozenset[str]):
+        ext, fn_phys = ext_phys
+        return _lower_user_function(
+            ext,
+            callable_names,
+            proc_returns_int,
+            defined_user_functions=du,
+            layout=layout,
+            file_ast=ast,
+            ptr_pool_size=ptr_pool_size,
+            physical_mem_cells=fn_phys,
+            file_td=file_td,
+            file_specs=file_specs,
+            file_unions=file_unions,
+            file_enums=file_enums,
+            file_scope_channel_order=fs_ch_order,
+            file_scope_channel_kairos=file_scope_channel_kairos,
+            opt_uncall_user_calls=opt_uc,
+            uncall_excluded_via_vm_targets=uc_excl,
+        )
+
+    if opt_uncall_user_calls:
+        user_fns_probe = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
+        probe_by_name = {fn.name: fn for fn in user_fns_probe}
+        bad_uncall_via_vm = _uncall_excluded_transitive_closure(probe_by_name)
+        user_fns = [
+            _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm) for s in user_fn_specs
+        ]
+    else:
+        user_fns = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
+        probe_by_name = {fn.name: fn for fn in user_fns}
+        bad_uncall_via_vm = _uncall_excluded_transitive_closure(probe_by_name)
 
     main_phys = (
         phys

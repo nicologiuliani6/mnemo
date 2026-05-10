@@ -1,0 +1,4 @@
+// Profondità __mn_hist subito prima di una call Mnemo `--opt-uncall-user-calls` (+XOR uncall).
+// La VM Janus intercetta `call __mn_hist_floor_snap(...)` (corpo vuoto — no `end_proc` nel sorgente Kairos).
+procedure __mn_hist_floor_snap(stack __mn_snap_h)
+
