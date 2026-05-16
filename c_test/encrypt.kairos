@@ -2066,7 +2066,9 @@ procedure decrypt(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, in
     delocal int __mn_v_R = 0
     push(__mn_v_L, __mn_hist)
     delocal int __mn_v_L = 0
-procedure __main__(stack __mn_hist, stack __mn_scratch)
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
     local int __mn_mem0 = 0
     local int __mn_mem1 = 0
     local int __mn_mem2 = 0
@@ -2787,8 +2789,3 @@ procedure __main__(stack __mn_hist, stack __mn_scratch)
     delocal int __mn_mem1 = 0
     push(__mn_mem0, __mn_hist)
     delocal int __mn_mem0 = 0
-procedure main()
-    stack __mn_hist
-    stack __mn_scratch
-    call __main__(__mn_hist, __mn_scratch)
-    uncall __main__(__mn_hist, __mn_scratch)

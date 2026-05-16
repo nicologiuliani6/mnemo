@@ -3,8 +3,7 @@
 // `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push
 // e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).
 
-procedure __mn_pool_alloc(int ctr, int out_slot)
-    stack __mn_hist
+procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)
     local int t = 0
         t += ctr
         push(out_slot, __mn_hist)
@@ -13,8 +12,7 @@ procedure __mn_pool_alloc(int ctr, int out_slot)
         push(t, __mn_hist)
     delocal int t = 0
 
-procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7)
-    stack __mn_hist
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += val
@@ -48,8 +46,7 @@ procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int _
         __mn_mem7 += val
     fi slot == 7
 
-procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int out)
-    stack __mn_hist
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int out, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         local int t = 0
             t += __mn_mem0
@@ -115,8 +112,7 @@ procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
         delocal int t = 0
     fi slot == 7
 
-procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int ctr)
-    stack __mn_hist
+procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int ctr, stack __mn_hist, stack __mn_scratch)
     local int ctr0 = 0
         ctr0 += ctr
         if slot == 0 then
@@ -194,9 +190,7 @@ procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
         push(ctr0, __mn_hist)
     delocal int ctr0 = 0
 
-procedure server(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, channel __mn_kch_req)
-    stack __mn_hist
-    stack __mn_scratch
+procedure server(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, channel __mn_kch_req, stack __mn_hist, stack __mn_scratch)
     local channel __mn_kch_return_path = empty
     local int __mn_e0 = 0
         // funzione C server
@@ -210,9 +204,7 @@ procedure server(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int
     push(__mn_e0, __mn_hist)
     delocal int __mn_e0 = 0
     delocal channel __mn_kch_return_path = empty
-procedure client(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, channel __mn_kch_req)
-    stack __mn_hist
-    stack __mn_scratch
+procedure client(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, channel __mn_kch_req, stack __mn_hist, stack __mn_scratch)
     local channel __mn_kch_return_path = empty
     local int __mn_v_msg = 0
     local int __mn_pool_ctr = 0
@@ -222,7 +214,7 @@ procedure client(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int
         // funzione C client
         push(__mn_e1, __mn_hist)
         __mn_e1 += __mn_mem1
-        call __mn_pool_load(__mn_e1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_e0)
+        call __mn_pool_load(__mn_e1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_e0, __mn_hist, __mn_scratch)
         push(__mn_v_msg, __mn_hist)
         __mn_v_msg += __mn_e0
         push(__mn_e0, __mn_scratch)
@@ -231,7 +223,7 @@ procedure client(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int
         srecv(<__mn_v_msg>, __mn_kch_return_path)
         push(__mn_e2, __mn_hist)
         __mn_e2 += __mn_mem1
-        call __mn_pool_store(__mn_e2, __mn_v_msg, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7)
+        call __mn_pool_store(__mn_e2, __mn_v_msg, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_hist, __mn_scratch)
         push(__mn_e2, __mn_scratch)
     push(__mn_e2, __mn_hist)
     delocal int __mn_e2 = 0
@@ -245,7 +237,12 @@ procedure client(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int
     delocal int __mn_v_msg = 0
     delocal channel __mn_kch_return_path = empty
 procedure main()
+    stack __mn_pb0_hist
+    stack __mn_pb0_scratch
+    stack __mn_pb1_hist
+    stack __mn_pb1_scratch
     stack __mn_hist
+    stack __mn_scratch
     local channel __mn_kch_req = empty
     local int __mn_mem0 = 0
     local int __mn_mem1 = 0
@@ -265,6 +262,7 @@ procedure main()
     local int __mn_mem15 = 0
     local int __mn_exit = 0
     local int __mn_pool_ctr = 0
+    local int __mn_e0 = 0
         // generato da Mnemo da C
         __mn_pool_ctr += 4
         push(__mn_mem3, __mn_hist)
@@ -272,17 +270,22 @@ procedure main()
         // pre-PAR mirror `msg`: __mn_mem11 += __mn_mem3
         push(__mn_mem11, __mn_hist)
         __mn_mem11 += __mn_mem3
+        push(__mn_e0, __mn_hist)
+        __mn_e0 += 3
         push(__mn_mem9, __mn_hist)
-        __mn_mem9 += 3
+        __mn_mem9 += __mn_e0
+        push(__mn_e0, __mn_scratch)
         par
-            call server(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_kch_req)
+            call server(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_kch_req, __mn_pb0_hist, __mn_pb0_scratch)
         and
-            call client(__mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_kch_req)
+            call client(__mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_kch_req, __mn_pb1_hist, __mn_pb1_scratch)
         rap
         push(__mn_exit, __mn_hist)
         __mn_exit += __mn_mem11
         show(__mn_exit)
         // return
+    push(__mn_e0, __mn_hist)
+    delocal int __mn_e0 = 0
     push(__mn_pool_ctr, __mn_hist)
     delocal int __mn_pool_ctr = 0
     push(__mn_exit, __mn_hist)

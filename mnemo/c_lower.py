@@ -3948,8 +3948,9 @@ def _mps_lane_channel_name(cid: c.ID, ctx: _Ctx) -> str:
 
 def _lower_mps_ssend_inline(ch: c.Node, msg: c.Node, ctx: _Ctx) -> list[Instr]:
     """Singolo Kairos `ssend(<tmp>, lane)` (mps_t a singolo canale).
-    ssend consuma il payload (Janus): per non azzerare la sorgente C `msg`,
-    sempre via temp (`local int t = 0; t += msg; ssend(<t>, lane)`).
+    ssend consuma il payload (Janus): copia `msg` in un fresh temp e poi
+    `ssend(<temp>, lane)` lo azzera. Niente accumulo cross-iter perché ssend
+    consuma il temp.
     """
     cid = _mps_channel_ptr_id(ch)
     chname = _mps_lane_channel_name(cid, ctx)
@@ -3962,7 +3963,7 @@ def _lower_mps_ssend_inline(ch: c.Node, msg: c.Node, ctx: _Ctx) -> list[Instr]:
         ctx.use_hist = True
         out.append(IHistPush(ctx.hist, t_send))
         out.append(IAddEq(t_send, op))
-    out.append(ISsend(chname, [t_send]))
+    out.append(ISsend(chname, [t_send]))  # consuma t_send → 0
     if tm:
         ctx.use_scratch = True
     for tmp in reversed(tm):
@@ -3972,8 +3973,10 @@ def _lower_mps_ssend_inline(ch: c.Node, msg: c.Node, ctx: _Ctx) -> list[Instr]:
 
 def _lower_mps_srecv_inline(ch: c.Node, ans_ptr: c.Node, ctx: _Ctx) -> list[Instr]:
     """Singolo Kairos `srecv(<dst>, lane)` (mps_t a singolo canale).
-    Per `int *p` (puntatore): srecv in un temp, poi deref-assign al puntato
-    (pool_store nascosto). Per `&id` (lvalue diretto): srecv direttamente sulla cella.
+    Per `int *p` (puntatore): srecv in fresh temp, deref-assign in `*p`
+    (pool_store), poi `push(t, hist)` per azzerare il temp prima del prossimo
+    statement / del proc-end delocal. Senza la push finale, ogni iter di un
+    loop lascia il temp = recv_val → DELOCAL valore errato e inverse buggy.
     """
     cid = _mps_channel_ptr_id(ch)
     chname = _mps_lane_channel_name(cid, ctx)
@@ -3985,11 +3988,7 @@ def _lower_mps_srecv_inline(ch: c.Node, ans_ptr: c.Node, ctx: _Ctx) -> list[Inst
         return [ISrecv([dest], chname)]
     if isinstance(ans_ptr, c.ID):
         t_recv = ctx.fresh_temp()
-        ctx.use_hist = True
-        out: list[Instr] = [
-            IHistPush(ctx.hist, t_recv),
-            ISrecv([t_recv], chname),
-        ]
+        out: list[Instr] = [ISrecv([t_recv], chname)]
         out.extend(_lower_deref_assign(ans_ptr.name, c.ID(t_recv, coord), ctx))
         return out
     raise MnemoCompileError(

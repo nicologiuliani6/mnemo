@@ -738,7 +738,6 @@ procedure consumer(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, i
             __mn_e0 += 0
         fi __mn_v_i < 10
         from __mn_e0 != 0 loop
-            push(__mn_e3, __mn_hist)
             srecv(<__mn_e3>, __mn_kch_mps__mps_t__lane)
             push(__mn_e4, __mn_hist)
             __mn_e4 += __mn_mem9
