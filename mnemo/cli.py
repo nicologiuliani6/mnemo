@@ -103,6 +103,15 @@ def main(argv: list[str] | None = None) -> None:
             "copia XOR del risultato (int) poi uncall; void → call + uncall"
         ),
     )
+    p_c.add_argument(
+        "--check-invertibility",
+        action="store_true",
+        help=(
+            "isola il corpo del main C in procedura `__main__` con stack hist+scratch; "
+            "in Kairos `main` fa `call __main__ ; uncall __main__` per verificare "
+            "che TUTTO il programma sia reversibile al 100%"
+        ),
+    )
     p_c.set_defaults(handler=_cmd_compile)
 
     p_dk = sub.add_parser(
@@ -146,6 +155,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="come compile",
     )
+    p_dk.add_argument(
+        "--check-invertibility",
+        action="store_true",
+        help="come compile",
+    )
     p_dk.set_defaults(handler=_cmd_dump_kairos)
 
     p_r = sub.add_parser(
@@ -174,6 +188,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_r.add_argument(
         "--opt-uncall-user-calls",
+        action="store_true",
+        help="come compile",
+    )
+    p_r.add_argument(
+        "--check-invertibility",
         action="store_true",
         help="come compile",
     )
@@ -209,6 +228,7 @@ def _cmd_compile(args: argparse.Namespace) -> None:
             main_argc=args.main_argc,
             ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
+            check_invertibility=args.check_invertibility,
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -253,6 +273,7 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
             main_argc=args.main_argc,
             ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
+            check_invertibility=args.check_invertibility,
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -324,6 +345,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             main_argc=args.main_argc,
             ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
+            check_invertibility=args.check_invertibility,
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)

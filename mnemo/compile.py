@@ -15,12 +15,15 @@ from mnemo.c_parse import parse_c
 from mnemo.emit_kairos import emit_program
 from mnemo.errors import MnemoCompileError
 from mnemo.ir import (
+    Block,
+    Function,
     ICall,
     IIfKairos,
     IFromUntilKairos,
     ILocalBlock,
     IPar,
     Instr,
+    IUncall,
     Program,
 )
 from mnemo.prelude import (
@@ -139,12 +142,52 @@ def _program_uses_hist_floor_snap(prog: Program) -> bool:
 KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA = "// KAIROS_ALLOW_PAR_SHARED_INT\n"
 
 
+def _wrap_main_in_invertibility_check(prog: Program) -> None:
+    """Sposta corpo `main` in nuova proc `__main__(stack hist, stack scratch)` e
+    sostituisce `main` con un wrapper che fa `call __main__ ; uncall __main__`.
+
+    Verifica al 100% che il corpo C sia reversibile: se l'inverso fallisce
+    (delocal mismatch, pop empty, ecc.) la VM lo segnala subito.
+    """
+    main_idx = next(
+        (i for i, fn in enumerate(prog.functions) if fn.name == "main"), -1
+    )
+    if main_idx < 0:
+        return
+    old_main = prog.functions[main_idx]
+    # hist+scratch diventano parametri di __main__: rimuovili dai `local stack` del main.
+    inner_locals = [
+        (t, n)
+        for (t, n) in old_main.locals
+        if not (t == "stack" and n in ("__mn_hist", "__mn_scratch"))
+    ]
+    inner = Function(
+        name="__main__",
+        params=[("stack", "__mn_hist"), ("stack", "__mn_scratch")],
+        locals=inner_locals,
+        blocks=list(old_main.blocks),
+    )
+    wrapper_body = [
+        ICall("__main__", ["__mn_hist", "__mn_scratch"]),
+        IUncall("__main__", ["__mn_hist", "__mn_scratch"]),
+    ]
+    wrapper = Function(
+        name="main",
+        params=[],
+        locals=[("stack", "__mn_hist"), ("stack", "__mn_scratch")],
+        blocks=[Block(bid="entry", instrs=wrapper_body)],
+    )
+    prog.functions[main_idx] = inner
+    prog.functions.append(wrapper)
+
+
 def compile_c_to_kairos(
     path: str,
     *,
     main_argc: int | None = None,
     ptr_pool_size: int = 4,
     opt_uncall_user_calls: bool = False,
+    check_invertibility: bool = False,
 ) -> str:
     try:
         with open(path, encoding="utf-8") as f:
@@ -185,6 +228,8 @@ def compile_c_to_kairos(
     prog = maybe_inline_user_functions(
         ast, prog, total_mem_cells=layout.total_cells
     )
+    if check_invertibility:
+        _wrap_main_in_invertibility_check(prog)
     if _program_uses_ptr_pool(prog):
         lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])
     if _program_uses_hist_floor_snap(prog):
