@@ -1879,13 +1879,24 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             )
         raw0 = exprs[2 : 2 + len(g0)]
         raw1 = exprs[2 + len(g0) :]
-        # Fallback sequenziale solo se questo frame è uno dei due worker: altrimenti
-        # `IPar(left=f0,right=f1)` partiziona `__mn_mem*` in due finestre da S celle
-        # (compile.py: physical = 2·S). Con `parallel2(f,f,...)` dentro `f`, ogni livello
-        # ricorsivo richiederebbe un nuovo split completo sulla metà disponibile ⇒ in
-        # generale serve spazio Ω(2^profondità) celle fisiche che non allochiamo; il
-        # fallback evita aliasing col ramo sibling (wrong result ~0 vs atteso).
-        recursive_fallback = ctx.fn_name in {f0, f1}
+        # Fallback sequenziale solo se questo frame è uno dei due worker E i worker
+        # prendono almeno un `int` (o `int *`) come arg: altrimenti `IPar(left=f0,right=f1)`
+        # partiziona `__mn_mem*` in due finestre da S celle, e ogni livello ricorsivo
+        # richiederebbe Ω(2^profondità) celle fisiche che non allochiamo. Quando i
+        # worker prendono *solo* canali π (`mnemo_kairos_channel_t`), non c'è
+        # nessuna cella `__mn_mem*` partizionata → real `par … and … rap` è sicuro
+        # anche in ricorsione (fib via canali, vedi c_test/fib.c).
+        def _worker_args_all_channels(fd: c.FuncDecl) -> bool:
+            if fd.args is None:
+                return True
+            for p in fd.args.params:
+                if not isinstance(p, c.Decl):
+                    continue
+                if _immediate_named_scalar_typedef(p) != "mnemo_kairos_channel_t":
+                    return False
+            return True
+        _both_only_channels = _worker_args_all_channels(fd0) and _worker_args_all_channels(fd1)
+        recursive_fallback = (ctx.fn_name in {f0, f1}) and not _both_only_channels
         pre: list[Instr] = []
         pre.extend(_premirror_main_partition1_reads_before_par(ctx))
         if expected_len > 2:
@@ -4181,7 +4192,9 @@ def _lower_funccall_with_ret(
             if len(exprs) != 2:
                 raise MnemoCompileError("mnemo_pi_ssend_reply: attesi 2 argomenti")
             lane = _resolve_pi_channel_endpoint(exprs[0], ctx)
-            pre, atom, tm = _kairos_atom(exprs[1], ctx)
+            # ssend richiede un identificatore (no letterali): materializza in fresh temp
+            # se il payload è una costante o un'espressione.
+            pre, atom, tm = _eval_to_var(exprs[1], ctx)
             post2: list[Instr] = []
             if tm:
                 ctx.use_scratch = True
