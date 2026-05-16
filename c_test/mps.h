@@ -27,47 +27,33 @@
  
  #ifdef MNEMO
  /*
-  * Due canali π (come sem_init 1 / 0 in POSIX): un solo g_xfer permetteva al
-  * producer di accumulare più «unlock» prima che il consumer leggesse — con par
-  * reale i token si accodano e *answer saltava valori (es. solo pari + 9).
+  * Singolo canale `lane` (pthread_mutex_t → channel Kairos) che trasporta msg
+  * direttamente nel token: Mnemo lower ssend/srecv come Kairos `ssend(<msg>, lane)`
+  * / `srecv(<msg>, lane)`. Eliminato `payload`/`__mn_p1_answer` int condivisi
+  * (rompevano l'invertibilità: due thread → stesse __mn_mem cells = race).
   */
  typedef struct {
-     int payload;
+     /* placeholder int per dare un indirizzo a `&mps` (Mnemo richiede first-field int). */
      int __mn_p1_answer;
-     pthread_mutex_t g_cs;
-     pthread_mutex_t g_slot_free;
-     pthread_mutex_t g_data_ready;
+     pthread_mutex_t lane;
  } mps_t;
- 
+
  static inline void init_mutexes(mps_t *m) {
-     pthread_mutex_init(&m->g_cs, 0);
-     pthread_mutex_init(&m->g_slot_free, 0);
-     pthread_mutex_init(&m->g_data_ready, 0);
-     pthread_mutex_lock(&m->g_data_ready);
+     pthread_mutex_init(&m->lane, 0);
  }
- 
+
  static inline void destroy_mutexes(mps_t *m) {
-     /* g_data_ready è vuoto a fine protocollo; destroy fa srecv e serve 1 token. */
-     pthread_mutex_unlock(&m->g_data_ready);
-     pthread_mutex_destroy(&m->g_cs);
-     pthread_mutex_destroy(&m->g_slot_free);
-     pthread_mutex_destroy(&m->g_data_ready);
+     pthread_mutex_destroy(&m->lane);
  }
- 
+
  static inline void ssend(mps_t *m, int msg) {
-     pthread_mutex_lock(&m->g_slot_free);
-     pthread_mutex_lock(&m->g_cs);
-     m->payload = msg;
-     pthread_mutex_unlock(&m->g_cs);
-     pthread_mutex_unlock(&m->g_data_ready);
+     /* Mnemo lower → Kairos `ssend(<msg>, __mn_mtx_..._lane)`. */
+     pthread_mutex_unlock(&m->lane);
  }
- 
+
  static inline void srecv(mps_t *m, int *answer) {
-     pthread_mutex_lock(&m->g_data_ready);
-     pthread_mutex_lock(&m->g_cs);
-     *answer = m->payload;
-     pthread_mutex_unlock(&m->g_cs);
-     pthread_mutex_unlock(&m->g_slot_free);
+     /* Mnemo lower → Kairos `srecv(<*answer>, __mn_mtx_..._lane)`. */
+     pthread_mutex_lock(&m->lane);
  }
  #else
  /*

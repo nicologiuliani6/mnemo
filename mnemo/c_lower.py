@@ -3892,14 +3892,12 @@ def _lower_mps_init_destroy_inline(
     if not spec:
         raise MnemoCompileError(f"{fname}: struct {tag!r} senza metadati")
     fields = {fn: ft for fn, ft in spec}
-    for needed in ("g_cs", "g_slot_free", "g_data_ready"):
-        if needed not in fields or not _type_node_is_pthread_mutex(
-            fields[needed], ctx.typedef_map
-        ):
-            raise MnemoCompileError(
-                f"{fname}: servono campi pthread_mutex_t "
-                f"g_cs, g_slot_free, g_data_ready su {tag}"
-            )
+    if "lane" not in fields or not _type_node_is_pthread_mutex(
+        fields["lane"], ctx.typedef_map
+    ):
+        raise MnemoCompileError(
+            f"{fname}: serve campo pthread_mutex_t `lane` su {tag} (mps_t single-channel)"
+        )
 
     def mref(fld: str) -> c.Node:
         if pl >= 1:
@@ -3922,34 +3920,10 @@ def _lower_mps_init_destroy_inline(
 
     out: list[Instr] = []
     if fname == "init_mutexes":
-        for fld in ("g_cs", "g_slot_free", "g_data_ready"):
-            fc = c.FuncCall(
-                c.ID("pthread_mutex_init", coord),
-                c.ExprList([mref(fld), c.Constant("int", "0")], coord),
-                coord,
-            )
-            emit_pthread_mnemo(fc)
-        fc_lock = c.FuncCall(
-            c.ID("pthread_mutex_lock", coord),
-            c.ExprList([mref("g_data_ready")], coord),
-            coord,
-        )
-        emit_pthread_mnemo(fc_lock)
+        # FIFO channel (__mn_kch_*): nessun token iniziale (bloccherebbe ssend in main).
         return out
     if fname == "destroy_mutexes":
-        fc_u = c.FuncCall(
-            c.ID("pthread_mutex_unlock", coord),
-            c.ExprList([mref("g_data_ready")], coord),
-            coord,
-        )
-        emit_pthread_mnemo(fc_u)
-        for fld in ("g_cs", "g_slot_free", "g_data_ready"):
-            fc = c.FuncCall(
-                c.ID("pthread_mutex_destroy", coord),
-                c.ExprList([mref(fld)], coord),
-                coord,
-            )
-            emit_pthread_mnemo(fc)
+        # Single-channel mps: dopo l'ultimo srecv il canale è vuoto, niente da drenare.
         return out
     raise MnemoCompileError(f"funzione non supportata per inline mutex: {fname}")
 
@@ -3960,109 +3934,67 @@ def _mps_channel_ptr_id(ch: c.Node) -> c.ID:
     raise MnemoCompileError("mps_t*: atteso un identificatore (puntatore al canale)")
 
 
+def _mps_lane_channel_name(cid: c.ID, ctx: _Ctx) -> str:
+    """Risolve il canale Kairos del campo `lane` di mps_t (`__mn_mtx_<base>__<tag>__lane`)."""
+    coord = getattr(cid, "coord", None)
+    lane_ref = c.UnaryOp(
+        "&",
+        c.StructRef(cid, "->", c.ID("lane", coord), coord),
+        coord,
+    )
+    key = _pthread_mutex_channel_key(lane_ref, ctx)
+    return ctx.channel_kairos[key]
+
+
 def _lower_mps_ssend_inline(ch: c.Node, msg: c.Node, ctx: _Ctx) -> list[Instr]:
-    """Espande ssend(mps.h) sul puntatore reale del chiamante."""
+    """Singolo Kairos `ssend(<tmp>, lane)` (mps_t a singolo canale).
+    ssend consuma il payload (Janus): per non azzerare la sorgente C `msg`,
+    sempre via temp (`local int t = 0; t += msg; ssend(<t>, lane)`).
+    """
     cid = _mps_channel_ptr_id(ch)
-    coord = getattr(ch, "coord", None)
-    out: list[Instr] = []
-    for fld in ("g_slot_free", "g_cs"):
-        fc = c.FuncCall(
-            c.ID("pthread_mutex_lock", coord),
-            c.ExprList(
-                [
-                    c.UnaryOp(
-                        "&",
-                        c.StructRef(cid, "->", c.ID(fld, coord), coord),
-                        coord,
-                    )
-                ],
-                coord,
-            ),
-            coord,
-        )
-        ins = _lower_pthread_mnemo_call(fc, ctx)
-        if ins is None:
-            raise MnemoCompileError("ssend: pthread_mutex_lock")
-        out.extend(ins)
-    lhs = c.StructRef(cid, "->", c.ID("payload", coord), coord)
-    out.extend(_lower_struct_arrow_assign(lhs, msg, ctx))
-    for fld in ("g_cs", "g_data_ready"):
-        fc = c.FuncCall(
-            c.ID("pthread_mutex_unlock", coord),
-            c.ExprList(
-                [
-                    c.UnaryOp(
-                        "&",
-                        c.StructRef(cid, "->", c.ID(fld, coord), coord),
-                        coord,
-                    )
-                ],
-                coord,
-            ),
-            coord,
-        )
-        ins = _lower_pthread_mnemo_call(fc, ctx)
-        if ins is None:
-            raise MnemoCompileError("ssend: pthread_mutex_unlock")
-        out.extend(ins)
+    chname = _mps_lane_channel_name(cid, ctx)
+    ei, op, tm = _eval_expr(msg, ctx)
+    out: list[Instr] = list(ei)
+    t_send = ctx.fresh_temp()
+    if isinstance(op, Imm):
+        out.append(IConst(t_send, op.value))
+    else:
+        ctx.use_hist = True
+        out.append(IHistPush(ctx.hist, t_send))
+        out.append(IAddEq(t_send, op))
+    out.append(ISsend(chname, [t_send]))
+    if tm:
+        ctx.use_scratch = True
+    for tmp in reversed(tm):
+        out.append(IHistPush(ctx.scratch, tmp))
     return out
 
 
 def _lower_mps_srecv_inline(ch: c.Node, ans_ptr: c.Node, ctx: _Ctx) -> list[Instr]:
-    """Espande srecv(mps.h) sul puntatore reale del chiamante."""
+    """Singolo Kairos `srecv(<dst>, lane)` (mps_t a singolo canale).
+    Per `int *p` (puntatore): srecv in un temp, poi deref-assign al puntato
+    (pool_store nascosto). Per `&id` (lvalue diretto): srecv direttamente sulla cella.
+    """
     cid = _mps_channel_ptr_id(ch)
-    coord = getattr(ch, "coord", None)
-    rhs = c.StructRef(cid, "->", c.ID("payload", coord), coord)
-    out: list[Instr] = []
-    for fld in ("g_data_ready", "g_cs"):
-        fc = c.FuncCall(
-            c.ID("pthread_mutex_lock", coord),
-            c.ExprList(
-                [
-                    c.UnaryOp(
-                        "&",
-                        c.StructRef(cid, "->", c.ID(fld, coord), coord),
-                        coord,
-                    )
-                ],
-                coord,
-            ),
-            coord,
-        )
-        ins = _lower_pthread_mnemo_call(fc, ctx)
-        if ins is None:
-            raise MnemoCompileError("srecv: pthread_mutex_lock")
-        out.extend(ins)
+    chname = _mps_lane_channel_name(cid, ctx)
+    coord = getattr(ans_ptr, "coord", None)
     if isinstance(ans_ptr, c.UnaryOp) and ans_ptr.op == "&" and isinstance(
         ans_ptr.expr, c.ID
     ):
-        out.extend(_lower_assign(_phys(ctx, ans_ptr.expr.name), rhs, ctx))
-    elif isinstance(ans_ptr, c.ID):
-        out.extend(_lower_deref_assign(ans_ptr.name, rhs, ctx))
-    else:
-        raise MnemoCompileError(
-            "srecv: secondo argomento atteso `&msg` o `int *p` (forma semplice)"
-        )
-    for fld in ("g_cs", "g_slot_free"):
-        fc = c.FuncCall(
-            c.ID("pthread_mutex_unlock", coord),
-            c.ExprList(
-                [
-                    c.UnaryOp(
-                        "&",
-                        c.StructRef(cid, "->", c.ID(fld, coord), coord),
-                        coord,
-                    )
-                ],
-                coord,
-            ),
-            coord,
-        )
-        ins = _lower_pthread_mnemo_call(fc, ctx)
-        if ins is None:
-            raise MnemoCompileError("srecv: pthread_mutex_unlock")
-        out.extend(ins)
-    return out
+        dest = _phys(ctx, ans_ptr.expr.name)
+        return [ISrecv([dest], chname)]
+    if isinstance(ans_ptr, c.ID):
+        t_recv = ctx.fresh_temp()
+        ctx.use_hist = True
+        out: list[Instr] = [
+            IHistPush(ctx.hist, t_recv),
+            ISrecv([t_recv], chname),
+        ]
+        out.extend(_lower_deref_assign(ans_ptr.name, c.ID(t_recv, coord), ctx))
+        return out
+    raise MnemoCompileError(
+        "srecv: secondo argomento atteso `&msg` o `int *p` (forma semplice)"
+    )
 
 
 def _resolve_pi_channel_endpoint(expr: c.Node, ctx: _Ctx) -> str:
@@ -6322,8 +6254,14 @@ def lower_file_to_program(
     fs_pi = collect_file_scope_kairos_pi_channels(ast)
     fs_pi_set = frozenset(fs_pi)
     fs_ch_order = file_scope_channel_order(mutex_keys, fs_pi)
+    # `*__lane` (campo `lane` di mps_t single-channel): prefisso `__mn_kch_` per evitare
+    # le semantiche mailbox `__mn_mtx_*` della VM (la mailbox sovrascrive — qui serve FIFO).
     file_scope_channel_kairos = {
-        k: (f"__mn_kch_{k}" if k in fs_pi_set else f"__mn_mtx_{k}")
+        k: (
+            f"__mn_kch_{k}"
+            if (k in fs_pi_set or k.endswith("__lane"))
+            else f"__mn_mtx_{k}"
+        )
         for k in fs_ch_order
     }
 
