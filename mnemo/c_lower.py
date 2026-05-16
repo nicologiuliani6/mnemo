@@ -4052,6 +4052,9 @@ def _resolve_pi_channel_endpoint(expr: c.Node, ctx: _Ctx) -> str:
     )
 
 
+_UNCALL_UNSAFE_LIB_PROCS = frozenset()
+
+
 def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
     """
     True se il callee contiene costrutti che l'inversore Kairos non deve elidere in
@@ -4075,12 +4078,9 @@ def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
                     return True
-            elif isinstance(ins, ICall):
-                # XOR+uncall ottimizzato su tutte le __mn_mem*: incompatibile col pool
-                # monolitico (__mn_pool_*), che condivide celle memoria con il chiamante.
-                if ins.proc.startswith("__mn_pool_"):
-                    return True
             elif isinstance(ins, (ISsend, ISrecv)):
+                return True
+            elif isinstance(ins, ICall) and ins.proc in _UNCALL_UNSAFE_LIB_PROCS:
                 return True
         return False
 

@@ -1,9 +1,13 @@
 // Prodotto: dst += a * b usando solo somme ripetute (Kairos non ha *).
 // b deve essere >= 0; a e b non vengono distrutti. (b == 0 → nessuna iterazione.)
+// `from i == 0` (non `< b`): FROM vero solo allo stato pre-loop (i=0),
+// falso agli stati intermedi (i=1..b-1) — necessario per l'inversione Kairos.
 procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int i = 0
-    from i < b loop
-        i += 1
-        dst += a
-    until i == b
+    if b != 0 then
+        from i == 0 loop
+            i += 1
+            dst += a
+        until i == b
+    fi b != 0
     delocal int i = b

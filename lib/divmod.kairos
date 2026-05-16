@@ -1,8 +1,16 @@
 // Divisione e resto: a, b interi con a >= 0 e b > 0; q = 0 e r = 0 all'ingresso.
 // Uscita: q = a/b, r = a%b, a = 0. Il dividendo viene spostato in r via __mn_move_int (stack locale).
+// `from q == 0`: FROM vero solo quando q=0 (pre-loop); falso a q=1,2,... (stati intermedi).
+// `saved_r` copia a per il guard `if/fi`: la condizione non cambia durante il corpo.
 procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
     call __mn_move_int(r, a, __mn_hist, __mn_scratch)
-    from r >= b loop
-        r -= b
-        q += 1
-    until r < b
+    local int saved_r = 0
+    saved_r += r
+    if saved_r >= b then
+        from q == 0 loop
+            r -= b
+            q += 1
+        until r < b
+    fi saved_r >= b
+    push(saved_r, __mn_hist)
+    delocal int saved_r = 0

@@ -1,46 +1,27 @@
-# Mnemo — parity C / compilatore (TODO)
+Cosa i log hanno chiarito
+__mn_move_int non era il problema — l’inversione termina con loc_sz: -1 (stack locale vuota). Il panic END_PROC: variabili LOCAL non chiuse su main veniva da a/r non delocalati nel test (falso allarme).
 
-Backlog rispetto alla parità con un compilatore nativo (GCC). Stato: `mnemo/c_lower.py`, `mnemo/layout_collect.py`, `make test`, `c_examples/gcc_compat/`.
+qf = -1 — il corpo del loop from q == 0 veniva invertito una volta anche quando saved_r < b (nessuna iterazione forward), con PUSHEQ q 1 → q = -1 propagato su qf.
 
-## Tipi e qualificatori
+Progresso su encrypt (dopo fix mirati):
 
-- [ ] **`short` / `long` / floating**: spesso riconosciuti/rifiutati; nessun float/double a runtime (vedi policy sotto).
-- [x] **`char` / `const char *`**: stringhe letterali e `printf %s` estesi con test `generic_const_char_ptr.c` (modello ancora non “C pieno” per lifetime/aritmetica).
-- [x] **`const` / `volatile`**: nessuna semantica C completa; molti casi accettati dal parser (qualificatori su `TypeDecl`) senza enforcement.
-- [ ] **Linkage** (`static` / `extern`): una sola TU Mnemo; nessun modello linker come GCC.
+prima: deadlock / qf = -1
+poi: saved_r = 1 (guardia che saltava anche PUSHEQ saved_r r)
+poi: i = -1
+ora: t = -255 in __mn_bit_k_signed (catena annidata floor_div2 → divmod → move_int)
+Fix applicati (kairos + mnemo)
+invert_if_entry_lval: legge saved_r / ts dalla copia locale, non da a/t già azzerati da move_int
+Guardie loop: non invertire MINEQ r / PUSHEQ q se saved_r < b; non peelare from q==0 in quel caso
+lib/bits.kairos: snapshot ts per if ts >= 0 + ordine LIFO delocal corretto
+Test kairos: delocal su main con valori attesi dopo uncall
+Stato test
+Test	Esito
+test_move_int_uncall.kairos
+OK
+test_divmod_uncall.kairos
+OK
+encrypt.c --opt-uncall-user-calls
+ancora exit 1 (t = -255 in __mn_bit_k_signed)
+Il deadlock è risolto; resta da stabilizzare l’uncall sulla catena floor_div2 / bit_k (stesso schema: loop/IF saltati in avanti ma ancora toccati in inversa).
 
-## Struct / union
-
-- [x] **Passaggio per valore**: già supportato per variabili struct (flatten campi); vedi `generic_params_by_value_*`.
-- [x] **Inizializzatori `{ … }`**: struct e union in dichiarazione (liste piatte; campi in ordine, union con un solo valore).
-- [ ] **Parità ABI/padding** sistematica con GCC (test a campione in `gcc_compat`).
-
-## Operatori e lvalue
-
-- [x] **`++` / `--`** su `x`, `*p`, `a[i]`, `s.campo`, `p->campo` (istruzione ed espressione). Test: `generic_lvalue_incdec.c`.
-- [ ] Altri lvalue / espressioni assegnabili ancora limitati (`lvalue non-ID` dove non coperto).
-
-## `switch`
-
-- [x] Fall-through e catena `disc==v` con corpi espansi (vedi `c_lower`).
-- [ ] **`break` annidato** (es. dentro `if`) verso lo stesso `switch`: **non supportato** (errore a compile time); niente schema IR reversibile ancora.
-
-## Chiamate
-
-- [x] **Puntatore a funzione**: solo valori risolti a **compile-time** (`f = g`, `f = &g` con `g` nota; chiamate `f(…)` e `(*f)(…)`). Layout + lowering + test `generic_func_ptr.c`.
-- [x] **Variadiche user**: definizioni con `...` rifiutate; solo built-in (es. `printf`) come prima. Policy sotto.
-
-## Documentazione
-
-- [x] **`TODO.md`** (questo file).
-- [x] **`.cursor/rules/mnemo-c-subset.mdc`**: allineato al comportamento attuale (subset, switch, ++/--, puntatori a funzione, init struct/union).
-- [x] **README**: riferimento a questo TODO per backlog e limiti.
-
----
-
-## Policy registrate
-
-| Area | Decisione |
-|------|-----------|
-| **Floating** | Nessun `float`/`double`/`long double` a runtime: niente aritmetica IEEE; `sizeof`/usi restano rifiutati o con errore esplicito fino a nuova scelta di prodotto. |
-| **Variadiche** | Nessuna funzione variadica **utente**. Solo special-case per built-in dichiarati (es. `printf`). Nessun `va_list`. |
+DA FARE: te devi fixare tutto. STEP su come ffixare: creati dei file in .c o in .kairos semplici e vedi cosa VA e cosa non va CON --opt-uncall-user-calls. CAPISCI COSA NON VA, e poi fixi in Mnemo o kairos, riparti da 0 riprovando tutto e continua finche tutto non va. ATTENZIONA ALLA TRADUZIONE MNEMO->KAIROS fra il call e uncall . PS: @c_test/loop.c la versione ottimizzata di loop va mentre quella di @c_test/encrypt.c non va. Quindi guarde le differenze nelle due tarduzioni

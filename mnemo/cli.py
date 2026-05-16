@@ -366,7 +366,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
             cmd,
             cwd=cwd,
             check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=(subprocess.PIPE if args.verbose else subprocess.DEVNULL),
             text=True,
         )
     except FileNotFoundError:

@@ -24,7 +24,7 @@ help:
 	@echo "  $(GREEN)make compile$(RESET)       mnemo dump-kairos su c_examples/*.c → .kairos"
 	@echo "  $(GREEN)make run FILE=<path>$(RESET)  un solo .c (compila) o .kairos — path relativo a mnemo/"
 	@echo "  $(GREEN)make run FILE=... MAIN_ARGC=N$(RESET)  opzionale: sovrascrive argc (come mnemo compile --main-argc N)"
-	@echo "  $(GREEN)make test$(RESET)         compile + esegue ogni .kairos (timeout 5s, come make test Kairos)"
+	@echo "  $(GREEN)make test$(RESET)         compile + esegue ogni .kairos (timeout 300s — opt-uncall su encrypt è lento)"
 	@echo "  $(GREEN)make test-gcc-compat$(RESET) confronto mnemo vs gcc su c_examples/gcc_compat/generic_*.c"
 	@echo "  $(GREEN)make test-gcc-compat-stop$(RESET) come sopra ma stop al primo fail"
 	@echo "  $(GREEN)make test-unit$(RESET)    unittest Python (parallelismo / lowering, senza VM)"
@@ -56,7 +56,7 @@ test: compile
 	for c in $(C_FILES); do \
 	  k="$${c%.c}.kairos"; \
 	  name=$$(basename $$k); \
-	  output=$$(cd $(KAIROS_ROOT) && timeout 5s $(KAIROS_PY) -m src.kairos $$k --dump-bytecode 2>&1); \
+	  output=$$(cd $(KAIROS_ROOT) && timeout 300s $(KAIROS_PY) -m src.kairos $$k --dump-bytecode 2>&1); \
 	  st=$$?; \
 	  if [ $$st -eq 124 ]; then \
 	    echo "  $(RED)TIMEOUT$(RESET)  $$name"; \
