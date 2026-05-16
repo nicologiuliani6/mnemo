@@ -2778,6 +2778,21 @@ def _lower_putchar(expr: c.Node, ctx: _Ctx) -> list[Instr]:
     return out
 
 
+def _io_opt_uncall_wrap(ctx: "_Ctx", call_ins: "ICall") -> list[Instr]:
+    """Avvolge una `call` void verso __mn_putd/__mn_putx con
+    snap + call + uncall quando `--opt-uncall-user-calls` è attivo.
+    Riduce la pressione su __mn_hist (la stampa è no-op in inverse → side effect rimane).
+    """
+    if not ctx.opt_uncall_user_calls:
+        return [call_ins]
+    ctx.use_hist = True
+    return [
+        ICall("__mn_hist_floor_snap", [ctx.hist]),
+        call_ins,
+        IUncall(call_ins.proc, call_ins.args),
+    ]
+
+
 def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
     def _format_hex_u32(v: int) -> str:
         return format(v & 0xFFFFFFFF, "x")
@@ -2846,8 +2861,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.append(
-                        ICall("__mn_putd", [op.name] + _kairos_stack_actuals(ctx))
+                    out.extend(
+                        _io_opt_uncall_wrap(
+                            ctx,
+                            ICall("__mn_putd", [op.name] + _kairos_stack_actuals(ctx)),
+                        )
                     )
                     tm_acc.extend(tm)
                 else:
@@ -2871,8 +2889,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.append(
-                        ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx))
+                    out.extend(
+                        _io_opt_uncall_wrap(
+                            ctx,
+                            ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                        )
                     )
                     tm_acc.extend(tm)
                 else:
@@ -2901,8 +2922,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.append(
-                        ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx))
+                    out.extend(
+                        _io_opt_uncall_wrap(
+                            ctx,
+                            ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                        )
                     )
                     tm_acc.extend(tm)
                 else:

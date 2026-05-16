@@ -259,8 +259,9 @@ procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
     push(t, __mn_hist)
     delocal int t = 0
 
-// Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
-// Dopo le cifre, n viene ricostruito con __mn_mul_into (niente uncall su divmod).
+// Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos.
+// REVERSIBILE: usa `uncall __mn_divmod_nonneg` per ripristinare n e azzerare qu/rem.
+// Permette `call __mn_putd_uint; uncall __mn_putd_uint` (show è no-op in inverse).
 
 procedure __mn_putd_uint(int n, stack __mn_hist, stack __mn_scratch)
     local int ten = 0
@@ -277,20 +278,7 @@ procedure __mn_putd_uint(int n, stack __mn_hist, stack __mn_scratch)
         ch -= 48
         ch -= rem
         delocal int ch = 0
-        local int prod = 0
-        call __mn_mul_into(prod, qu, ten, __mn_hist, __mn_scratch)
-        n += prod
-        n += rem
-        from prod > 0 loop
-            prod -= 1
-        until prod == 0
-        from qu > 0 loop
-            qu -= 1
-        until qu == 0
-        from rem > 0 loop
-            rem -= 1
-        until rem == 0
-        delocal int prod = 0
+        uncall __mn_divmod_nonneg(n, ten, qu, rem, __mn_hist, __mn_scratch)
     else
         local int ch = 0
         ch += n
@@ -330,7 +318,8 @@ procedure __mn_putd(int n, stack __mn_hist, stack __mn_scratch)
     delocal int z = 0
 
 // Stampa intero non negativo in esadecimale minuscolo.
-// Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
+// Dipendenze: helpers.kairos, divmod.kairos.
+// REVERSIBILE via `uncall __mn_divmod_nonneg` (vedi __mn_putd_uint).
 
 procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
     local int base = 0
@@ -359,20 +348,7 @@ procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
         ten -= 10
         delocal int ten = 0
         delocal int ch = 0
-        local int prod = 0
-        call __mn_mul_into(prod, qu, base, __mn_hist, __mn_scratch)
-        n += prod
-        n += rem
-        from prod > 0 loop
-            prod -= 1
-        until prod == 0
-        from qu > 0 loop
-            qu -= 1
-        until qu == 0
-        from rem > 0 loop
-            rem -= 1
-        until rem == 0
-        delocal int prod = 0
+        uncall __mn_divmod_nonneg(n, base, qu, rem, __mn_hist, __mn_scratch)
     else
         local int ch = 0
         local int ten = 0
@@ -2507,7 +2483,9 @@ procedure main()
         __mn_e69 += 32
         show(__mn_e69, char)
         __mn_e69 -= 32
+        call __mn_hist_floor_snap(__mn_hist)
         call __mn_putd(__mn_mem24, __mn_hist, __mn_scratch)
+        uncall __mn_putd(__mn_mem24, __mn_hist, __mn_scratch)
         __mn_e70 += 10
         show(__mn_e70, char)
         __mn_e70 -= 10
@@ -2536,7 +2514,9 @@ procedure main()
         call __mn_and_into(__mn_e77, __mn_e75, __mn_e76, __mn_hist, __mn_scratch)
         push(__mn_e76, __mn_scratch)
         push(__mn_e75, __mn_scratch)
+        call __mn_hist_floor_snap(__mn_hist)
         call __mn_putd(__mn_e77, __mn_hist, __mn_scratch)
+        uncall __mn_putd(__mn_e77, __mn_hist, __mn_scratch)
         __mn_e78 += 32
         show(__mn_e78, char)
         __mn_e78 -= 32
@@ -2555,7 +2535,9 @@ procedure main()
         __mn_e83 += 255
         call __mn_and_into(__mn_e84, __mn_mem25, __mn_e83, __mn_hist, __mn_scratch)
         push(__mn_e83, __mn_scratch)
+        call __mn_hist_floor_snap(__mn_hist)
         call __mn_putd(__mn_e84, __mn_hist, __mn_scratch)
+        uncall __mn_putd(__mn_e84, __mn_hist, __mn_scratch)
         __mn_e85 += 10
         show(__mn_e85, char)
         __mn_e85 -= 10
