@@ -1,27 +1,45 @@
-Cosa i log hanno chiarito
-__mn_move_int non era il problema — l’inversione termina con loc_sz: -1 (stack locale vuota). Il panic END_PROC: variabili LOCAL non chiuse su main veniva da a/r non delocalati nel test (falso allarme).
+# TODO
 
-qf = -1 — il corpo del loop from q == 0 veniva invertito una volta anche quando saved_r < b (nessuna iterazione forward), con PUSHEQ q 1 → q = -1 propagato su qf.
+## OPEN
 
-Progresso su encrypt (dopo fix mirati):
+### [P3] `--check-invertibility` su 0-iter loop
 
-prima: deadlock / qf = -1
-poi: saved_r = 1 (guardia che saltava anche PUSHEQ saved_r r)
-poi: i = -1
-ora: t = -255 in __mn_bit_k_signed (catena annidata floor_div2 → divmod → move_int)
-Fix applicati (kairos + mnemo)
-invert_if_entry_lval: legge saved_r / ts dalla copia locale, non da a/t già azzerati da move_int
-Guardie loop: non invertire MINEQ r / PUSHEQ q se saved_r < b; non peelare from q==0 in quel caso
-lib/bits.kairos: snapshot ts per if ts >= 0 + ordine LIFO delocal corretto
-Test kairos: delocal su main con valori attesi dopo uncall
-Stato test
-Test	Esito
-test_move_int_uncall.kairos
-OK
-test_divmod_uncall.kairos
-OK
-encrypt.c --opt-uncall-user-calls
-ancora exit 1 (t = -255 in __mn_bit_k_signed)
-Il deadlock è risolto; resta da stabilizzare l’uncall sulla catena floor_div2 / bit_k (stesso schema: loop/IF saltati in avanti ma ancora toccati in inversa).
+**Sintomo**: `for(i=0; i<0; i++) body` esegue 1 skip-iter forward sotto counter-loop lowering. Main exit C semantica differente.
 
-DA FARE: te devi fixare tutto. STEP su come ffixare: creati dei file in .c o in .kairos semplici e vedi cosa VA e cosa non va CON --opt-uncall-user-calls. CAPISCI COSA NON VA, e poi fixi in Mnemo o kairos, riparti da 0 riprovando tutto e continua finche tutto non va. ATTENZIONA ALLA TRADUZIONE MNEMO->KAIROS fra il call e uncall . PS: @c_test/loop.c la versione ottimizzata di loop va mentre quella di @c_test/encrypt.c non va. Quindi guarde le differenze nelle due tarduzioni
+**Causa**: `from cnt == 0` entry sempre vera → loop entrato anche su 0-iter. Body non-guard runs 1 skip.
+
+**Fix**: IIfKairos guard wrap `if init_lc != 0 then loop fi`. Rompe nested IF inverse Janus (blocca P1). Risolvibile dopo P1.
+
+### [P3] opt-uncall self-recursion (fibonacci → fibonacci)
+
+**Stato**: skip se `caller == callee` (mnemo c_lower.py).
+
+**Causa**: VM uncall sul frame depth N quando call su depth N+1 in corso → frame state stack management complesso.
+
+**Per attivare**: in init_clone_frame preservare snap state per depth+1, op_uncall su clone-N invocare invert_op_to_line con depth-aware key.
+
+Tempo stimato: 4-8 ore.
+
+### [P4] Janus `loop_mnemo_deep_increment` calibrato divmod
+
+**Stato**: counter-based loop lowering aggira il bug. deep_peel restano in codice per loop non-counter (rari ora).
+
+**Fix opzionale**: rimuovere `loop_mnemo_deep_increment` + dipendenze `jmp_start_deep` se counter-loop default → vm_invert.h più snello.
+
+---
+
+## DONE (recente)
+
+- ✅ ex21 check-invertibility: `exec_branch_inverse` nested-IF dispatch (vm_invert.h) — branch con nested IF usa collect_ifs + iter reverse con skip lines dei nested + dispatch JMPF_ELSE → recurse su ramo forward. Reg passa 36 mnemo + 6 unit + 68 gcc-compat.
+- ✅ fib real-par (top-level PAR + sequential recursion, `c_test/fib.c`)
+- ✅ srecv mailbox-accumulation fix (`mnemo c_lower.py` srecv `-= 1` post-pthread_mutex_lock/destroy)
+- ✅ counter-based loop lowering (`_build_counter_loop_instrs` in c_lower.py) → check-invertibility passa su loop body non-vuoto (ex18/ex19/sum)
+- ✅ collect_ifs nested IFs uid-matched stack (vm_invert.h)
+- ✅ opt-uncall su callee ricorsivo non-self (`not self_rec` invece di `not rec`) → fib_left/fib_right wrap fibonacci con call+uncall
+- ✅ init_clone_frame duplica int DECL slots per opt-uncall su recursive
+
+---
+
+## Storico
+
+(precedenti debug encrypt opt-uncall — risolti via guardie divmod / bit_k_signed / move_int loop inversion)
