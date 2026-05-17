@@ -4915,6 +4915,35 @@ def _append_maybe_guarded_by_break(
     return [IIfKairos(br_var, "==", "0", instrs, None)]
 
 
+def _build_counter_loop_instrs(
+    orig_body: list[Instr],
+    init_lc: str,
+    exit_lhs: str,
+    exit_op: CmpOp,
+    exit_rhs: str,
+    ctx: _Ctx,
+    needs_entry_guard: bool,
+) -> list[Instr]:
+    """Wrappa loop con counter `cnt` (entry `from cnt == 0`) per VM heuristic.
+
+    Entry guard `from cnt == 0` matcha `loop_entry_eq_zero_guard` (vm_invert.h:414):
+    in inverse il numero di peel = cnt corrente → evita heuristic deep_peel rotta
+    su loop generici. Body finale: `cnt += 1`.
+
+    NOTA: per loop con 0 iter (es. `for(i; i<0; i++)`) il body viene cmq eseguito
+    una "skip-iter" volta perchè `from cnt == 0` entra sempre. Aggiungere IIfKairos
+    guard wrap rompe l'inverse di nested IFs (collect_ifs/exec_branch_inverse
+    Janus). Per ora accetta semantica differente da C su 0-iter edge case.
+    """
+    cnt = ctx.fresh_loop_ct()
+    ctx.use_hist = True
+    body_with_cnt = orig_body + [IAddEq(cnt, Imm(1))]
+    return [ILocalBlock(cnt, [
+        IFromUntilKairos(cnt, "==", "0", body_with_cnt, exit_lhs, exit_op, exit_rhs),
+        IHistPush("__mn_hist", cnt),
+    ])]
+
+
 def _lower_next_clause(node: c.Node | None, ctx: _Ctx) -> list[Instr]:
     if node is None:
         return []
@@ -4963,17 +4992,9 @@ def _lower_while(node: c.While, ctx: _Ctx) -> list[Instr]:
         ctx.loop_stack.pop()
 
     first_eval = _build_truth_incr_lc_br(cond, lc, ctx, br_v)
-    return first_eval + [
-        IFromUntilKairos(
-            lc,
-            "!=",
-            "0",
-            body,
-            lc,
-            "==",
-            "0",
-        )
-    ]
+    return first_eval + _build_counter_loop_instrs(
+        body, lc, lc, "==", "0", ctx, needs_entry_guard=True
+    )
 
 
 def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
@@ -5013,17 +5034,9 @@ def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
     finally:
         ctx.loop_stack.pop()
 
-    return [
-        IFromUntilKairos(
-            "0",
-            "==",
-            "0",
-            body,
-            lc,
-            "==",
-            "0",
-        )
-    ]
+    return _build_counter_loop_instrs(
+        body, lc, lc, "==", "0", ctx, needs_entry_guard=False
+    )
 
 
 def _lower_for_init(init: c.Node | None, ctx: _Ctx) -> list[Instr]:
@@ -5087,17 +5100,9 @@ def _lower_for(node: c.For, ctx: _Ctx) -> list[Instr]:
         ctx.loop_stack.pop()
 
     first_eval = _build_truth_incr_lc_br(cond, lc, ctx, br_v)
-    return pre + first_eval + [
-        IFromUntilKairos(
-            lc,
-            "!=",
-            "0",
-            body,
-            lc,
-            "==",
-            "0",
-        )
-    ]
+    return pre + first_eval + _build_counter_loop_instrs(
+        body, lc, lc, "==", "0", ctx, needs_entry_guard=True
+    )
 
 
 def _stmt_never_falls_through(node: c.Node | None) -> bool:

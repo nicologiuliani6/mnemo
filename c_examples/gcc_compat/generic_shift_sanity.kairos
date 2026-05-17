@@ -1,7 +1,7 @@
 // Sposta il valore di src in dst (src azzerato) usando uno stack locale come "garbage" / condotto.
 // La VM implementa `pop(dst, …)` come `*dst += valore`: per sostituire dst, azzeralo prima con
 // `push(dst, hist)` sullo stack Janus del caller, poi `call __mn_move_int(dst, src)`.
-procedure __mn_move_int(int dst, int src)
+procedure __mn_move_int(int dst, int src, stack __mn_hist, stack __mn_scratch)
     local stack __mn_g = nil
     push(src, __mn_g)
     pop(dst, __mn_g)
@@ -9,119 +9,155 @@ procedure __mn_move_int(int dst, int src)
 
 // Prodotto: dst += a * b usando solo somme ripetute (Kairos non ha *).
 // b deve essere >= 0; a e b non vengono distrutti. (b == 0 → nessuna iterazione.)
-procedure __mn_mul_into(int dst, int a, int b)
+// `from i == 0` (non `< b`): FROM vero solo allo stato pre-loop (i=0),
+// falso agli stati intermedi (i=1..b-1) — necessario per l'inversione Kairos.
+procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int i = 0
-    from i < b loop
-        i += 1
-        dst += a
-    until i == b
+    if b != 0 then
+        from i == 0 loop
+            i += 1
+            dst += a
+        until i == b
+    fi b != 0
     delocal int i = b
 
 // Divisione e resto: a, b interi con a >= 0 e b > 0; q = 0 e r = 0 all'ingresso.
 // Uscita: q = a/b, r = a%b, a = 0. Il dividendo viene spostato in r via __mn_move_int (stack locale).
-procedure __mn_divmod_nonneg(int a, int b, int q, int r)
-    call __mn_move_int(r, a)
-    from r >= b loop
-        r -= b
-        q += 1
-    until r < b
+// `from q == 0`: FROM vero solo quando q=0 (pre-loop); falso a q=1,2,... (stati intermedi).
+// `saved_r` copia a per il guard `if/fi`: la condizione non cambia durante il corpo.
+procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
+    call __mn_move_int(r, a, __mn_hist, __mn_scratch)
+    local int saved_r = 0
+    saved_r += r
+    if saved_r >= b then
+        from q == 0 loop
+            r -= b
+            q += 1
+        until r < b
+    fi saved_r >= b
+    push(saved_r, __mn_hist)
+    delocal int saved_r = 0
 
 // Operazioni bitwise via aritmetica (Kairos non ha &, |, <<, >>).
 // Richiede helpers.kairos, mul.kairos, divmod.kairos.
 // Convenzione: gli *_into fanno dst += f(...) assumendo dst partenza dal caller.
 
 // Chiamate con divisore 2: le `call` Kairos accettano solo identificatori, non `2` letterale.
-procedure __mn_divmod_nonneg_div2(int a, int q, int r)
+procedure __mn_divmod_nonneg_div2(int a, int q, int r, stack __mn_hist, stack __mn_scratch)
     local int two = 0
     two += 1
     two += 1
-    call __mn_divmod_nonneg(a, two, q, r)
+    call __mn_divmod_nonneg(a, two, q, r, __mn_hist, __mn_scratch)
     delocal int two = 2
 
 // q = floor(t/2) con semantica divisione intera C su int; azzera t.
-procedure __mn_floor_div2_signed(int t, int q)
-    stack __mn_hist
+// `ts` copia stabile di t per il guard if/fi: nel ramo else t viene azzerato
+// da move_int, quindi `fi t >= 0` sarebbe sempre TRUE — ts non viene toccato nei rami.
+procedure __mn_floor_div2_signed(int t, int q, stack __mn_hist, stack __mn_scratch)
     local int r = 0
-    if t >= 0 then
-        call __mn_divmod_nonneg_div2(t, q, r)
+    local int ts = 0
+    ts += t
+    if ts >= 0 then
+        call __mn_divmod_nonneg_div2(t, q, r, __mn_hist, __mn_scratch)
     else
         local int u = 0
         u -= t
         u += 1
-        call __mn_divmod_nonneg_div2(u, q, r)
+        call __mn_divmod_nonneg_div2(u, q, r, __mn_hist, __mn_scratch)
         local int z = 0
         z -= q
         push(q, __mn_hist)
-        call __mn_move_int(q, z)
+        call __mn_move_int(q, z, __mn_hist, __mn_scratch)
         local int sink = 0
-        call __mn_move_int(sink, t)
+        call __mn_move_int(sink, t, __mn_hist, __mn_scratch)
         push(sink, __mn_hist)
         delocal int sink = 0
         push(z, __mn_hist)
         delocal int z = 0
         push(u, __mn_hist)
         delocal int u = 0
-    fi t >= 0
+    fi ts >= 0
+    push(ts, __mn_hist)
+    delocal int ts = 0
     push(r, __mn_hist)
     delocal int r = 0
 
 // Bit k (0=LSB) dopo k shift aritmetici su a (semantica come int C).
-procedure __mn_bit_k_signed(int a, int k, int bit_out)
-    stack __mn_hist
+// `from i == 0` + guard: FROM vero solo a i=0 (pre-loop), falso a i=1..k-1.
+procedure __mn_bit_k_signed(int a, int kk, int bit_out, stack __mn_hist, stack __mn_scratch)
     local int t = 0
     t += a
     local int i = 0
-    from i < k loop
+    local int kp1 = 0
+    kp1 += kk
+    kp1 += 1
+    from i == 0 loop
+        if i != 0 then
+            local int q = 0
+            call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
+            t += q
+            push(q, __mn_hist)
+            delocal int q = 0
+        fi i != 0
         i += 1
-        local int q = 0
-        call __mn_floor_div2_signed(t, q)
-        t += q
-        push(q, __mn_hist)
-        delocal int q = 0
-    until i == k
+    until i == kp1
     local int qf = 0
     local int rf = 0
-    if t >= 0 then
-        call __mn_divmod_nonneg_div2(t, qf, rf)
+    local int ts = 0
+    ts += t
+    if ts >= 0 then
+        call __mn_divmod_nonneg_div2(t, qf, rf, __mn_hist, __mn_scratch)
         bit_out += rf
     else
         local int u = 0
         u -= t
-        call __mn_divmod_nonneg_div2(u, qf, rf)
+        call __mn_divmod_nonneg_div2(u, qf, rf, __mn_hist, __mn_scratch)
         bit_out += rf
         push(u, __mn_hist)
         delocal int u = 0
-    fi t >= 0
+    fi ts >= 0
+    push(ts, __mn_hist)
+    delocal int ts = 0
     push(rf, __mn_hist)
     delocal int rf = 0
     push(qf, __mn_hist)
     delocal int qf = 0
+    push(kp1, __mn_hist)
+    delocal int kp1 = 0
     push(i, __mn_hist)
     delocal int i = 0
     push(t, __mn_hist)
     delocal int t = 0
 
 // dst += (a & b) — bit-a-bit su 31 iterazioni (LSB… , come interi con bit signed).
-procedure __mn_and_into(int dst, int a, int b)
-    stack __mn_hist
+// Pattern FLATTENED: nested `if abit then if bbit then dst += pow fi fi` triggers
+// VM uncall bug (inner inverse fires unconditionally when outer cond true). Use
+// `s = abit + bbit; if s == 2 then dst += pow fi s == 2` instead — single-stmt
+// body if-fi inverts cleanly.
+procedure __mn_and_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
-    from k < 31 loop
+    from k == 0 loop
         local int abit = 0
         local int bbit = 0
-        call __mn_bit_k_signed(a, k, abit)
-        call __mn_bit_k_signed(b, k, bbit)
-        if abit != 0 then
-            if bbit != 0 then
-                dst += pow
-            fi bbit != 0
-        fi abit != 0
+        call __mn_bit_k_signed(a, k, abit, __mn_hist, __mn_scratch)
+        call __mn_bit_k_signed(b, k, bbit, __mn_hist, __mn_scratch)
+        local int s = 0
+        s += abit
+        s += bbit
+        if s == 2 then
+            dst += pow
+        fi s == 2
+        s -= bbit
+        s -= abit
+        push(s, __mn_hist)
+        delocal int s = 0
         k += 1
         local int next_pow = 0
         next_pow += pow
         next_pow += pow
         push(pow, __mn_hist)
-        call __mn_move_int(pow, next_pow)
+        call __mn_move_int(pow, next_pow, __mn_hist, __mn_scratch)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
         push(bbit, __mn_hist)
@@ -135,15 +171,15 @@ procedure __mn_and_into(int dst, int a, int b)
     delocal int k = 0
 
 // dst += (a | b)
-procedure __mn_or_into(int dst, int a, int b)
-    stack __mn_hist
+// `from k == 0`: stesso pattern di and_into.
+procedure __mn_or_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
     local int k = 0
     local int pow = 1
-    from k < 31 loop
+    from k == 0 loop
         local int abit = 0
         local int bbit = 0
-        call __mn_bit_k_signed(a, k, abit)
-        call __mn_bit_k_signed(b, k, bbit)
+        call __mn_bit_k_signed(a, k, abit, __mn_hist, __mn_scratch)
+        call __mn_bit_k_signed(b, k, bbit, __mn_hist, __mn_scratch)
         local int s = 0
         s += abit
         s += bbit
@@ -155,7 +191,7 @@ procedure __mn_or_into(int dst, int a, int b)
         next_pow += pow
         next_pow += pow
         push(pow, __mn_hist)
-        call __mn_move_int(pow, next_pow)
+        call __mn_move_int(pow, next_pow, __mn_hist, __mn_scratch)
         push(next_pow, __mn_hist)
         delocal int next_pow = 0
         push(s, __mn_hist)
@@ -171,59 +207,66 @@ procedure __mn_or_into(int dst, int a, int b)
     delocal int k = 0
 
 // dst += (x << n), n >= 0
-// `pop` nella VM fa `dst += valore`: prima di __mn_move_int(dst, src) va azzerato
-// `dst` con push(dst, stack), altrimenti pow diventa 1+2=3 e x<<1 diventa x*3.
-procedure __mn_shl_into(int dst, int x, int n)
-    stack __mn_hist
+// NOTA BUG VM: `if n != 0 then [from-loop] fi` con n==0 in inversione esegue
+// il corpo una volta → i finisce a -1. Workaround peel-loop disponibile ma
+// rallenta opt-uncall ~22x. Encrypt usa n=8 sempre, quindi if-fi è OK.
+// Per n=0 vedere c_test/uncall_bug_shl_n0.kairos.
+procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scratch)
     local int pow = 1
     local int i = 0
-    from i < n loop
-        i += 1
-        local int np = 0
-        np += pow
-        np += pow
-        push(pow, __mn_hist)
-        call __mn_move_int(pow, np)
-        push(np, __mn_hist)
-        delocal int np = 0
-    until i == n
-    call __mn_mul_into(dst, x, pow)
+    if n != 0 then
+        from i == 0 loop
+            i += 1
+            local int np = 0
+            np += pow
+            np += pow
+            push(pow, __mn_hist)
+            call __mn_move_int(pow, np, __mn_hist, __mn_scratch)
+            push(np, __mn_hist)
+            delocal int np = 0
+        until i == n
+    fi n != 0
+    call __mn_mul_into(dst, x, pow, __mn_hist, __mn_scratch)
     push(i, __mn_hist)
     delocal int i = 0
     push(pow, __mn_hist)
     delocal int pow = 0
 
 // dst += (x >> n) aritmetico
-procedure __mn_shr_into(int dst, int x, int n)
-    stack __mn_hist
+// NOTA BUG VM: stesso problema di __mn_shl_into per n==0. Encrypt usa n=8.
+// Per n=0 vedere c_test/uncall_bug_shr_n0.kairos.
+procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scratch)
     local int t = 0
     t += x
     local int i = 0
-    from i < n loop
-        i += 1
-        local int q = 0
-        call __mn_floor_div2_signed(t, q)
-        t += q
-        push(q, __mn_hist)
-        delocal int q = 0
-    until i == n
+    if n != 0 then
+        from i == 0 loop
+            i += 1
+            local int q = 0
+            call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
+            t += q
+            push(q, __mn_hist)
+            delocal int q = 0
+        until i == n
+    fi n != 0
     dst += t
     push(i, __mn_hist)
     delocal int i = 0
     push(t, __mn_hist)
     delocal int t = 0
 
-// Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
-// Dopo le cifre, n viene ricostruito con __mn_mul_into (niente uncall su divmod).
+// Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos.
+// REVERSIBILE: usa `uncall __mn_divmod_nonneg` per ripristinare n e azzerare qu/rem.
+// Permette `call __mn_putd_uint; uncall __mn_putd_uint` (show è no-op in inverse).
 
-procedure __mn_putd_uint(int n)
+procedure __mn_putd_uint(int n, stack __mn_hist, stack __mn_scratch)
     local int ten = 0
     ten += 10
     local int qu = 0
     local int rem = 0
     if n >= ten then
-        call __mn_divmod_nonneg(n, ten, qu, rem)
-        call __mn_putd_uint(qu)
+        call __mn_divmod_nonneg(n, ten, qu, rem, __mn_hist, __mn_scratch)
+        call __mn_putd_uint(qu, __mn_hist, __mn_scratch)
         local int ch = 0
         ch += rem
         ch += 48
@@ -231,20 +274,7 @@ procedure __mn_putd_uint(int n)
         ch -= 48
         ch -= rem
         delocal int ch = 0
-        local int prod = 0
-        call __mn_mul_into(prod, qu, ten)
-        n += prod
-        n += rem
-        from prod > 0 loop
-            prod -= 1
-        until prod == 0
-        from qu > 0 loop
-            qu -= 1
-        until qu == 0
-        from rem > 0 loop
-            rem -= 1
-        until rem == 0
-        delocal int prod = 0
+        uncall __mn_divmod_nonneg(n, ten, qu, rem, __mn_hist, __mn_scratch)
     else
         local int ch = 0
         ch += n
@@ -259,7 +289,7 @@ procedure __mn_putd_uint(int n)
     delocal int qu = 0
     delocal int ten = 0
 
-procedure __mn_putd(int n)
+procedure __mn_putd(int n, stack __mn_hist, stack __mn_scratch)
     local int z = 0
     if n < z then
         local int hy = 0
@@ -272,28 +302,29 @@ procedure __mn_putd(int n)
         n += t
         n <=> t
         delocal int t = 0
-        call __mn_putd_uint(n)
+        call __mn_putd_uint(n, __mn_hist, __mn_scratch)
         local int t2 = 0
         t2 -= n
         n += t2
         n <=> t2
         delocal int t2 = 0
     else
-        call __mn_putd_uint(n)
+        call __mn_putd_uint(n, __mn_hist, __mn_scratch)
     fi n < z
     delocal int z = 0
 
 // Stampa intero non negativo in esadecimale minuscolo.
-// Dipendenze: helpers.kairos, divmod.kairos, mul.kairos.
+// Dipendenze: helpers.kairos, divmod.kairos.
+// REVERSIBILE via `uncall __mn_divmod_nonneg` (vedi __mn_putd_uint).
 
-procedure __mn_putx_uint(int n)
+procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
     local int base = 0
     base += 16
     local int qu = 0
     local int rem = 0
     if n >= base then
-        call __mn_divmod_nonneg(n, base, qu, rem)
-        call __mn_putx_uint(qu)
+        call __mn_divmod_nonneg(n, base, qu, rem, __mn_hist, __mn_scratch)
+        call __mn_putx_uint(qu, __mn_hist, __mn_scratch)
         local int ch = 0
         local int ten = 0
         ten += 10
@@ -313,20 +344,7 @@ procedure __mn_putx_uint(int n)
         ten -= 10
         delocal int ten = 0
         delocal int ch = 0
-        local int prod = 0
-        call __mn_mul_into(prod, qu, base)
-        n += prod
-        n += rem
-        from prod > 0 loop
-            prod -= 1
-        until prod == 0
-        from qu > 0 loop
-            qu -= 1
-        until qu == 0
-        from rem > 0 loop
-            rem -= 1
-        until rem == 0
-        delocal int prod = 0
+        uncall __mn_divmod_nonneg(n, base, qu, rem, __mn_hist, __mn_scratch)
     else
         local int ch = 0
         local int ten = 0
@@ -353,16 +371,15 @@ procedure __mn_putx_uint(int n)
     delocal int qu = 0
     delocal int base = 0
 
-procedure __mn_putx(int n)
-    call __mn_putx_uint(n)
+procedure __mn_putx(int n, stack __mn_hist, stack __mn_scratch)
+    call __mn_putx_uint(n, __mn_hist, __mn_scratch)
 
 // Pool puntatori Mnemo — generato, N=6 celle (__mn_mem0..__mn_mem5).
 // `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.
 // `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push
 // e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).
 
-procedure __mn_pool_alloc(int ctr, int out_slot)
-    stack __mn_hist
+procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)
     local int t = 0
         t += ctr
         push(out_slot, __mn_hist)
@@ -371,8 +388,7 @@ procedure __mn_pool_alloc(int ctr, int out_slot)
         push(t, __mn_hist)
     delocal int t = 0
 
-procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5)
-    stack __mn_hist
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += val
@@ -398,8 +414,7 @@ procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int _
         __mn_mem5 += val
     fi slot == 5
 
-procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int out)
-    stack __mn_hist
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int out, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         local int t = 0
             t += __mn_mem0
@@ -449,8 +464,7 @@ procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
         delocal int t = 0
     fi slot == 5
 
-procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int ctr)
-    stack __mn_hist
+procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int ctr, stack __mn_hist, stack __mn_scratch)
     local int ctr0 = 0
         ctr0 += ctr
         if slot == 0 then
@@ -529,12 +543,12 @@ procedure main()
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += 19
         __mn_e0 += 1
-        call __mn_shl_into(__mn_e1, __mn_mem0, __mn_e0)
+        call __mn_shl_into(__mn_e1, __mn_mem0, __mn_e0, __mn_hist, __mn_scratch)
         push(__mn_e0, __mn_scratch)
         push(__mn_mem1, __mn_hist)
         __mn_mem1 += __mn_e1
         push(__mn_e1, __mn_scratch)
-        call __mn_putd(__mn_mem1)
+        call __mn_putd(__mn_mem1, __mn_hist, __mn_scratch)
         __mn_e2 += 10
         show(__mn_e2, char)
         __mn_e2 -= 10
