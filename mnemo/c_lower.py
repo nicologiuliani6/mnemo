@@ -4266,14 +4266,14 @@ def _lower_funccall_with_ret(
             ctx.use_hist = True
             chx = _file_scope_channel_actuals(ctx)
             stk = _kairos_stack_actuals(ctx)
-            rec = _func_is_recursive_user(ctx.file_ast, name)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
+            self_rec = (name == ctx.fn_name)
             apply_uncall_opt = (
                 ctx.opt_uncall_user_calls
                 and wants
                 and ret_sink is not None
                 and rw_c >= 1
-                and not rec
+                and not self_rec
                 and not ir_blk
             )
             apply_void_uncall_opt = (
@@ -4281,7 +4281,7 @@ def _lower_funccall_with_ret(
                 and not wants
                 and ret_sink is None
                 and rw_c == 0
-                and not rec
+                and not self_rec
                 and not ir_blk
             )
             uncall_with_restore: list[Instr] = []
