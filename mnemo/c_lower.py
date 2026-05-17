@@ -1976,6 +1976,7 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         return [
             IComment("pthread_mutex_lock → srecv token (π-style)"),
             ISrecv([t], ch),
+            ISubEq(t, Imm(1)),
         ]
 
     if nm == "pthread_mutex_unlock":
@@ -1997,6 +1998,7 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         return [
             IComment("pthread_mutex_destroy: svuota token residuo sul canale (prima del delocal)"),
             ISrecv([t], ch),
+            ISubEq(t, Imm(1)),
         ]
 
     return None

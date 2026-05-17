@@ -551,6 +551,7 @@ procedure mnemo_sync_print_teardown(int __mn_mem0, int __mn_mem1, int __mn_mem2,
         // funzione C mnemo_sync_print_teardown
         // pthread_mutex_destroy: svuota token residuo sul canale (prima del delocal)
         srecv(<__mn_e0>, __mn_mtx_mnemo_sync_print_mutex)
+        __mn_e0 -= 1
     push(__mn_e0, __mn_hist)
     delocal int __mn_e0 = 0
 procedure producer(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int __mn_mem9, int __mn_mem10, int __mn_mem11, int __mn_mem12, int __mn_mem13, int __mn_mem14, int __mn_mem15, int __mn_mem16, channel __mn_mtx_mnemo_sync_print_mutex, channel __mn_kch_mps__mps_t__lane, stack __mn_hist, stack __mn_scratch)
@@ -587,6 +588,7 @@ procedure producer(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, i
             from 0 == 0 loop
                 // pthread_mutex_lock → srecv token (π-style)
                 srecv(<__mn_e4>, __mn_mtx_mnemo_sync_print_mutex)
+                __mn_e4 -= 1
                 __mn_e5 += 112
                 show(__mn_e5, char)
                 __mn_e5 -= 112
@@ -746,6 +748,7 @@ procedure consumer(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, i
             from 0 == 0 loop
                 // pthread_mutex_lock → srecv token (π-style)
                 srecv(<__mn_e6>, __mn_mtx_mnemo_sync_print_mutex)
+                __mn_e6 -= 1
                 __mn_e7 += 99
                 show(__mn_e7, char)
                 __mn_e7 -= 99

@@ -1,7 +1,3 @@
-// Profondità __mn_hist subito prima di una call Mnemo `--opt-uncall-user-calls` (+XOR uncall).
-// La VM Janus intercetta `call __mn_hist_floor_snap(...)` (corpo vuoto — no `end_proc` nel sorgente Kairos).
-procedure __mn_hist_floor_snap(stack __mn_snap_h)
-
 procedure __mn_k_loop(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, stack __mn_hist, stack __mn_scratch)
     local int __mn_e0 = 0
     local int __mn_e1 = 0
@@ -41,55 +37,16 @@ procedure __mn_k_loop(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3
     delocal int __mn_e1 = 0
     push(__mn_e0, __mn_hist)
     delocal int __mn_e0 = 0
-procedure main()
-    stack __mn_hist
-    stack __mn_scratch
+procedure __main__(stack __mn_hist, stack __mn_scratch)
     local int __mn_mem0 = 0
     local int __mn_mem1 = 0
     local int __mn_mem2 = 0
     local int __mn_mem3 = 0
     local int __mn_mem4 = 0
     local int __mn_exit = 0
-    local int __mn_e0 = 0
-    local int __mn_e1 = 0
-    local int __mn_e2 = 0
-    local int __mn_e3 = 0
-    local int __mn_e4 = 0
         // generato da Mnemo da C
-        call __mn_hist_floor_snap(__mn_hist)
         call __mn_k_loop(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_hist, __mn_scratch)
-        __mn_e0 ^= __mn_mem0
-        __mn_e1 ^= __mn_mem1
-        __mn_e2 ^= __mn_mem2
-        __mn_e3 ^= __mn_mem3
-        __mn_e4 ^= __mn_mem4
-        uncall __mn_k_loop(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_hist, __mn_scratch)
-        __mn_mem0 ^= __mn_e0
-        __mn_e0 ^= __mn_mem0
-        __mn_mem0 ^= __mn_e0
-        __mn_mem1 ^= __mn_e1
-        __mn_e1 ^= __mn_mem1
-        __mn_mem1 ^= __mn_e1
-        __mn_mem2 ^= __mn_e2
-        __mn_e2 ^= __mn_mem2
-        __mn_mem2 ^= __mn_e2
-        __mn_mem3 ^= __mn_e3
-        __mn_e3 ^= __mn_mem3
-        __mn_mem3 ^= __mn_e3
-        __mn_mem4 ^= __mn_e4
-        __mn_e4 ^= __mn_mem4
-        __mn_mem4 ^= __mn_e4
         // return
-    push(__mn_e4, __mn_hist)
-    delocal int __mn_e4 = 0
-    push(__mn_e3, __mn_hist)
-    delocal int __mn_e3 = 0
-    push(__mn_e2, __mn_hist)
-    delocal int __mn_e2 = 0
-    push(__mn_e1, __mn_hist)
-    delocal int __mn_e1 = 0
-    push(__mn_e0, __mn_hist)
-    delocal int __mn_e0 = 0
     push(__mn_exit, __mn_hist)
     delocal int __mn_exit = 0
     push(__mn_mem4, __mn_hist)
@@ -102,3 +59,8 @@ procedure main()
     delocal int __mn_mem1 = 0
     push(__mn_mem0, __mn_hist)
     delocal int __mn_mem0 = 0
+procedure main()
+    stack __mn_hist
+    stack __mn_scratch
+    call __main__(__mn_hist, __mn_scratch)
+    uncall __main__(__mn_hist, __mn_scratch)
