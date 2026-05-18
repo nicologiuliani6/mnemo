@@ -4,15 +4,19 @@
 
 ### [P3] opt-uncall self-recursion (fibonacci → fibonacci)
 
-**Stato**: skip se `caller == callee` (mnemo c_lower.py).
+**Stato**: skip se `caller == callee` (mnemo c_lower.py `self_rec` guard).
 
-**Causa**: VM uncall sul frame depth N quando call su depth N+1 in corso → frame state stack management complesso.
+**Errore corrente** (rimuovendo `self_rec`): `XOREQ __mn_e12 NULL frame=fibonacci@w<tid>_N`. Si manifesta in fib.c con PAR (fib_left/fib_right entrambi recurono).
 
 **Progress**:
 - ✅ VM `exec_branch_inverse` CALL handler ora gestisce caso ricorsivo (clone_frame_for_depth + invert_op_to_line) — kairos 0166749.
-- ❌ Forward `__mn_e12 ^= __mn_mem9` su `sumto@5` fallisce con var NULL anche se LOCAL e DELOCAL hanno girato per quel frame. Trace mostra XOR SNAP eseguito su sumto@4 (caller) PRIMA che END_PROC restore fname a sumto@4 → forse problema fname tracking o clone re-use con var già delocaled. Non root-caused.
+- ✅ `init_clone_frame` duplica slot INT DECL per opt-uncall su recursive — kairos be9da45.
+- ❌ Sub-issue identificato: `Janus.c` UNCALL handler usa `char_id_map_get(&FrameIndexer, pn)` (base frame) anziché clone per il depth corrente. Fix abbozzato (detect self-rec via `pn == base_of_fname`, computa `new_dep = caller_dep + 1`, `clone_frame_for_depth(pn, new_dep)`, `inv_name = make_frame_key{,_par_rec}`) compila ma non risolve l'errore — `__mn_e12` resta NULL nel caller depth-7.
+- ❓ Probabile causa restante: `base_var_count = param_count = 12` (LOCAL non eseguito sul base frame → `var_count` non bumped). `exec_branch_inverse` allocazione tmp slots itera `[0, var_count)`, quindi __mn_e<idx=24> non viene ri-allocato quando manca. Cross-thread (fib_left vs fib_right) genera tid distinti nelle par_rec keys → cache mismatch indipendente.
 
-**Per attivare**: capire perché XOREQ forward in caller (sumto@4) sembra valutarsi nel frame sumto@5 (post-delocal). Probabilmente DELOCAL spuria o END_PROC manca per via dell'IF-then-fi struttura su base-case.
+**Per attivare**:
+1. Bumpare `var_count` di base frame durante vm_exec quando vede `local int X = 0` (pre-allocare slot anche se body non gira sul base).
+2. O: in UNCALL handler + `exec_branch_inverse`, iterare `[0, base_var_count_after_local_scan)` invece di `var_count`.
 
 Tempo stimato: 4-8 ore.
 
