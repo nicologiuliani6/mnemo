@@ -457,92 +457,13 @@ procedure main()
             push(__mn_e0, __mn_hist)
             __mn_e0 += 0
         fi __mn_mem4 < 2
-        local int __mn_lc1 = 0
-            from __mn_lc1 == 0 loop
-                push(__mn_mem5, __mn_hist)
-                __mn_mem5 += 0
-                if __mn_mem5 < 2 then
-                    push(__mn_e2, __mn_hist)
-                    __mn_e2 += 1
-                else
-                    push(__mn_e2, __mn_hist)
-                    __mn_e2 += 0
-                fi __mn_mem5 < 2
-                local int __mn_lc0 = 0
-                    from __mn_lc0 == 0 loop
-                        __mn_e7 += 2
-                        call __mn_mul_into(__mn_e8, __mn_mem4, __mn_e7, __mn_hist, __mn_scratch)
-                        push(__mn_e7, __mn_scratch)
-                        __mn_e9 += __mn_e8
-                        __mn_e9 += __mn_mem5
-                        __mn_e4 += __mn_mem4
-                        __mn_e4 += 1
-                        __mn_e5 += __mn_mem5
-                        __mn_e5 += 2
-                        call __mn_mul_into(__mn_e6, __mn_e4, __mn_e5, __mn_hist, __mn_scratch)
-                        push(__mn_e5, __mn_scratch)
-                        push(__mn_e4, __mn_scratch)
-                        if __mn_e9 == 0 then
-                            push(__mn_mem0, __mn_hist)
-                            __mn_mem0 += __mn_e6
-                        else
-                            if __mn_e9 == 1 then
-                                push(__mn_mem1, __mn_hist)
-                                __mn_mem1 += __mn_e6
-                            else
-                                if __mn_e9 == 2 then
-                                    push(__mn_mem2, __mn_hist)
-                                    __mn_mem2 += __mn_e6
-                                else
-                                    if __mn_e9 == 3 then
-                                        push(__mn_mem3, __mn_hist)
-                                        __mn_mem3 += __mn_e6
-                                    fi __mn_e9 == 3
-                                fi __mn_e9 == 2
-                            fi __mn_e9 == 1
-                        fi __mn_e9 == 0
-                        push(__mn_e6, __mn_scratch)
-                        push(__mn_e9, __mn_scratch)
-                        push(__mn_e8, __mn_scratch)
-                        __mn_e10 += 2
-                        call __mn_mul_into(__mn_e11, __mn_mem4, __mn_e10, __mn_hist, __mn_scratch)
-                        push(__mn_e10, __mn_scratch)
-                        __mn_e12 += __mn_e11
-                        __mn_e12 += __mn_mem5
-                        if __mn_e12 == 0 then
-                            push(__mn_e13, __mn_hist)
-                            __mn_e13 += __mn_mem0
-                        else
-                            if __mn_e12 == 1 then
-                                push(__mn_e13, __mn_hist)
-                                __mn_e13 += __mn_mem1
-                            else
-                                if __mn_e12 == 2 then
-                                    push(__mn_e13, __mn_hist)
-                                    __mn_e13 += __mn_mem2
-                                else
-                                    if __mn_e12 == 3 then
-                                        push(__mn_e13, __mn_hist)
-                                        __mn_e13 += __mn_mem3
-                                    fi __mn_e12 == 3
-                                fi __mn_e12 == 2
-                            fi __mn_e12 == 1
-                        fi __mn_e12 == 0
-                        __mn_e14 += __mn_mem6
-                        __mn_e14 += __mn_e13
-                        push(__mn_mem6, __mn_hist)
-                        __mn_mem6 += __mn_e14
-                        push(__mn_e14, __mn_scratch)
-                        push(__mn_e13, __mn_scratch)
-                        push(__mn_e12, __mn_scratch)
-                        push(__mn_e11, __mn_scratch)
-                        __mn_e3 += __mn_mem5
-                        __mn_e3 += 1
+        local int __mn_lc3 = 0
+            __mn_lc3 += __mn_e0
+            if __mn_lc3 != 0 then
+                local int __mn_lc2 = 0
+                    from __mn_lc2 == 0 loop
                         push(__mn_mem5, __mn_hist)
-                        __mn_mem5 += __mn_e3
-                        push(__mn_e3, __mn_scratch)
-                        push(__mn_e2, __mn_hist)
-                        __mn_e2 += 0
+                        __mn_mem5 += 0
                         if __mn_mem5 < 2 then
                             push(__mn_e2, __mn_hist)
                             __mn_e2 += 1
@@ -550,28 +471,119 @@ procedure main()
                             push(__mn_e2, __mn_hist)
                             __mn_e2 += 0
                         fi __mn_mem5 < 2
-                        __mn_lc0 += 1
-                    until __mn_e2 == 0
-                    push(__mn_lc0, __mn_hist)
-                delocal int __mn_lc0 = 0
-                __mn_e1 += __mn_mem4
-                __mn_e1 += 1
-                push(__mn_mem4, __mn_hist)
-                __mn_mem4 += __mn_e1
-                push(__mn_e1, __mn_scratch)
-                push(__mn_e0, __mn_hist)
-                __mn_e0 += 0
-                if __mn_mem4 < 2 then
-                    push(__mn_e0, __mn_hist)
-                    __mn_e0 += 1
-                else
-                    push(__mn_e0, __mn_hist)
-                    __mn_e0 += 0
-                fi __mn_mem4 < 2
-                __mn_lc1 += 1
-            until __mn_e0 == 0
-            push(__mn_lc1, __mn_hist)
-        delocal int __mn_lc1 = 0
+                        local int __mn_lc1 = 0
+                            __mn_lc1 += __mn_e2
+                            if __mn_lc1 != 0 then
+                                local int __mn_lc0 = 0
+                                    from __mn_lc0 == 0 loop
+                                        __mn_e7 += 2
+                                        call __mn_mul_into(__mn_e8, __mn_mem4, __mn_e7, __mn_hist, __mn_scratch)
+                                        push(__mn_e7, __mn_scratch)
+                                        __mn_e9 += __mn_e8
+                                        __mn_e9 += __mn_mem5
+                                        __mn_e4 += __mn_mem4
+                                        __mn_e4 += 1
+                                        __mn_e5 += __mn_mem5
+                                        __mn_e5 += 2
+                                        call __mn_mul_into(__mn_e6, __mn_e4, __mn_e5, __mn_hist, __mn_scratch)
+                                        push(__mn_e5, __mn_scratch)
+                                        push(__mn_e4, __mn_scratch)
+                                        if __mn_e9 == 0 then
+                                            push(__mn_mem0, __mn_hist)
+                                            __mn_mem0 += __mn_e6
+                                        else
+                                            if __mn_e9 == 1 then
+                                                push(__mn_mem1, __mn_hist)
+                                                __mn_mem1 += __mn_e6
+                                            else
+                                                if __mn_e9 == 2 then
+                                                    push(__mn_mem2, __mn_hist)
+                                                    __mn_mem2 += __mn_e6
+                                                else
+                                                    if __mn_e9 == 3 then
+                                                        push(__mn_mem3, __mn_hist)
+                                                        __mn_mem3 += __mn_e6
+                                                    fi __mn_e9 == 3
+                                                fi __mn_e9 == 2
+                                            fi __mn_e9 == 1
+                                        fi __mn_e9 == 0
+                                        push(__mn_e6, __mn_scratch)
+                                        push(__mn_e9, __mn_scratch)
+                                        push(__mn_e8, __mn_scratch)
+                                        __mn_e10 += 2
+                                        call __mn_mul_into(__mn_e11, __mn_mem4, __mn_e10, __mn_hist, __mn_scratch)
+                                        push(__mn_e10, __mn_scratch)
+                                        __mn_e12 += __mn_e11
+                                        __mn_e12 += __mn_mem5
+                                        if __mn_e12 == 0 then
+                                            push(__mn_e13, __mn_hist)
+                                            __mn_e13 += __mn_mem0
+                                        else
+                                            if __mn_e12 == 1 then
+                                                push(__mn_e13, __mn_hist)
+                                                __mn_e13 += __mn_mem1
+                                            else
+                                                if __mn_e12 == 2 then
+                                                    push(__mn_e13, __mn_hist)
+                                                    __mn_e13 += __mn_mem2
+                                                else
+                                                    if __mn_e12 == 3 then
+                                                        push(__mn_e13, __mn_hist)
+                                                        __mn_e13 += __mn_mem3
+                                                    fi __mn_e12 == 3
+                                                fi __mn_e12 == 2
+                                            fi __mn_e12 == 1
+                                        fi __mn_e12 == 0
+                                        __mn_e14 += __mn_mem6
+                                        __mn_e14 += __mn_e13
+                                        push(__mn_mem6, __mn_hist)
+                                        __mn_mem6 += __mn_e14
+                                        push(__mn_e14, __mn_scratch)
+                                        push(__mn_e13, __mn_scratch)
+                                        push(__mn_e12, __mn_scratch)
+                                        push(__mn_e11, __mn_scratch)
+                                        __mn_e3 += __mn_mem5
+                                        __mn_e3 += 1
+                                        push(__mn_mem5, __mn_hist)
+                                        __mn_mem5 += __mn_e3
+                                        push(__mn_e3, __mn_scratch)
+                                        push(__mn_e2, __mn_hist)
+                                        __mn_e2 += 0
+                                        if __mn_mem5 < 2 then
+                                            push(__mn_e2, __mn_hist)
+                                            __mn_e2 += 1
+                                        else
+                                            push(__mn_e2, __mn_hist)
+                                            __mn_e2 += 0
+                                        fi __mn_mem5 < 2
+                                        __mn_lc0 += 1
+                                    until __mn_e2 == 0
+                                    push(__mn_lc0, __mn_hist)
+                                delocal int __mn_lc0 = 0
+                            fi __mn_lc1 != 0
+                            push(__mn_lc1, __mn_hist)
+                        delocal int __mn_lc1 = 0
+                        __mn_e1 += __mn_mem4
+                        __mn_e1 += 1
+                        push(__mn_mem4, __mn_hist)
+                        __mn_mem4 += __mn_e1
+                        push(__mn_e1, __mn_scratch)
+                        push(__mn_e0, __mn_hist)
+                        __mn_e0 += 0
+                        if __mn_mem4 < 2 then
+                            push(__mn_e0, __mn_hist)
+                            __mn_e0 += 1
+                        else
+                            push(__mn_e0, __mn_hist)
+                            __mn_e0 += 0
+                        fi __mn_mem4 < 2
+                        __mn_lc2 += 1
+                    until __mn_e0 == 0
+                    push(__mn_lc2, __mn_hist)
+                delocal int __mn_lc2 = 0
+            fi __mn_lc3 != 0
+            push(__mn_lc3, __mn_hist)
+        delocal int __mn_lc3 = 0
         call __mn_putd(__mn_mem6, __mn_hist, __mn_scratch)
         __mn_e15 += 10
         show(__mn_e15, char)

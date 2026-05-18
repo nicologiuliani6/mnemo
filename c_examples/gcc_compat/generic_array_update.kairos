@@ -445,68 +445,74 @@ procedure main()
             push(__mn_e4, __mn_hist)
             __mn_e4 += 0
         fi __mn_mem4 < 4
-        local int __mn_lc0 = 0
-            from __mn_lc0 == 0 loop
-                if __mn_mem4 == 0 then
-                    push(__mn_e6, __mn_hist)
-                    __mn_e6 += __mn_mem0
-                else
-                    if __mn_mem4 == 1 then
-                        push(__mn_e6, __mn_hist)
-                        __mn_e6 += __mn_mem1
-                    else
-                        if __mn_mem4 == 2 then
+        local int __mn_lc1 = 0
+            __mn_lc1 += __mn_e4
+            if __mn_lc1 != 0 then
+                local int __mn_lc0 = 0
+                    from __mn_lc0 == 0 loop
+                        if __mn_mem4 == 0 then
                             push(__mn_e6, __mn_hist)
-                            __mn_e6 += __mn_mem2
+                            __mn_e6 += __mn_mem0
                         else
-                            if __mn_mem4 == 3 then
+                            if __mn_mem4 == 1 then
                                 push(__mn_e6, __mn_hist)
-                                __mn_e6 += __mn_mem3
-                            fi __mn_mem4 == 3
-                        fi __mn_mem4 == 2
-                    fi __mn_mem4 == 1
-                fi __mn_mem4 == 0
-                __mn_e7 += __mn_e6
-                __mn_e7 += 1
-                if __mn_mem4 == 0 then
-                    push(__mn_mem0, __mn_hist)
-                    __mn_mem0 += __mn_e7
-                else
-                    if __mn_mem4 == 1 then
-                        push(__mn_mem1, __mn_hist)
-                        __mn_mem1 += __mn_e7
-                    else
-                        if __mn_mem4 == 2 then
-                            push(__mn_mem2, __mn_hist)
-                            __mn_mem2 += __mn_e7
+                                __mn_e6 += __mn_mem1
+                            else
+                                if __mn_mem4 == 2 then
+                                    push(__mn_e6, __mn_hist)
+                                    __mn_e6 += __mn_mem2
+                                else
+                                    if __mn_mem4 == 3 then
+                                        push(__mn_e6, __mn_hist)
+                                        __mn_e6 += __mn_mem3
+                                    fi __mn_mem4 == 3
+                                fi __mn_mem4 == 2
+                            fi __mn_mem4 == 1
+                        fi __mn_mem4 == 0
+                        __mn_e7 += __mn_e6
+                        __mn_e7 += 1
+                        if __mn_mem4 == 0 then
+                            push(__mn_mem0, __mn_hist)
+                            __mn_mem0 += __mn_e7
                         else
-                            if __mn_mem4 == 3 then
-                                push(__mn_mem3, __mn_hist)
-                                __mn_mem3 += __mn_e7
-                            fi __mn_mem4 == 3
-                        fi __mn_mem4 == 2
-                    fi __mn_mem4 == 1
-                fi __mn_mem4 == 0
-                push(__mn_e7, __mn_scratch)
-                push(__mn_e6, __mn_scratch)
-                __mn_e5 += __mn_mem4
-                __mn_e5 += 1
-                push(__mn_mem4, __mn_hist)
-                __mn_mem4 += __mn_e5
-                push(__mn_e5, __mn_scratch)
-                push(__mn_e4, __mn_hist)
-                __mn_e4 += 0
-                if __mn_mem4 < 4 then
-                    push(__mn_e4, __mn_hist)
-                    __mn_e4 += 1
-                else
-                    push(__mn_e4, __mn_hist)
-                    __mn_e4 += 0
-                fi __mn_mem4 < 4
-                __mn_lc0 += 1
-            until __mn_e4 == 0
-            push(__mn_lc0, __mn_hist)
-        delocal int __mn_lc0 = 0
+                            if __mn_mem4 == 1 then
+                                push(__mn_mem1, __mn_hist)
+                                __mn_mem1 += __mn_e7
+                            else
+                                if __mn_mem4 == 2 then
+                                    push(__mn_mem2, __mn_hist)
+                                    __mn_mem2 += __mn_e7
+                                else
+                                    if __mn_mem4 == 3 then
+                                        push(__mn_mem3, __mn_hist)
+                                        __mn_mem3 += __mn_e7
+                                    fi __mn_mem4 == 3
+                                fi __mn_mem4 == 2
+                            fi __mn_mem4 == 1
+                        fi __mn_mem4 == 0
+                        push(__mn_e7, __mn_scratch)
+                        push(__mn_e6, __mn_scratch)
+                        __mn_e5 += __mn_mem4
+                        __mn_e5 += 1
+                        push(__mn_mem4, __mn_hist)
+                        __mn_mem4 += __mn_e5
+                        push(__mn_e5, __mn_scratch)
+                        push(__mn_e4, __mn_hist)
+                        __mn_e4 += 0
+                        if __mn_mem4 < 4 then
+                            push(__mn_e4, __mn_hist)
+                            __mn_e4 += 1
+                        else
+                            push(__mn_e4, __mn_hist)
+                            __mn_e4 += 0
+                        fi __mn_mem4 < 4
+                        __mn_lc0 += 1
+                    until __mn_e4 == 0
+                    push(__mn_lc0, __mn_hist)
+                delocal int __mn_lc0 = 0
+            fi __mn_lc1 != 0
+            push(__mn_lc1, __mn_hist)
+        delocal int __mn_lc1 = 0
         __mn_e8 += __mn_mem0
         __mn_e8 += __mn_mem1
         __mn_e9 += __mn_e8

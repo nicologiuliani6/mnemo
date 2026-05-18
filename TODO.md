@@ -2,14 +2,6 @@
 
 ## OPEN
 
-### [P3] `--check-invertibility` su 0-iter loop
-
-**Sintomo**: `for(i=0; i<0; i++) body` esegue 1 skip-iter forward sotto counter-loop lowering. Main exit C semantica differente.
-
-**Causa**: `from cnt == 0` entry sempre vera → loop entrato anche su 0-iter. Body non-guard runs 1 skip.
-
-**Fix**: IIfKairos guard wrap `if init_lc != 0 then loop fi`. Rompe nested IF inverse Janus (blocca P1). Risolvibile dopo P1.
-
 ### [P3] opt-uncall self-recursion (fibonacci → fibonacci)
 
 **Stato**: skip se `caller == callee` (mnemo c_lower.py).
@@ -28,6 +20,7 @@ Tempo stimato: 4-8 ore.
 
 ## DONE (recente)
 
+- ✅ P3 0-iter loop: counter-loop wrappato in `IIfKairos g != 0` (g=snapshot init_lc, ILocalBlock con fresh_loop_ct). VM: aggiunto `line_is_inside_if_subrange` + thread-local globals `g_invert_nested_filter_from/to` settati da `exec_branch_inverse` FROM-loop fallback → `invert_op_to_line(honor=0)` skippa righe interne ai nested IF nel sub-range. `for(i=0;i<0;i++)` ora exit gcc-matching. Reg 36+6+68 green.
 - ✅ P4 cleanup `loop_mnemo_deep_increment`: rimossi `loop_body_use_deep_peel`, `loop_mnemo_deep_increment`, `loop_body_has_nested_if`, `loop_body_has_call_or_uncall`, `loop_body_push_count_to_stack`, array `jmp_start_deep[MAX_LOOPS]` e tutti i call site. Reg 36+6+68 green.
 
 - ✅ ex21 check-invertibility: `exec_branch_inverse` nested-IF dispatch (vm_invert.h) — branch con nested IF usa collect_ifs + iter reverse con skip lines dei nested + dispatch JMPF_ELSE → recurse su ramo forward. Reg passa 36 mnemo + 6 unit + 68 gcc-compat.

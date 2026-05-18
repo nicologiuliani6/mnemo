@@ -4930,20 +4930,28 @@ def _build_counter_loop_instrs(
     in inverse il numero di peel = cnt corrente → evita heuristic deep_peel rotta
     su loop generici. Body finale: `cnt += 1`.
 
-    NOTA: per loop con 0 iter (es. `for(i; i<0; i++)`) il body viene cmq eseguito
-    una "skip-iter" volta perchè `from cnt == 0` entra sempre. Wrap con IIfKairos
-    `if g != 0` (g=snapshot init_lc) FUNZIONA forward ma rompe l'inverse: la branch
-    inverse via `branch_span_has_from_loop` chiama `invert_op_to_line(honor=0)` che
-    NON skippa righe interne ai nested IF dentro il loop body → double-processing
-    e corruzione hist. Servirebbe filtraggio if-descriptor per range → out of
-    scope. Per ora accetta semantica differente da C su 0-iter edge case.
+    Per loop con 0 iter (es. `for(i; i<0; i++)`) `from cnt == 0` esegue body una
+    "skip-iter" → semantica != C. Quando `needs_entry_guard=True` wrappiamo il
+    counter-loop in IIfKairos `g != 0` con g=snapshot di init_lc (lc è 1 se cond
+    iniziale vera, 0 altrimenti). g resta invariato dentro IF → exit assert
+    `g != 0` distingue THEN da ELSE per inverse Janus. Push(g, hist) + delocal
+    chiudono lifecycle. Skip wrap quando init_lc == exit_lhs e `needs_entry_guard`
+    è False (dowhile: body always runs almeno 1 volta per semantica C).
     """
     cnt = ctx.fresh_loop_ct()
     ctx.use_hist = True
     body_with_cnt = orig_body + [IAddEq(cnt, Imm(1))]
-    return [ILocalBlock(cnt, [
+    loop_block = [ILocalBlock(cnt, [
         IFromUntilKairos(cnt, "==", "0", body_with_cnt, exit_lhs, exit_op, exit_rhs),
         IHistPush("__mn_hist", cnt),
+    ])]
+    if not needs_entry_guard:
+        return loop_block
+    g = ctx.fresh_loop_ct()
+    return [ILocalBlock(g, [
+        IAddEq(g, Var(init_lc)),
+        IIfKairos(g, "!=", "0", loop_block),
+        IHistPush("__mn_hist", g),
     ])]
 
 

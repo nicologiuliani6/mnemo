@@ -347,46 +347,52 @@ procedure main()
             push(__mn_e0, __mn_hist)
             __mn_e0 += 0
         fi __mn_mem0 < 5
-        local int __mn_lc0 = 0
-            from __mn_lc0 == 0 loop
-                __mn_e3 += 2
-                push(__mn_e4, __mn_hist)
-                __mn_e4 += __mn_mem0
-                call __mn_mod_nonneg(__mn_e4, __mn_e3, __mn_e5, __mn_hist, __mn_scratch)
-                push(__mn_e4, __mn_scratch)
-                push(__mn_e3, __mn_scratch)
-                if __mn_e5 == 0 then
-                    __mn_e1 += __mn_mem1
-                    __mn_e1 += __mn_mem0
-                    push(__mn_mem1, __mn_hist)
-                    __mn_mem1 += __mn_e1
-                    push(__mn_e1, __mn_scratch)
-                else
-                    __mn_e2 += __mn_mem1
-                    __mn_e2 += 1
-                    push(__mn_mem1, __mn_hist)
-                    __mn_mem1 += __mn_e2
-                    push(__mn_e2, __mn_scratch)
-                fi __mn_e5 == 0
-                push(__mn_e5, __mn_scratch)
-                __mn_e6 += __mn_mem0
-                __mn_e6 += 1
-                push(__mn_mem0, __mn_hist)
-                __mn_mem0 += __mn_e6
-                push(__mn_e6, __mn_scratch)
-                push(__mn_e0, __mn_hist)
-                __mn_e0 += 0
-                if __mn_mem0 < 5 then
-                    push(__mn_e0, __mn_hist)
-                    __mn_e0 += 1
-                else
-                    push(__mn_e0, __mn_hist)
-                    __mn_e0 += 0
-                fi __mn_mem0 < 5
-                __mn_lc0 += 1
-            until __mn_e0 == 0
-            push(__mn_lc0, __mn_hist)
-        delocal int __mn_lc0 = 0
+        local int __mn_lc1 = 0
+            __mn_lc1 += __mn_e0
+            if __mn_lc1 != 0 then
+                local int __mn_lc0 = 0
+                    from __mn_lc0 == 0 loop
+                        __mn_e3 += 2
+                        push(__mn_e4, __mn_hist)
+                        __mn_e4 += __mn_mem0
+                        call __mn_mod_nonneg(__mn_e4, __mn_e3, __mn_e5, __mn_hist, __mn_scratch)
+                        push(__mn_e4, __mn_scratch)
+                        push(__mn_e3, __mn_scratch)
+                        if __mn_e5 == 0 then
+                            __mn_e1 += __mn_mem1
+                            __mn_e1 += __mn_mem0
+                            push(__mn_mem1, __mn_hist)
+                            __mn_mem1 += __mn_e1
+                            push(__mn_e1, __mn_scratch)
+                        else
+                            __mn_e2 += __mn_mem1
+                            __mn_e2 += 1
+                            push(__mn_mem1, __mn_hist)
+                            __mn_mem1 += __mn_e2
+                            push(__mn_e2, __mn_scratch)
+                        fi __mn_e5 == 0
+                        push(__mn_e5, __mn_scratch)
+                        __mn_e6 += __mn_mem0
+                        __mn_e6 += 1
+                        push(__mn_mem0, __mn_hist)
+                        __mn_mem0 += __mn_e6
+                        push(__mn_e6, __mn_scratch)
+                        push(__mn_e0, __mn_hist)
+                        __mn_e0 += 0
+                        if __mn_mem0 < 5 then
+                            push(__mn_e0, __mn_hist)
+                            __mn_e0 += 1
+                        else
+                            push(__mn_e0, __mn_hist)
+                            __mn_e0 += 0
+                        fi __mn_mem0 < 5
+                        __mn_lc0 += 1
+                    until __mn_e0 == 0
+                    push(__mn_lc0, __mn_hist)
+                delocal int __mn_lc0 = 0
+            fi __mn_lc1 != 0
+            push(__mn_lc1, __mn_hist)
+        delocal int __mn_lc1 = 0
         call __mn_putd(__mn_mem1, __mn_hist, __mn_scratch)
         __mn_e7 += 10
         show(__mn_e7, char)
