@@ -35,7 +35,23 @@
 - Capire perché fi=22 entra in pass inverse senza prima ri-eseguire LOCAL `__mn_e<N>`. Verosimilmente è `exec_branch_inverse` chiamato da UNCALL nesting che opera su sub-range del body (skip proc-level LOCAL/DELOCAL ops).
 - Allocare slot `tmp_alloc` in `exec_branch_inverse` se NULL ma idx < var_count. Già fatto (vm_invert.h:1218-1226) ma forse non scatta per il caso. Verificare.
 
-Tempo stimato residuo: 3-6 ore — richiede comprensione del flusso UNCALL nesting profondo + exec_branch_inverse semantics. Non risolvibile come patch isolato.
+**Quarto probe (sessione 2026-05-18, "FALLO")**: tre fix applicati in combinazione:
+1. `Janus.c` vm_exec: pre-registra `LOCAL` vars nell'VarIndexer base (rimuove "non definita" su __mn_e<N>).
+2. `Janus.c` UNCALL handler: detect self-rec + `clone_frame_for_depth` (allinea callee con CALL).
+3. `vm_invert.h` invert_op_to_line: tmp_alloc INT slot mancanti per `fi != fi_reset`.
+
+Risultati:
+- fib(1) (no recursion): OK.
+- fib(2), sumto, fib(10) PAR: SIGSEGV.
+
+Probabile: tmp_alloc race con frame_top tracking, o conflitto con op_local re-allocation che fa `delete_var` su slot ancora referenziati altrove.
+
+Conclusione: ogni layer di fix sblocca un layer più profondo di crash. Fix richiede:
+- Verifica end-to-end del flusso UNCALL nesting (track quale fi è target di ogni invert_op_to_line nested e quali Var* sono shared).
+- Possibilmente revisitare semantica delete_var (non decrementa size — slot orfani indefiniti).
+- Considerare se opt-uncall pattern emit Mnemo è semanticamente compatibile con self-rec o servirebbe un emit alternativo (es. inline manuale del callee body).
+
+Tempo stimato residuo: 6-10 ore + design review. Tutti probe reverted, baseline 36+6+68 green.
 
 ---
 
