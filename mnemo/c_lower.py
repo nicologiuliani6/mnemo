@@ -184,6 +184,35 @@ def _func_is_recursive_user(ast: c.FileAST | None, fname: str) -> bool:
     return False
 
 
+def infer_par2_workers_all(ast: c.FileAST) -> frozenset[str]:
+    """Entrambi i worker (arg0 e arg1) di `mnemo_pthread_parallel2`.
+
+    Usato da opt-uncall: il body di questi worker NON deve emettere il pattern
+    snap/uncall interno, altrimenti par-uncall esterno fallisce DELOCAL.
+    """
+    out: set[str] = set()
+    stack: list[c.Node | None] = [ast]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if isinstance(n, c.FuncCall) and isinstance(n.name, c.ID):
+            nm = n.name.name
+            el = n.args
+            exprs = list(el.exprs) if el is not None else []
+            if nm == "mnemo_pthread_parallel2" and len(exprs) >= 2:
+                for ai in (0, 1):
+                    a = exprs[ai]
+                    if isinstance(a, c.ID):
+                        out.add(a.name)
+        for _na, ch in n.children():
+            if isinstance(ch, list):
+                stack.extend(ch)
+            elif ch is not None:
+                stack.append(ch)
+    return frozenset(out)
+
+
 def infer_parallel_region1_workers(ast: c.FileAST) -> frozenset[str]:
     """
     Worker che usa la finestra memoria «regione 1» (S..2S-1): secondo argomento di
@@ -561,6 +590,9 @@ class _Ctx:
     opt_uncall_user_calls: bool = False
     """Nomi delle procedure dove l'IR (from/until, par, π) non tollera uncall con questa VM."""
     uncall_excluded_via_vm_targets: frozenset[str] = field(default_factory=frozenset)
+    """Funzioni che sono worker di `mnemo_pthread_parallel2`: niente opt-uncall nei loro body
+    (par-uncall esterno richiede body invertibili senza pattern snap/uncall interno)."""
+    par2_workers: frozenset[str] = field(default_factory=frozenset)
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -1951,6 +1983,41 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         if recursive_fallback:
             return pre + [IComment("parallel2 ricorsivo: fallback sequenziale"), left_call, right_call] + post
         par = IPar([[left_call], [right_call]])
+        par_uncall_eligible = (
+            ctx.opt_uncall_user_calls
+            and f0 not in ctx.uncall_excluded_via_vm_targets
+            and f1 not in ctx.uncall_excluded_via_vm_targets
+            and not _func_is_recursive_user(ctx.file_ast, f0)
+            and not _func_is_recursive_user(ctx.file_ast, f1)
+        )
+        if par_uncall_eligible:
+            snap_temps: list[tuple[int, str]] = []
+            snap_xors_post: list[Instr] = []
+            for kk in range(ctx.physical_mem_cells):
+                t_cell = ctx.fresh_temp()
+                snap_temps.append((kk, t_cell))
+                snap_xors_post.append(IXorEq(t_cell, Var(f"__mn_mem{kk}")))
+            uncall_par = IPar(
+                [[IUncall(f0, left_args)], [IUncall(f1, right_args)]]
+            )
+            swap_ops: list[Instr] = []
+            for kk, t_cell in snap_temps:
+                mk = f"__mn_mem{kk}"
+                swap_ops.extend(
+                    [
+                        IXorEq(mk, Var(t_cell)),
+                        IXorEq(t_cell, Var(mk)),
+                        IXorEq(mk, Var(t_cell)),
+                    ]
+                )
+            body: list[Instr] = (
+                [IComment("opt-uncall su par/rap: snap mem → par → diff → par-uncall → swap")]
+                + [par]
+                + snap_xors_post
+                + [uncall_par]
+                + swap_ops
+            )
+            return pre + body + post
         return pre + [par] + post
 
     if nm == "pthread_mutex_init":
@@ -4268,6 +4335,7 @@ def _lower_funccall_with_ret(
             stk = _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             self_rec = (name == ctx.fn_name)
+            in_par2_worker = ctx.fn_name in ctx.par2_workers
             apply_uncall_opt = (
                 ctx.opt_uncall_user_calls
                 and wants
@@ -4275,6 +4343,7 @@ def _lower_funccall_with_ret(
                 and rw_c >= 1
                 and not self_rec
                 and not ir_blk
+                and not in_par2_worker
             )
             apply_void_uncall_opt = (
                 ctx.opt_uncall_user_calls
@@ -4283,6 +4352,7 @@ def _lower_funccall_with_ret(
                 and rw_c == 0
                 and not self_rec
                 and not ir_blk
+                and not in_par2_worker
             )
             uncall_with_restore: list[Instr] = []
             snap_pairs: list[tuple[int, str]] = []
@@ -6118,6 +6188,7 @@ def _lower_user_function(
     file_scope_channel_kairos: dict[str, str] | None = None,
     opt_uncall_user_calls: bool = False,
     uncall_excluded_via_vm_targets: frozenset[str] = frozenset(),
+    par2_workers: frozenset[str] = frozenset(),
 ) -> Function:
     name = fdef.decl.name
     fd = fdef.decl.type
@@ -6155,6 +6226,7 @@ def _lower_user_function(
         defined_user_functions=defined_user_functions,
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_excluded_via_vm_targets=uncall_excluded_via_vm_targets,
+        par2_workers=par2_workers,
     )
     _bind_ctx_layout(ctx, layout, name)
     ctx.file_scope_channel_order = file_scope_channel_order
@@ -6321,6 +6393,8 @@ def lower_file_to_program(
             )
             user_fn_specs.append((ext, fn_phys))
 
+    par2_workers_all = infer_par2_workers_all(ast)
+
     def _lower_one_user(ext_phys: tuple[c.FuncDef, int], *, opt_uc: bool, uc_excl: frozenset[str]):
         ext, fn_phys = ext_phys
         return _lower_user_function(
@@ -6340,6 +6414,7 @@ def lower_file_to_program(
             file_scope_channel_kairos=file_scope_channel_kairos,
             opt_uncall_user_calls=opt_uc,
             uncall_excluded_via_vm_targets=uc_excl,
+            par2_workers=par2_workers_all,
         )
 
     if opt_uncall_user_calls:
@@ -6385,6 +6460,7 @@ def lower_file_to_program(
         defined_user_functions=du,
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_excluded_via_vm_targets=bad_uncall_via_vm,
+        par2_workers=par2_workers_all,
     )
     _bind_ctx_layout(ctx, layout, "main")
     ctx.file_scope_channel_order = fs_ch_order

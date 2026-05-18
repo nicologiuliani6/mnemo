@@ -2,6 +2,32 @@
 
 ## OPEN
 
+### [P3] opt-uncall su `par … and … rap` — DONE 2026-05-18
+
+`mnemo_pthread_parallel2(f0, f1, …)` con `--opt-uncall-user-calls` ora emette:
+```
+[snap mem 2·S → __mn_e<N>] (forward par mutates mem)
+par
+  call f0(...)
+and
+  call f1(...)
+rap
+__mn_e<N> ^= __mn_mem<k>  (per ogni cella → e = post-par)
+par
+  uncall f0(...)
+and
+  uncall f1(...)
+rap
+[3-XOR swap mem<->e]  (mem = post-par result, e = pre-par)
+```
+
+Vincolo necessario: body dei worker NON deve usare opt-uncall interno (altrimenti nested call/uncall pattern fa DELOCAL fail su `__mn_e<N> != 0`). Implementato via:
+- `infer_par2_workers_all(ast)`: raccoglie entrambi gli arg0/arg1 di tutte le `parallel2`
+- `_Ctx.par2_workers`: set propagato a lowering di ogni user fn
+- gate `not in_par2_worker` su `apply_uncall_opt`/`apply_void_uncall_opt`
+
+Validato: fib.c → 89 (era 89 baseline), ex33 → 55 (baseline 55), ex30/31/32/34 invariati.
+
 ### [P3] opt-uncall self-recursion (fibonacci → fibonacci) — DEFERRED
 
 **Stato 2026-05-18**: `self_rec` guard re-installato in c_lower.py (apply_uncall_opt/apply_void_uncall_opt entrambi `and not self_rec`). Forward call + uncall caller-side ancora attivi (gestiti da opt-uncall normale per callee non-self). `make test` 36 PASS, `make test-unit` 6 OK, `make test-gcc-compat` 68/68 PASS. fib.c con `--opt-uncall-user-calls` torna 89 corretto.
