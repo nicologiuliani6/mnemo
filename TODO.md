@@ -14,11 +14,17 @@
 - ❌ Sub-issue identificato: `Janus.c` UNCALL handler usa `char_id_map_get(&FrameIndexer, pn)` (base frame) anziché clone per il depth corrente. Fix abbozzato (detect self-rec via `pn == base_of_fname`, computa `new_dep = caller_dep + 1`, `clone_frame_for_depth(pn, new_dep)`, `inv_name = make_frame_key{,_par_rec}`) compila ma non risolve l'errore — `__mn_e12` resta NULL nel caller depth-7.
 - ❓ Probabile causa restante: `base_var_count = param_count = 12` (LOCAL non eseguito sul base frame → `var_count` non bumped). `exec_branch_inverse` allocazione tmp slots itera `[0, var_count)`, quindi __mn_e<idx=24> non viene ri-allocato quando manca. Cross-thread (fib_left vs fib_right) genera tid distinti nelle par_rec keys → cache mismatch indipendente.
 
-**Per attivare**:
-1. Bumpare `var_count` di base frame durante vm_exec quando vede `local int X = 0` (pre-allocare slot anche se body non gira sul base).
-2. O: in UNCALL handler + `exec_branch_inverse`, iterare `[0, base_var_count_after_local_scan)` invece di `var_count`.
+**Analisi successiva (sessione 2026-05-18)**:
+- `var_count` base = 12 (solo PARAM/DECL) come da trace. Però `op_local` su clone bumpa `var_count` clone-side a 38 (12 + 26 __mn_e<N>). Quindi `exec_branch_inverse` iterando `[0, var_count)` SU CLONE dovrebbe coprire idx=24. Hypothesis "var_count blocca alloc tmp" smentita.
+- `delete_var` (`vm_helpers.h:230`) **non decrementa** size — var_count cresce monotono. DELOCAL non causa shrink.
+- `op_local` (`vm_ops.h:929`) sempre re-alloca slot anche se non-NULL. Quindi LOCAL forward forza allocazione fresca su clone reuse.
+- Setup `pthread_self`-based par_rec key: ogni thread ha tid distinto → fib_left/fib_right hanno cache di clone disgiunte; nessun race su FrameIndexer.
 
-Tempo stimato: 4-8 ore.
+**Ipotesi attiva (da verificare)**: errore `XOREQ __mn_e12 NULL` accade durante INVERSE pass (UNCALL del livello opt-uncall), non forward. In quel caso il `frame_name` passato a op_xoreq punta al caller post-DELOCAL: ops_arith.h:60 chiama `get_var(vm, fi, ID, "XOREQ")` con `fi = get_findex(frame_name)` — se frame_name è il caller (post END_PROC) il suo __mn_e12 è stato DELOCAL'd → vars[24]=NULL.
+
+**Test mirato proposto**: aggiungere `fprintf(stderr, "[XOREQ] fname=%s inv=%d\n", frame_name, vm->inversion_depth)` in `op_xoreq` per discriminare forward vs inverse, poi log su `op_local` per __mn_e12 con stesso fname e inv. Se prove di "LOCAL non gira prima di XOREQ" → fix in invert_op_to_line per re-LOCAL slot mancanti. Se "LOCAL gira ma DELOCAL spuria" → fix in flusso UNCALL/END_PROC.
+
+Tempo stimato residuo: 3-6 ore.
 
 ---
 
