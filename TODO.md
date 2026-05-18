@@ -2,9 +2,13 @@
 
 ## OPEN
 
-### [P3] opt-uncall self-recursion (fibonacci → fibonacci)
+### [P3] opt-uncall self-recursion (fibonacci → fibonacci) — DEFERRED
 
-**Stato**: skip se `caller == callee` (mnemo c_lower.py `self_rec` guard).
+**Stato 2026-05-18**: `self_rec` guard re-installato in c_lower.py (apply_uncall_opt/apply_void_uncall_opt entrambi `and not self_rec`). Forward call + uncall caller-side ancora attivi (gestiti da opt-uncall normale per callee non-self). `make test` 36 PASS, `make test-unit` 6 OK, `make test-gcc-compat` 68/68 PASS. fib.c con `--opt-uncall-user-calls` torna 89 corretto.
+
+**Fix VM richiesto per rimuovere il guard**: vedi analisi storica sotto. Sintesi: pass inverse profondo (inv>=15) su clone DELOCALato forward (fi=22, 23 nei probe) non ri-LOCALizza `__mn_e<N>` via DELOCAL→op_local mapping. Trace [LOC12] non scatta in inverse anche se [XOR12] sì → percorso esecutivo bypassa invert_op_to_line entry per quei frame. Probabile interazione exec_par_threads + clone_frame_for_depth.
+
+### [P3-archived] Analisi storica
 
 **Errore corrente** (rimuovendo `self_rec`): `XOREQ __mn_e12 NULL frame=fibonacci@w<tid>_N`. Si manifesta in fib.c con PAR (fib_left/fib_right entrambi recurono).
 
