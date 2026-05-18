@@ -20,11 +20,22 @@
 - `op_local` (`vm_ops.h:929`) sempre re-alloca slot anche se non-NULL. Quindi LOCAL forward forza allocazione fresca su clone reuse.
 - Setup `pthread_self`-based par_rec key: ogni thread ha tid distinto → fib_left/fib_right hanno cache di clone disgiunte; nessun race su FrameIndexer.
 
-**Ipotesi attiva (da verificare)**: errore `XOREQ __mn_e12 NULL` accade durante INVERSE pass (UNCALL del livello opt-uncall), non forward. In quel caso il `frame_name` passato a op_xoreq punta al caller post-DELOCAL: ops_arith.h:60 chiama `get_var(vm, fi, ID, "XOREQ")` con `fi = get_findex(frame_name)` — se frame_name è il caller (post END_PROC) il suo __mn_e12 è stato DELOCAL'd → vars[24]=NULL.
+**Trace verificato (sessione 2026-05-18, run su fib.c PAR)**:
+- `LOCAL` (forward) GIRA per __mn_e12 su tutti i clone (fi=7..23 incluse fibonacci@wf1e426c0_7 fi=22, fibonacci@wf2a786c0_8 fi=23).
+- `XOREQ` (forward inv=0) GIRA fi=20 con vars[24] valido.
+- `XOREQ` (inverse inv=1..15) GIRA su fi=21,7,8,9,10,...,20,19 con vars[24] valido.
+- Ultimo `XOREQ` (inverse inv=15) su fi=22 (fibonacci@wf1e426c0_7) **trova vars[24]=nil** → panic.
+- inv=15 implica 15 nesting di UNCALL/CALL inversi (ricorsione profonda + opt-uncall).
 
-**Test mirato proposto**: aggiungere `fprintf(stderr, "[XOREQ] fname=%s inv=%d\n", frame_name, vm->inversion_depth)` in `op_xoreq` per discriminare forward vs inverse, poi log su `op_local` per __mn_e12 con stesso fname e inv. Se prove di "LOCAL non gira prima di XOREQ" → fix in invert_op_to_line per re-LOCAL slot mancanti. Se "LOCAL gira ma DELOCAL spuria" → fix in flusso UNCALL/END_PROC.
+**Conclusione**: forward + DELOCAL girano correttamente. Ma DURANTE inverse-stack profondo, `vars[24]` di fi=22 viene **liberato** da un path intermedio. Forse:
+1. END_PROC fi=22 (forward) ha azzerato vars[24] via DELOCAL — la successiva re-entry in fi=22 via UNCALL handler dovrebbe re-LOCAL ma non lo fa per certi cammini (es. se UNCALL passa direttamente a invert_op_to_line saltando il setup di LOCAL).
+2. O: `delete_var` chiamato da op_local stesso (line 929-930) prima di re-allocare, ma in mezzo qualche path lascia vars[24] nil.
 
-Tempo stimato residuo: 3-6 ore.
+**Prossimo step necessario** (architectural, non semplice patch):
+- Capire perché fi=22 entra in pass inverse senza prima ri-eseguire LOCAL `__mn_e<N>`. Verosimilmente è `exec_branch_inverse` chiamato da UNCALL nesting che opera su sub-range del body (skip proc-level LOCAL/DELOCAL ops).
+- Allocare slot `tmp_alloc` in `exec_branch_inverse` se NULL ma idx < var_count. Già fatto (vm_invert.h:1218-1226) ma forse non scatta per il caso. Verificare.
+
+Tempo stimato residuo: 3-6 ore — richiede comprensione del flusso UNCALL nesting profondo + exec_branch_inverse semantics. Non risolvibile come patch isolato.
 
 ---
 
