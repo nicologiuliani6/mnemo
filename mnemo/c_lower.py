@@ -4931,9 +4931,12 @@ def _build_counter_loop_instrs(
     su loop generici. Body finale: `cnt += 1`.
 
     NOTA: per loop con 0 iter (es. `for(i; i<0; i++)`) il body viene cmq eseguito
-    una "skip-iter" volta perchè `from cnt == 0` entra sempre. Aggiungere IIfKairos
-    guard wrap rompe l'inverse di nested IFs (collect_ifs/exec_branch_inverse
-    Janus). Per ora accetta semantica differente da C su 0-iter edge case.
+    una "skip-iter" volta perchè `from cnt == 0` entra sempre. Wrap con IIfKairos
+    `if g != 0` (g=snapshot init_lc) FUNZIONA forward ma rompe l'inverse: la branch
+    inverse via `branch_span_has_from_loop` chiama `invert_op_to_line(honor=0)` che
+    NON skippa righe interne ai nested IF dentro il loop body → double-processing
+    e corruzione hist. Servirebbe filtraggio if-descriptor per range → out of
+    scope. Per ora accetta semantica differente da C su 0-iter edge case.
     """
     cnt = ctx.fresh_loop_ct()
     ctx.use_hist = True

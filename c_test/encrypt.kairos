@@ -1,7 +1,3 @@
-// Profondità __mn_hist subito prima di una call Mnemo `--opt-uncall-user-calls` (+XOR uncall).
-// La VM Janus intercetta `call __mn_hist_floor_snap(...)` (corpo vuoto — no `end_proc` nel sorgente Kairos).
-procedure __mn_hist_floor_snap(stack __mn_snap_h)
-
 // Sposta il valore di src in dst (src azzerato) usando uno stack locale come "garbage" / condotto.
 // La VM implementa `pop(dst, …)` come `*dst += valore`: per sostituire dst, azzeralo prima con
 // `push(dst, hist)` sullo stack Janus del caller, poi `call __mn_move_int(dst, src)`.
@@ -1217,36 +1213,6 @@ procedure encrypt(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, in
     local int __mn_e26 = 0
     local int __mn_e27 = 0
     local int __mn_e28 = 0
-    local int __mn_e29 = 0
-    local int __mn_e30 = 0
-    local int __mn_e31 = 0
-    local int __mn_e32 = 0
-    local int __mn_e33 = 0
-    local int __mn_e34 = 0
-    local int __mn_e35 = 0
-    local int __mn_e36 = 0
-    local int __mn_e37 = 0
-    local int __mn_e38 = 0
-    local int __mn_e39 = 0
-    local int __mn_e40 = 0
-    local int __mn_e41 = 0
-    local int __mn_e42 = 0
-    local int __mn_e43 = 0
-    local int __mn_e44 = 0
-    local int __mn_e45 = 0
-    local int __mn_e46 = 0
-    local int __mn_e47 = 0
-    local int __mn_e48 = 0
-    local int __mn_e49 = 0
-    local int __mn_e50 = 0
-    local int __mn_e51 = 0
-    local int __mn_e52 = 0
-    local int __mn_e53 = 0
-    local int __mn_e54 = 0
-    local int __mn_e55 = 0
-    local int __mn_e56 = 0
-    local int __mn_e57 = 0
-    local int __mn_e58 = 0
         // funzione C encrypt
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += __mn_mem7
@@ -1258,294 +1224,112 @@ procedure encrypt(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, in
         __mn_mem3 += 11
         push(__mn_mem4, __mn_hist)
         __mn_mem4 += 12
-        call __mn_hist_floor_snap(__mn_hist)
         call keyschedule(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_e0 ^= __mn_mem0
-        __mn_e1 ^= __mn_mem1
-        __mn_e2 ^= __mn_mem2
-        __mn_e3 ^= __mn_mem3
-        __mn_e4 ^= __mn_mem4
-        __mn_e5 ^= __mn_mem5
-        __mn_e6 ^= __mn_mem6
-        __mn_e7 ^= __mn_mem7
-        __mn_e8 ^= __mn_mem8
-        __mn_e9 ^= __mn_mem9
-        __mn_e10 ^= __mn_mem10
-        __mn_e11 ^= __mn_mem11
-        __mn_e12 ^= __mn_mem12
-        __mn_e13 ^= __mn_mem13
-        __mn_e14 ^= __mn_mem14
-        __mn_e15 ^= __mn_mem15
-        __mn_e16 ^= __mn_mem16
-        __mn_e17 ^= __mn_mem17
-        __mn_e18 ^= __mn_mem18
-        __mn_e19 ^= __mn_mem19
-        __mn_e20 ^= __mn_mem20
-        __mn_e21 ^= __mn_mem21
-        __mn_e22 ^= __mn_mem22
-        __mn_e23 ^= __mn_mem23
-        __mn_e24 ^= __mn_mem24
-        __mn_e25 ^= __mn_mem25
-        __mn_e26 ^= __mn_mem26
-        __mn_e27 ^= __mn_mem27
-        __mn_e28 ^= __mn_mem28
-        __mn_e29 ^= __mn_mem29
-        uncall keyschedule(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_mem0 ^= __mn_e0
-        __mn_e0 ^= __mn_mem0
-        __mn_mem0 ^= __mn_e0
-        __mn_mem1 ^= __mn_e1
-        __mn_e1 ^= __mn_mem1
-        __mn_mem1 ^= __mn_e1
-        __mn_mem2 ^= __mn_e2
-        __mn_e2 ^= __mn_mem2
-        __mn_mem2 ^= __mn_e2
-        __mn_mem3 ^= __mn_e3
-        __mn_e3 ^= __mn_mem3
-        __mn_mem3 ^= __mn_e3
-        __mn_mem4 ^= __mn_e4
-        __mn_e4 ^= __mn_mem4
-        __mn_mem4 ^= __mn_e4
-        __mn_mem5 ^= __mn_e5
-        __mn_e5 ^= __mn_mem5
-        __mn_mem5 ^= __mn_e5
-        __mn_mem6 ^= __mn_e6
-        __mn_e6 ^= __mn_mem6
-        __mn_mem6 ^= __mn_e6
-        __mn_mem7 ^= __mn_e7
-        __mn_e7 ^= __mn_mem7
-        __mn_mem7 ^= __mn_e7
-        __mn_mem8 ^= __mn_e8
-        __mn_e8 ^= __mn_mem8
-        __mn_mem8 ^= __mn_e8
-        __mn_mem9 ^= __mn_e9
-        __mn_e9 ^= __mn_mem9
-        __mn_mem9 ^= __mn_e9
-        __mn_mem10 ^= __mn_e10
-        __mn_e10 ^= __mn_mem10
-        __mn_mem10 ^= __mn_e10
-        __mn_mem11 ^= __mn_e11
-        __mn_e11 ^= __mn_mem11
-        __mn_mem11 ^= __mn_e11
-        __mn_mem12 ^= __mn_e12
-        __mn_e12 ^= __mn_mem12
-        __mn_mem12 ^= __mn_e12
-        __mn_mem13 ^= __mn_e13
-        __mn_e13 ^= __mn_mem13
-        __mn_mem13 ^= __mn_e13
-        __mn_mem14 ^= __mn_e14
-        __mn_e14 ^= __mn_mem14
-        __mn_mem14 ^= __mn_e14
-        __mn_mem15 ^= __mn_e15
-        __mn_e15 ^= __mn_mem15
-        __mn_mem15 ^= __mn_e15
-        __mn_mem16 ^= __mn_e16
-        __mn_e16 ^= __mn_mem16
-        __mn_mem16 ^= __mn_e16
-        __mn_mem17 ^= __mn_e17
-        __mn_e17 ^= __mn_mem17
-        __mn_mem17 ^= __mn_e17
-        __mn_mem18 ^= __mn_e18
-        __mn_e18 ^= __mn_mem18
-        __mn_mem18 ^= __mn_e18
-        __mn_mem19 ^= __mn_e19
-        __mn_e19 ^= __mn_mem19
-        __mn_mem19 ^= __mn_e19
-        __mn_mem20 ^= __mn_e20
-        __mn_e20 ^= __mn_mem20
-        __mn_mem20 ^= __mn_e20
-        __mn_mem21 ^= __mn_e21
-        __mn_e21 ^= __mn_mem21
-        __mn_mem21 ^= __mn_e21
-        __mn_mem22 ^= __mn_e22
-        __mn_e22 ^= __mn_mem22
-        __mn_mem22 ^= __mn_e22
-        __mn_mem23 ^= __mn_e23
-        __mn_e23 ^= __mn_mem23
-        __mn_mem23 ^= __mn_e23
-        __mn_mem24 ^= __mn_e24
-        __mn_e24 ^= __mn_mem24
-        __mn_mem24 ^= __mn_e24
-        __mn_mem25 ^= __mn_e25
-        __mn_e25 ^= __mn_mem25
-        __mn_mem25 ^= __mn_e25
-        __mn_mem26 ^= __mn_e26
-        __mn_e26 ^= __mn_mem26
-        __mn_mem26 ^= __mn_e26
-        __mn_mem27 ^= __mn_e27
-        __mn_e27 ^= __mn_mem27
-        __mn_mem27 ^= __mn_e27
-        __mn_mem28 ^= __mn_e28
-        __mn_e28 ^= __mn_mem28
-        __mn_mem28 ^= __mn_e28
-        __mn_mem29 ^= __mn_e29
-        __mn_e29 ^= __mn_mem29
-        __mn_mem29 ^= __mn_e29
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_mem6
-        push(__mn_e30, __mn_hist)
-        __mn_e30 += __mn_mem6
-        __mn_e30 ^= __mn_mem9
-        __mn_e31 += 3
-        call __mn_mul_into(__mn_e32, __mn_e30, __mn_e31, __mn_hist, __mn_scratch)
-        push(__mn_e31, __mn_scratch)
-        push(__mn_e30, __mn_scratch)
-        __mn_e33 += 255
-        call __mn_and_into(__mn_e34, __mn_e32, __mn_e33, __mn_hist, __mn_scratch)
-        push(__mn_e33, __mn_scratch)
-        push(__mn_e32, __mn_scratch)
-        push(__mn_e35, __mn_hist)
-        __mn_e35 += __mn_mem5
-        __mn_e35 ^= __mn_e34
-        push(__mn_e34, __mn_scratch)
+        push(__mn_e0, __mn_hist)
+        __mn_e0 += __mn_mem6
+        __mn_e0 ^= __mn_mem9
+        __mn_e1 += 3
+        call __mn_mul_into(__mn_e2, __mn_e0, __mn_e1, __mn_hist, __mn_scratch)
+        push(__mn_e1, __mn_scratch)
+        push(__mn_e0, __mn_scratch)
+        __mn_e3 += 255
+        call __mn_and_into(__mn_e4, __mn_e2, __mn_e3, __mn_hist, __mn_scratch)
+        push(__mn_e3, __mn_scratch)
+        push(__mn_e2, __mn_scratch)
+        push(__mn_e5, __mn_hist)
+        __mn_e5 += __mn_mem5
+        __mn_e5 ^= __mn_e4
+        push(__mn_e4, __mn_scratch)
         push(__mn_mem6, __mn_hist)
-        __mn_mem6 += __mn_e35
-        push(__mn_e35, __mn_scratch)
-        push(__mn_e34, __mn_scratch)
+        __mn_mem6 += __mn_e5
+        push(__mn_e5, __mn_scratch)
+        push(__mn_e4, __mn_scratch)
         push(__mn_mem5, __mn_hist)
         __mn_mem5 += __mn_v_tmp
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_mem6
-        push(__mn_e36, __mn_hist)
-        __mn_e36 += __mn_mem6
-        __mn_e36 ^= __mn_mem10
-        __mn_e37 += 3
-        call __mn_mul_into(__mn_e38, __mn_e36, __mn_e37, __mn_hist, __mn_scratch)
-        push(__mn_e37, __mn_scratch)
-        push(__mn_e36, __mn_scratch)
-        __mn_e39 += 255
-        call __mn_and_into(__mn_e40, __mn_e38, __mn_e39, __mn_hist, __mn_scratch)
-        push(__mn_e39, __mn_scratch)
-        push(__mn_e38, __mn_scratch)
-        push(__mn_e41, __mn_hist)
-        __mn_e41 += __mn_mem5
-        __mn_e41 ^= __mn_e40
-        push(__mn_e40, __mn_scratch)
+        push(__mn_e6, __mn_hist)
+        __mn_e6 += __mn_mem6
+        __mn_e6 ^= __mn_mem10
+        __mn_e7 += 3
+        call __mn_mul_into(__mn_e8, __mn_e6, __mn_e7, __mn_hist, __mn_scratch)
+        push(__mn_e7, __mn_scratch)
+        push(__mn_e6, __mn_scratch)
+        __mn_e9 += 255
+        call __mn_and_into(__mn_e10, __mn_e8, __mn_e9, __mn_hist, __mn_scratch)
+        push(__mn_e9, __mn_scratch)
+        push(__mn_e8, __mn_scratch)
+        push(__mn_e11, __mn_hist)
+        __mn_e11 += __mn_mem5
+        __mn_e11 ^= __mn_e10
+        push(__mn_e10, __mn_scratch)
         push(__mn_mem6, __mn_hist)
-        __mn_mem6 += __mn_e41
-        push(__mn_e41, __mn_scratch)
-        push(__mn_e40, __mn_scratch)
+        __mn_mem6 += __mn_e11
+        push(__mn_e11, __mn_scratch)
+        push(__mn_e10, __mn_scratch)
         push(__mn_mem5, __mn_hist)
         __mn_mem5 += __mn_v_tmp
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_mem6
-        push(__mn_e42, __mn_hist)
-        __mn_e42 += __mn_mem6
-        __mn_e42 ^= __mn_mem11
-        __mn_e43 += 3
-        call __mn_mul_into(__mn_e44, __mn_e42, __mn_e43, __mn_hist, __mn_scratch)
-        push(__mn_e43, __mn_scratch)
-        push(__mn_e42, __mn_scratch)
-        __mn_e45 += 255
-        call __mn_and_into(__mn_e46, __mn_e44, __mn_e45, __mn_hist, __mn_scratch)
-        push(__mn_e45, __mn_scratch)
-        push(__mn_e44, __mn_scratch)
-        push(__mn_e47, __mn_hist)
-        __mn_e47 += __mn_mem5
-        __mn_e47 ^= __mn_e46
-        push(__mn_e46, __mn_scratch)
+        push(__mn_e12, __mn_hist)
+        __mn_e12 += __mn_mem6
+        __mn_e12 ^= __mn_mem11
+        __mn_e13 += 3
+        call __mn_mul_into(__mn_e14, __mn_e12, __mn_e13, __mn_hist, __mn_scratch)
+        push(__mn_e13, __mn_scratch)
+        push(__mn_e12, __mn_scratch)
+        __mn_e15 += 255
+        call __mn_and_into(__mn_e16, __mn_e14, __mn_e15, __mn_hist, __mn_scratch)
+        push(__mn_e15, __mn_scratch)
+        push(__mn_e14, __mn_scratch)
+        push(__mn_e17, __mn_hist)
+        __mn_e17 += __mn_mem5
+        __mn_e17 ^= __mn_e16
+        push(__mn_e16, __mn_scratch)
         push(__mn_mem6, __mn_hist)
-        __mn_mem6 += __mn_e47
-        push(__mn_e47, __mn_scratch)
-        push(__mn_e46, __mn_scratch)
+        __mn_mem6 += __mn_e17
+        push(__mn_e17, __mn_scratch)
+        push(__mn_e16, __mn_scratch)
         push(__mn_mem5, __mn_hist)
         __mn_mem5 += __mn_v_tmp
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_mem6
-        push(__mn_e48, __mn_hist)
-        __mn_e48 += __mn_mem6
-        __mn_e48 ^= __mn_mem12
-        __mn_e49 += 3
-        call __mn_mul_into(__mn_e50, __mn_e48, __mn_e49, __mn_hist, __mn_scratch)
-        push(__mn_e49, __mn_scratch)
-        push(__mn_e48, __mn_scratch)
-        __mn_e51 += 255
-        call __mn_and_into(__mn_e52, __mn_e50, __mn_e51, __mn_hist, __mn_scratch)
-        push(__mn_e51, __mn_scratch)
-        push(__mn_e50, __mn_scratch)
-        push(__mn_e53, __mn_hist)
-        __mn_e53 += __mn_mem5
-        __mn_e53 ^= __mn_e52
-        push(__mn_e52, __mn_scratch)
+        push(__mn_e18, __mn_hist)
+        __mn_e18 += __mn_mem6
+        __mn_e18 ^= __mn_mem12
+        __mn_e19 += 3
+        call __mn_mul_into(__mn_e20, __mn_e18, __mn_e19, __mn_hist, __mn_scratch)
+        push(__mn_e19, __mn_scratch)
+        push(__mn_e18, __mn_scratch)
+        __mn_e21 += 255
+        call __mn_and_into(__mn_e22, __mn_e20, __mn_e21, __mn_hist, __mn_scratch)
+        push(__mn_e21, __mn_scratch)
+        push(__mn_e20, __mn_scratch)
+        push(__mn_e23, __mn_hist)
+        __mn_e23 += __mn_mem5
+        __mn_e23 ^= __mn_e22
+        push(__mn_e22, __mn_scratch)
         push(__mn_mem6, __mn_hist)
-        __mn_mem6 += __mn_e53
-        push(__mn_e53, __mn_scratch)
-        push(__mn_e52, __mn_scratch)
+        __mn_mem6 += __mn_e23
+        push(__mn_e23, __mn_scratch)
+        push(__mn_e22, __mn_scratch)
         push(__mn_mem5, __mn_hist)
         __mn_mem5 += __mn_v_tmp
-        __mn_e54 += 8
-        call __mn_shl_into(__mn_e55, __mn_mem5, __mn_e54, __mn_hist, __mn_scratch)
-        push(__mn_e54, __mn_scratch)
-        __mn_e56 += 255
-        call __mn_and_into(__mn_e57, __mn_mem6, __mn_e56, __mn_hist, __mn_scratch)
-        push(__mn_e56, __mn_scratch)
-        call __mn_or_into(__mn_e58, __mn_e55, __mn_e57, __mn_hist, __mn_scratch)
-        push(__mn_e57, __mn_scratch)
-        push(__mn_e55, __mn_scratch)
+        __mn_e24 += 8
+        call __mn_shl_into(__mn_e25, __mn_mem5, __mn_e24, __mn_hist, __mn_scratch)
+        push(__mn_e24, __mn_scratch)
+        __mn_e26 += 255
+        call __mn_and_into(__mn_e27, __mn_mem6, __mn_e26, __mn_hist, __mn_scratch)
+        push(__mn_e26, __mn_scratch)
+        call __mn_or_into(__mn_e28, __mn_e25, __mn_e27, __mn_hist, __mn_scratch)
+        push(__mn_e27, __mn_scratch)
+        push(__mn_e25, __mn_scratch)
         push(__mn_mem8, __mn_hist)
-        __mn_mem8 += __mn_e58
-        push(__mn_e58, __mn_scratch)
+        __mn_mem8 += __mn_e28
+        push(__mn_e28, __mn_scratch)
         // return
-    push(__mn_e58, __mn_hist)
-    delocal int __mn_e58 = 0
-    push(__mn_e57, __mn_hist)
-    delocal int __mn_e57 = 0
-    push(__mn_e56, __mn_hist)
-    delocal int __mn_e56 = 0
-    push(__mn_e55, __mn_hist)
-    delocal int __mn_e55 = 0
-    push(__mn_e54, __mn_hist)
-    delocal int __mn_e54 = 0
-    push(__mn_e53, __mn_hist)
-    delocal int __mn_e53 = 0
-    push(__mn_e52, __mn_hist)
-    delocal int __mn_e52 = 0
-    push(__mn_e51, __mn_hist)
-    delocal int __mn_e51 = 0
-    push(__mn_e50, __mn_hist)
-    delocal int __mn_e50 = 0
-    push(__mn_e49, __mn_hist)
-    delocal int __mn_e49 = 0
-    push(__mn_e48, __mn_hist)
-    delocal int __mn_e48 = 0
-    push(__mn_e47, __mn_hist)
-    delocal int __mn_e47 = 0
-    push(__mn_e46, __mn_hist)
-    delocal int __mn_e46 = 0
-    push(__mn_e45, __mn_hist)
-    delocal int __mn_e45 = 0
-    push(__mn_e44, __mn_hist)
-    delocal int __mn_e44 = 0
-    push(__mn_e43, __mn_hist)
-    delocal int __mn_e43 = 0
-    push(__mn_e42, __mn_hist)
-    delocal int __mn_e42 = 0
-    push(__mn_e41, __mn_hist)
-    delocal int __mn_e41 = 0
-    push(__mn_e40, __mn_hist)
-    delocal int __mn_e40 = 0
-    push(__mn_e39, __mn_hist)
-    delocal int __mn_e39 = 0
-    push(__mn_e38, __mn_hist)
-    delocal int __mn_e38 = 0
-    push(__mn_e37, __mn_hist)
-    delocal int __mn_e37 = 0
-    push(__mn_e36, __mn_hist)
-    delocal int __mn_e36 = 0
-    push(__mn_e35, __mn_hist)
-    delocal int __mn_e35 = 0
-    push(__mn_e34, __mn_hist)
-    delocal int __mn_e34 = 0
-    push(__mn_e33, __mn_hist)
-    delocal int __mn_e33 = 0
-    push(__mn_e32, __mn_hist)
-    delocal int __mn_e32 = 0
-    push(__mn_e31, __mn_hist)
-    delocal int __mn_e31 = 0
-    push(__mn_e30, __mn_hist)
-    delocal int __mn_e30 = 0
-    push(__mn_e29, __mn_hist)
-    delocal int __mn_e29 = 0
     push(__mn_e28, __mn_hist)
     delocal int __mn_e28 = 0
     push(__mn_e27, __mn_hist)
@@ -1645,36 +1429,6 @@ procedure decrypt(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, in
     local int __mn_e32 = 0
     local int __mn_e33 = 0
     local int __mn_e34 = 0
-    local int __mn_e35 = 0
-    local int __mn_e36 = 0
-    local int __mn_e37 = 0
-    local int __mn_e38 = 0
-    local int __mn_e39 = 0
-    local int __mn_e40 = 0
-    local int __mn_e41 = 0
-    local int __mn_e42 = 0
-    local int __mn_e43 = 0
-    local int __mn_e44 = 0
-    local int __mn_e45 = 0
-    local int __mn_e46 = 0
-    local int __mn_e47 = 0
-    local int __mn_e48 = 0
-    local int __mn_e49 = 0
-    local int __mn_e50 = 0
-    local int __mn_e51 = 0
-    local int __mn_e52 = 0
-    local int __mn_e53 = 0
-    local int __mn_e54 = 0
-    local int __mn_e55 = 0
-    local int __mn_e56 = 0
-    local int __mn_e57 = 0
-    local int __mn_e58 = 0
-    local int __mn_e59 = 0
-    local int __mn_e60 = 0
-    local int __mn_e61 = 0
-    local int __mn_e62 = 0
-    local int __mn_e63 = 0
-    local int __mn_e64 = 0
         // funzione C decrypt
         __mn_e0 += 8
         call __mn_shr_into(__mn_e1, __mn_mem14, __mn_e0, __mn_hist, __mn_scratch)
@@ -1702,294 +1456,112 @@ procedure decrypt(int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, in
         __mn_mem3 += 19
         push(__mn_mem4, __mn_hist)
         __mn_mem4 += 20
-        call __mn_hist_floor_snap(__mn_hist)
         call keyschedule(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_e6 ^= __mn_mem0
-        __mn_e7 ^= __mn_mem1
-        __mn_e8 ^= __mn_mem2
-        __mn_e9 ^= __mn_mem3
-        __mn_e10 ^= __mn_mem4
-        __mn_e11 ^= __mn_mem5
-        __mn_e12 ^= __mn_mem6
-        __mn_e13 ^= __mn_mem7
-        __mn_e14 ^= __mn_mem8
-        __mn_e15 ^= __mn_mem9
-        __mn_e16 ^= __mn_mem10
-        __mn_e17 ^= __mn_mem11
-        __mn_e18 ^= __mn_mem12
-        __mn_e19 ^= __mn_mem13
-        __mn_e20 ^= __mn_mem14
-        __mn_e21 ^= __mn_mem15
-        __mn_e22 ^= __mn_mem16
-        __mn_e23 ^= __mn_mem17
-        __mn_e24 ^= __mn_mem18
-        __mn_e25 ^= __mn_mem19
-        __mn_e26 ^= __mn_mem20
-        __mn_e27 ^= __mn_mem21
-        __mn_e28 ^= __mn_mem22
-        __mn_e29 ^= __mn_mem23
-        __mn_e30 ^= __mn_mem24
-        __mn_e31 ^= __mn_mem25
-        __mn_e32 ^= __mn_mem26
-        __mn_e33 ^= __mn_mem27
-        __mn_e34 ^= __mn_mem28
-        __mn_e35 ^= __mn_mem29
-        uncall keyschedule(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_mem0 ^= __mn_e6
-        __mn_e6 ^= __mn_mem0
-        __mn_mem0 ^= __mn_e6
-        __mn_mem1 ^= __mn_e7
-        __mn_e7 ^= __mn_mem1
-        __mn_mem1 ^= __mn_e7
-        __mn_mem2 ^= __mn_e8
-        __mn_e8 ^= __mn_mem2
-        __mn_mem2 ^= __mn_e8
-        __mn_mem3 ^= __mn_e9
-        __mn_e9 ^= __mn_mem3
-        __mn_mem3 ^= __mn_e9
-        __mn_mem4 ^= __mn_e10
-        __mn_e10 ^= __mn_mem4
-        __mn_mem4 ^= __mn_e10
-        __mn_mem5 ^= __mn_e11
-        __mn_e11 ^= __mn_mem5
-        __mn_mem5 ^= __mn_e11
-        __mn_mem6 ^= __mn_e12
-        __mn_e12 ^= __mn_mem6
-        __mn_mem6 ^= __mn_e12
-        __mn_mem7 ^= __mn_e13
-        __mn_e13 ^= __mn_mem7
-        __mn_mem7 ^= __mn_e13
-        __mn_mem8 ^= __mn_e14
-        __mn_e14 ^= __mn_mem8
-        __mn_mem8 ^= __mn_e14
-        __mn_mem9 ^= __mn_e15
-        __mn_e15 ^= __mn_mem9
-        __mn_mem9 ^= __mn_e15
-        __mn_mem10 ^= __mn_e16
-        __mn_e16 ^= __mn_mem10
-        __mn_mem10 ^= __mn_e16
-        __mn_mem11 ^= __mn_e17
-        __mn_e17 ^= __mn_mem11
-        __mn_mem11 ^= __mn_e17
-        __mn_mem12 ^= __mn_e18
-        __mn_e18 ^= __mn_mem12
-        __mn_mem12 ^= __mn_e18
-        __mn_mem13 ^= __mn_e19
-        __mn_e19 ^= __mn_mem13
-        __mn_mem13 ^= __mn_e19
-        __mn_mem14 ^= __mn_e20
-        __mn_e20 ^= __mn_mem14
-        __mn_mem14 ^= __mn_e20
-        __mn_mem15 ^= __mn_e21
-        __mn_e21 ^= __mn_mem15
-        __mn_mem15 ^= __mn_e21
-        __mn_mem16 ^= __mn_e22
-        __mn_e22 ^= __mn_mem16
-        __mn_mem16 ^= __mn_e22
-        __mn_mem17 ^= __mn_e23
-        __mn_e23 ^= __mn_mem17
-        __mn_mem17 ^= __mn_e23
-        __mn_mem18 ^= __mn_e24
-        __mn_e24 ^= __mn_mem18
-        __mn_mem18 ^= __mn_e24
-        __mn_mem19 ^= __mn_e25
-        __mn_e25 ^= __mn_mem19
-        __mn_mem19 ^= __mn_e25
-        __mn_mem20 ^= __mn_e26
-        __mn_e26 ^= __mn_mem20
-        __mn_mem20 ^= __mn_e26
-        __mn_mem21 ^= __mn_e27
-        __mn_e27 ^= __mn_mem21
-        __mn_mem21 ^= __mn_e27
-        __mn_mem22 ^= __mn_e28
-        __mn_e28 ^= __mn_mem22
-        __mn_mem22 ^= __mn_e28
-        __mn_mem23 ^= __mn_e29
-        __mn_e29 ^= __mn_mem23
-        __mn_mem23 ^= __mn_e29
-        __mn_mem24 ^= __mn_e30
-        __mn_e30 ^= __mn_mem24
-        __mn_mem24 ^= __mn_e30
-        __mn_mem25 ^= __mn_e31
-        __mn_e31 ^= __mn_mem25
-        __mn_mem25 ^= __mn_e31
-        __mn_mem26 ^= __mn_e32
-        __mn_e32 ^= __mn_mem26
-        __mn_mem26 ^= __mn_e32
-        __mn_mem27 ^= __mn_e33
-        __mn_e33 ^= __mn_mem27
-        __mn_mem27 ^= __mn_e33
-        __mn_mem28 ^= __mn_e34
-        __mn_e34 ^= __mn_mem28
-        __mn_mem28 ^= __mn_e34
-        __mn_mem29 ^= __mn_e35
-        __mn_e35 ^= __mn_mem29
-        __mn_mem29 ^= __mn_e35
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_v_L
-        push(__mn_e36, __mn_hist)
-        __mn_e36 += __mn_v_L
-        __mn_e36 ^= __mn_mem20
-        __mn_e37 += 3
-        call __mn_mul_into(__mn_e38, __mn_e36, __mn_e37, __mn_hist, __mn_scratch)
-        push(__mn_e37, __mn_scratch)
-        push(__mn_e36, __mn_scratch)
-        __mn_e39 += 255
-        call __mn_and_into(__mn_e40, __mn_e38, __mn_e39, __mn_hist, __mn_scratch)
-        push(__mn_e39, __mn_scratch)
-        push(__mn_e38, __mn_scratch)
-        push(__mn_e41, __mn_hist)
-        __mn_e41 += __mn_v_R
-        __mn_e41 ^= __mn_e40
-        push(__mn_e40, __mn_scratch)
+        push(__mn_e6, __mn_hist)
+        __mn_e6 += __mn_v_L
+        __mn_e6 ^= __mn_mem20
+        __mn_e7 += 3
+        call __mn_mul_into(__mn_e8, __mn_e6, __mn_e7, __mn_hist, __mn_scratch)
+        push(__mn_e7, __mn_scratch)
+        push(__mn_e6, __mn_scratch)
+        __mn_e9 += 255
+        call __mn_and_into(__mn_e10, __mn_e8, __mn_e9, __mn_hist, __mn_scratch)
+        push(__mn_e9, __mn_scratch)
+        push(__mn_e8, __mn_scratch)
+        push(__mn_e11, __mn_hist)
+        __mn_e11 += __mn_v_R
+        __mn_e11 ^= __mn_e10
+        push(__mn_e10, __mn_scratch)
         push(__mn_v_L, __mn_hist)
-        __mn_v_L += __mn_e41
-        push(__mn_e41, __mn_scratch)
-        push(__mn_e40, __mn_scratch)
+        __mn_v_L += __mn_e11
+        push(__mn_e11, __mn_scratch)
+        push(__mn_e10, __mn_scratch)
         push(__mn_v_R, __mn_hist)
         __mn_v_R += __mn_v_tmp
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_v_L
-        push(__mn_e42, __mn_hist)
-        __mn_e42 += __mn_v_L
-        __mn_e42 ^= __mn_mem19
-        __mn_e43 += 3
-        call __mn_mul_into(__mn_e44, __mn_e42, __mn_e43, __mn_hist, __mn_scratch)
-        push(__mn_e43, __mn_scratch)
-        push(__mn_e42, __mn_scratch)
-        __mn_e45 += 255
-        call __mn_and_into(__mn_e46, __mn_e44, __mn_e45, __mn_hist, __mn_scratch)
-        push(__mn_e45, __mn_scratch)
-        push(__mn_e44, __mn_scratch)
-        push(__mn_e47, __mn_hist)
-        __mn_e47 += __mn_v_R
-        __mn_e47 ^= __mn_e46
-        push(__mn_e46, __mn_scratch)
+        push(__mn_e12, __mn_hist)
+        __mn_e12 += __mn_v_L
+        __mn_e12 ^= __mn_mem19
+        __mn_e13 += 3
+        call __mn_mul_into(__mn_e14, __mn_e12, __mn_e13, __mn_hist, __mn_scratch)
+        push(__mn_e13, __mn_scratch)
+        push(__mn_e12, __mn_scratch)
+        __mn_e15 += 255
+        call __mn_and_into(__mn_e16, __mn_e14, __mn_e15, __mn_hist, __mn_scratch)
+        push(__mn_e15, __mn_scratch)
+        push(__mn_e14, __mn_scratch)
+        push(__mn_e17, __mn_hist)
+        __mn_e17 += __mn_v_R
+        __mn_e17 ^= __mn_e16
+        push(__mn_e16, __mn_scratch)
         push(__mn_v_L, __mn_hist)
-        __mn_v_L += __mn_e47
-        push(__mn_e47, __mn_scratch)
-        push(__mn_e46, __mn_scratch)
+        __mn_v_L += __mn_e17
+        push(__mn_e17, __mn_scratch)
+        push(__mn_e16, __mn_scratch)
         push(__mn_v_R, __mn_hist)
         __mn_v_R += __mn_v_tmp
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_v_L
-        push(__mn_e48, __mn_hist)
-        __mn_e48 += __mn_v_L
-        __mn_e48 ^= __mn_mem18
-        __mn_e49 += 3
-        call __mn_mul_into(__mn_e50, __mn_e48, __mn_e49, __mn_hist, __mn_scratch)
-        push(__mn_e49, __mn_scratch)
-        push(__mn_e48, __mn_scratch)
-        __mn_e51 += 255
-        call __mn_and_into(__mn_e52, __mn_e50, __mn_e51, __mn_hist, __mn_scratch)
-        push(__mn_e51, __mn_scratch)
-        push(__mn_e50, __mn_scratch)
-        push(__mn_e53, __mn_hist)
-        __mn_e53 += __mn_v_R
-        __mn_e53 ^= __mn_e52
-        push(__mn_e52, __mn_scratch)
+        push(__mn_e18, __mn_hist)
+        __mn_e18 += __mn_v_L
+        __mn_e18 ^= __mn_mem18
+        __mn_e19 += 3
+        call __mn_mul_into(__mn_e20, __mn_e18, __mn_e19, __mn_hist, __mn_scratch)
+        push(__mn_e19, __mn_scratch)
+        push(__mn_e18, __mn_scratch)
+        __mn_e21 += 255
+        call __mn_and_into(__mn_e22, __mn_e20, __mn_e21, __mn_hist, __mn_scratch)
+        push(__mn_e21, __mn_scratch)
+        push(__mn_e20, __mn_scratch)
+        push(__mn_e23, __mn_hist)
+        __mn_e23 += __mn_v_R
+        __mn_e23 ^= __mn_e22
+        push(__mn_e22, __mn_scratch)
         push(__mn_v_L, __mn_hist)
-        __mn_v_L += __mn_e53
-        push(__mn_e53, __mn_scratch)
-        push(__mn_e52, __mn_scratch)
+        __mn_v_L += __mn_e23
+        push(__mn_e23, __mn_scratch)
+        push(__mn_e22, __mn_scratch)
         push(__mn_v_R, __mn_hist)
         __mn_v_R += __mn_v_tmp
         push(__mn_v_tmp, __mn_hist)
         __mn_v_tmp += __mn_v_L
-        push(__mn_e54, __mn_hist)
-        __mn_e54 += __mn_v_L
-        __mn_e54 ^= __mn_mem17
-        __mn_e55 += 3
-        call __mn_mul_into(__mn_e56, __mn_e54, __mn_e55, __mn_hist, __mn_scratch)
-        push(__mn_e55, __mn_scratch)
-        push(__mn_e54, __mn_scratch)
-        __mn_e57 += 255
-        call __mn_and_into(__mn_e58, __mn_e56, __mn_e57, __mn_hist, __mn_scratch)
-        push(__mn_e57, __mn_scratch)
-        push(__mn_e56, __mn_scratch)
-        push(__mn_e59, __mn_hist)
-        __mn_e59 += __mn_v_R
-        __mn_e59 ^= __mn_e58
-        push(__mn_e58, __mn_scratch)
+        push(__mn_e24, __mn_hist)
+        __mn_e24 += __mn_v_L
+        __mn_e24 ^= __mn_mem17
+        __mn_e25 += 3
+        call __mn_mul_into(__mn_e26, __mn_e24, __mn_e25, __mn_hist, __mn_scratch)
+        push(__mn_e25, __mn_scratch)
+        push(__mn_e24, __mn_scratch)
+        __mn_e27 += 255
+        call __mn_and_into(__mn_e28, __mn_e26, __mn_e27, __mn_hist, __mn_scratch)
+        push(__mn_e27, __mn_scratch)
+        push(__mn_e26, __mn_scratch)
+        push(__mn_e29, __mn_hist)
+        __mn_e29 += __mn_v_R
+        __mn_e29 ^= __mn_e28
+        push(__mn_e28, __mn_scratch)
         push(__mn_v_L, __mn_hist)
-        __mn_v_L += __mn_e59
-        push(__mn_e59, __mn_scratch)
-        push(__mn_e58, __mn_scratch)
+        __mn_v_L += __mn_e29
+        push(__mn_e29, __mn_scratch)
+        push(__mn_e28, __mn_scratch)
         push(__mn_v_R, __mn_hist)
         __mn_v_R += __mn_v_tmp
-        __mn_e60 += 8
-        call __mn_shl_into(__mn_e61, __mn_v_L, __mn_e60, __mn_hist, __mn_scratch)
-        push(__mn_e60, __mn_scratch)
-        __mn_e62 += 255
-        call __mn_and_into(__mn_e63, __mn_v_R, __mn_e62, __mn_hist, __mn_scratch)
-        push(__mn_e62, __mn_scratch)
-        call __mn_or_into(__mn_e64, __mn_e61, __mn_e63, __mn_hist, __mn_scratch)
-        push(__mn_e63, __mn_scratch)
-        push(__mn_e61, __mn_scratch)
+        __mn_e30 += 8
+        call __mn_shl_into(__mn_e31, __mn_v_L, __mn_e30, __mn_hist, __mn_scratch)
+        push(__mn_e30, __mn_scratch)
+        __mn_e32 += 255
+        call __mn_and_into(__mn_e33, __mn_v_R, __mn_e32, __mn_hist, __mn_scratch)
+        push(__mn_e32, __mn_scratch)
+        call __mn_or_into(__mn_e34, __mn_e31, __mn_e33, __mn_hist, __mn_scratch)
+        push(__mn_e33, __mn_scratch)
+        push(__mn_e31, __mn_scratch)
         push(__mn_mem16, __mn_hist)
-        __mn_mem16 += __mn_e64
-        push(__mn_e64, __mn_scratch)
+        __mn_mem16 += __mn_e34
+        push(__mn_e34, __mn_scratch)
         // return
-    push(__mn_e64, __mn_hist)
-    delocal int __mn_e64 = 0
-    push(__mn_e63, __mn_hist)
-    delocal int __mn_e63 = 0
-    push(__mn_e62, __mn_hist)
-    delocal int __mn_e62 = 0
-    push(__mn_e61, __mn_hist)
-    delocal int __mn_e61 = 0
-    push(__mn_e60, __mn_hist)
-    delocal int __mn_e60 = 0
-    push(__mn_e59, __mn_hist)
-    delocal int __mn_e59 = 0
-    push(__mn_e58, __mn_hist)
-    delocal int __mn_e58 = 0
-    push(__mn_e57, __mn_hist)
-    delocal int __mn_e57 = 0
-    push(__mn_e56, __mn_hist)
-    delocal int __mn_e56 = 0
-    push(__mn_e55, __mn_hist)
-    delocal int __mn_e55 = 0
-    push(__mn_e54, __mn_hist)
-    delocal int __mn_e54 = 0
-    push(__mn_e53, __mn_hist)
-    delocal int __mn_e53 = 0
-    push(__mn_e52, __mn_hist)
-    delocal int __mn_e52 = 0
-    push(__mn_e51, __mn_hist)
-    delocal int __mn_e51 = 0
-    push(__mn_e50, __mn_hist)
-    delocal int __mn_e50 = 0
-    push(__mn_e49, __mn_hist)
-    delocal int __mn_e49 = 0
-    push(__mn_e48, __mn_hist)
-    delocal int __mn_e48 = 0
-    push(__mn_e47, __mn_hist)
-    delocal int __mn_e47 = 0
-    push(__mn_e46, __mn_hist)
-    delocal int __mn_e46 = 0
-    push(__mn_e45, __mn_hist)
-    delocal int __mn_e45 = 0
-    push(__mn_e44, __mn_hist)
-    delocal int __mn_e44 = 0
-    push(__mn_e43, __mn_hist)
-    delocal int __mn_e43 = 0
-    push(__mn_e42, __mn_hist)
-    delocal int __mn_e42 = 0
-    push(__mn_e41, __mn_hist)
-    delocal int __mn_e41 = 0
-    push(__mn_e40, __mn_hist)
-    delocal int __mn_e40 = 0
-    push(__mn_e39, __mn_hist)
-    delocal int __mn_e39 = 0
-    push(__mn_e38, __mn_hist)
-    delocal int __mn_e38 = 0
-    push(__mn_e37, __mn_hist)
-    delocal int __mn_e37 = 0
-    push(__mn_e36, __mn_hist)
-    delocal int __mn_e36 = 0
-    push(__mn_e35, __mn_hist)
-    delocal int __mn_e35 = 0
     push(__mn_e34, __mn_hist)
     delocal int __mn_e34 = 0
     push(__mn_e33, __mn_hist)
@@ -2127,66 +1699,6 @@ procedure main()
     local int __mn_e23 = 0
     local int __mn_e24 = 0
     local int __mn_e25 = 0
-    local int __mn_e26 = 0
-    local int __mn_e27 = 0
-    local int __mn_e28 = 0
-    local int __mn_e29 = 0
-    local int __mn_e30 = 0
-    local int __mn_e31 = 0
-    local int __mn_e32 = 0
-    local int __mn_e33 = 0
-    local int __mn_e34 = 0
-    local int __mn_e35 = 0
-    local int __mn_e36 = 0
-    local int __mn_e37 = 0
-    local int __mn_e38 = 0
-    local int __mn_e39 = 0
-    local int __mn_e40 = 0
-    local int __mn_e41 = 0
-    local int __mn_e42 = 0
-    local int __mn_e43 = 0
-    local int __mn_e44 = 0
-    local int __mn_e45 = 0
-    local int __mn_e46 = 0
-    local int __mn_e47 = 0
-    local int __mn_e48 = 0
-    local int __mn_e49 = 0
-    local int __mn_e50 = 0
-    local int __mn_e51 = 0
-    local int __mn_e52 = 0
-    local int __mn_e53 = 0
-    local int __mn_e54 = 0
-    local int __mn_e55 = 0
-    local int __mn_e56 = 0
-    local int __mn_e57 = 0
-    local int __mn_e58 = 0
-    local int __mn_e59 = 0
-    local int __mn_e60 = 0
-    local int __mn_e61 = 0
-    local int __mn_e62 = 0
-    local int __mn_e63 = 0
-    local int __mn_e64 = 0
-    local int __mn_e65 = 0
-    local int __mn_e66 = 0
-    local int __mn_e67 = 0
-    local int __mn_e68 = 0
-    local int __mn_e69 = 0
-    local int __mn_e70 = 0
-    local int __mn_e71 = 0
-    local int __mn_e72 = 0
-    local int __mn_e73 = 0
-    local int __mn_e74 = 0
-    local int __mn_e75 = 0
-    local int __mn_e76 = 0
-    local int __mn_e77 = 0
-    local int __mn_e78 = 0
-    local int __mn_e79 = 0
-    local int __mn_e80 = 0
-    local int __mn_e81 = 0
-    local int __mn_e82 = 0
-    local int __mn_e83 = 0
-    local int __mn_e84 = 0
-    local int __mn_e85 = 0
         // generato da Mnemo da C
         __mn_pool_ctr += 26
         push(__mn_mem5, __mn_hist)
@@ -2197,129 +1709,7 @@ procedure main()
         __mn_mem7 += 42
         push(__mn_mem8, __mn_hist)
         __mn_mem8 += 0
-        call __mn_hist_floor_snap(__mn_hist)
         call encrypt(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_e1 ^= __mn_mem0
-        __mn_e2 ^= __mn_mem1
-        __mn_e3 ^= __mn_mem2
-        __mn_e4 ^= __mn_mem3
-        __mn_e5 ^= __mn_mem4
-        __mn_e6 ^= __mn_mem5
-        __mn_e7 ^= __mn_mem6
-        __mn_e8 ^= __mn_mem7
-        __mn_e9 ^= __mn_mem8
-        __mn_e10 ^= __mn_mem9
-        __mn_e11 ^= __mn_mem10
-        __mn_e12 ^= __mn_mem11
-        __mn_e13 ^= __mn_mem12
-        __mn_e14 ^= __mn_mem13
-        __mn_e15 ^= __mn_mem14
-        __mn_e16 ^= __mn_mem15
-        __mn_e17 ^= __mn_mem16
-        __mn_e18 ^= __mn_mem17
-        __mn_e19 ^= __mn_mem18
-        __mn_e20 ^= __mn_mem19
-        __mn_e21 ^= __mn_mem20
-        __mn_e22 ^= __mn_mem21
-        __mn_e23 ^= __mn_mem22
-        __mn_e24 ^= __mn_mem23
-        __mn_e25 ^= __mn_mem24
-        __mn_e26 ^= __mn_mem25
-        __mn_e27 ^= __mn_mem26
-        __mn_e28 ^= __mn_mem27
-        __mn_e29 ^= __mn_mem28
-        __mn_e30 ^= __mn_mem29
-        uncall encrypt(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_mem0 ^= __mn_e1
-        __mn_e1 ^= __mn_mem0
-        __mn_mem0 ^= __mn_e1
-        __mn_mem1 ^= __mn_e2
-        __mn_e2 ^= __mn_mem1
-        __mn_mem1 ^= __mn_e2
-        __mn_mem2 ^= __mn_e3
-        __mn_e3 ^= __mn_mem2
-        __mn_mem2 ^= __mn_e3
-        __mn_mem3 ^= __mn_e4
-        __mn_e4 ^= __mn_mem3
-        __mn_mem3 ^= __mn_e4
-        __mn_mem4 ^= __mn_e5
-        __mn_e5 ^= __mn_mem4
-        __mn_mem4 ^= __mn_e5
-        __mn_mem5 ^= __mn_e6
-        __mn_e6 ^= __mn_mem5
-        __mn_mem5 ^= __mn_e6
-        __mn_mem6 ^= __mn_e7
-        __mn_e7 ^= __mn_mem6
-        __mn_mem6 ^= __mn_e7
-        __mn_mem7 ^= __mn_e8
-        __mn_e8 ^= __mn_mem7
-        __mn_mem7 ^= __mn_e8
-        __mn_mem8 ^= __mn_e9
-        __mn_e9 ^= __mn_mem8
-        __mn_mem8 ^= __mn_e9
-        __mn_mem9 ^= __mn_e10
-        __mn_e10 ^= __mn_mem9
-        __mn_mem9 ^= __mn_e10
-        __mn_mem10 ^= __mn_e11
-        __mn_e11 ^= __mn_mem10
-        __mn_mem10 ^= __mn_e11
-        __mn_mem11 ^= __mn_e12
-        __mn_e12 ^= __mn_mem11
-        __mn_mem11 ^= __mn_e12
-        __mn_mem12 ^= __mn_e13
-        __mn_e13 ^= __mn_mem12
-        __mn_mem12 ^= __mn_e13
-        __mn_mem13 ^= __mn_e14
-        __mn_e14 ^= __mn_mem13
-        __mn_mem13 ^= __mn_e14
-        __mn_mem14 ^= __mn_e15
-        __mn_e15 ^= __mn_mem14
-        __mn_mem14 ^= __mn_e15
-        __mn_mem15 ^= __mn_e16
-        __mn_e16 ^= __mn_mem15
-        __mn_mem15 ^= __mn_e16
-        __mn_mem16 ^= __mn_e17
-        __mn_e17 ^= __mn_mem16
-        __mn_mem16 ^= __mn_e17
-        __mn_mem17 ^= __mn_e18
-        __mn_e18 ^= __mn_mem17
-        __mn_mem17 ^= __mn_e18
-        __mn_mem18 ^= __mn_e19
-        __mn_e19 ^= __mn_mem18
-        __mn_mem18 ^= __mn_e19
-        __mn_mem19 ^= __mn_e20
-        __mn_e20 ^= __mn_mem19
-        __mn_mem19 ^= __mn_e20
-        __mn_mem20 ^= __mn_e21
-        __mn_e21 ^= __mn_mem20
-        __mn_mem20 ^= __mn_e21
-        __mn_mem21 ^= __mn_e22
-        __mn_e22 ^= __mn_mem21
-        __mn_mem21 ^= __mn_e22
-        __mn_mem22 ^= __mn_e23
-        __mn_e23 ^= __mn_mem22
-        __mn_mem22 ^= __mn_e23
-        __mn_mem23 ^= __mn_e24
-        __mn_e24 ^= __mn_mem23
-        __mn_mem23 ^= __mn_e24
-        __mn_mem24 ^= __mn_e25
-        __mn_e25 ^= __mn_mem24
-        __mn_mem24 ^= __mn_e25
-        __mn_mem25 ^= __mn_e26
-        __mn_e26 ^= __mn_mem25
-        __mn_mem25 ^= __mn_e26
-        __mn_mem26 ^= __mn_e27
-        __mn_e27 ^= __mn_mem26
-        __mn_mem26 ^= __mn_e27
-        __mn_mem27 ^= __mn_e28
-        __mn_e28 ^= __mn_mem27
-        __mn_mem27 ^= __mn_e28
-        __mn_mem28 ^= __mn_e29
-        __mn_e29 ^= __mn_mem28
-        __mn_mem28 ^= __mn_e29
-        __mn_mem29 ^= __mn_e30
-        __mn_e30 ^= __mn_mem29
-        __mn_mem29 ^= __mn_e30
         push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem8
         push(__mn_mem24, __mn_hist)
@@ -2331,348 +1721,100 @@ procedure main()
         __mn_mem15 += 42
         push(__mn_mem16, __mn_hist)
         __mn_mem16 += 0
-        call __mn_hist_floor_snap(__mn_hist)
         call decrypt(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_e32 ^= __mn_mem0
-        __mn_e33 ^= __mn_mem1
-        __mn_e34 ^= __mn_mem2
-        __mn_e35 ^= __mn_mem3
-        __mn_e36 ^= __mn_mem4
-        __mn_e37 ^= __mn_mem5
-        __mn_e38 ^= __mn_mem6
-        __mn_e39 ^= __mn_mem7
-        __mn_e40 ^= __mn_mem8
-        __mn_e41 ^= __mn_mem9
-        __mn_e42 ^= __mn_mem10
-        __mn_e43 ^= __mn_mem11
-        __mn_e44 ^= __mn_mem12
-        __mn_e45 ^= __mn_mem13
-        __mn_e46 ^= __mn_mem14
-        __mn_e47 ^= __mn_mem15
-        __mn_e48 ^= __mn_mem16
-        __mn_e49 ^= __mn_mem17
-        __mn_e50 ^= __mn_mem18
-        __mn_e51 ^= __mn_mem19
-        __mn_e52 ^= __mn_mem20
-        __mn_e53 ^= __mn_mem21
-        __mn_e54 ^= __mn_mem22
-        __mn_e55 ^= __mn_mem23
-        __mn_e56 ^= __mn_mem24
-        __mn_e57 ^= __mn_mem25
-        __mn_e58 ^= __mn_mem26
-        __mn_e59 ^= __mn_mem27
-        __mn_e60 ^= __mn_mem28
-        __mn_e61 ^= __mn_mem29
-        uncall decrypt(__mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_mem9, __mn_mem10, __mn_mem11, __mn_mem12, __mn_mem13, __mn_mem14, __mn_mem15, __mn_mem16, __mn_mem17, __mn_mem18, __mn_mem19, __mn_mem20, __mn_mem21, __mn_mem22, __mn_mem23, __mn_mem24, __mn_mem25, __mn_mem26, __mn_mem27, __mn_mem28, __mn_mem29, __mn_hist, __mn_scratch)
-        __mn_mem0 ^= __mn_e32
-        __mn_e32 ^= __mn_mem0
-        __mn_mem0 ^= __mn_e32
-        __mn_mem1 ^= __mn_e33
-        __mn_e33 ^= __mn_mem1
-        __mn_mem1 ^= __mn_e33
-        __mn_mem2 ^= __mn_e34
-        __mn_e34 ^= __mn_mem2
-        __mn_mem2 ^= __mn_e34
-        __mn_mem3 ^= __mn_e35
-        __mn_e35 ^= __mn_mem3
-        __mn_mem3 ^= __mn_e35
-        __mn_mem4 ^= __mn_e36
-        __mn_e36 ^= __mn_mem4
-        __mn_mem4 ^= __mn_e36
-        __mn_mem5 ^= __mn_e37
-        __mn_e37 ^= __mn_mem5
-        __mn_mem5 ^= __mn_e37
-        __mn_mem6 ^= __mn_e38
-        __mn_e38 ^= __mn_mem6
-        __mn_mem6 ^= __mn_e38
-        __mn_mem7 ^= __mn_e39
-        __mn_e39 ^= __mn_mem7
-        __mn_mem7 ^= __mn_e39
-        __mn_mem8 ^= __mn_e40
-        __mn_e40 ^= __mn_mem8
-        __mn_mem8 ^= __mn_e40
-        __mn_mem9 ^= __mn_e41
-        __mn_e41 ^= __mn_mem9
-        __mn_mem9 ^= __mn_e41
-        __mn_mem10 ^= __mn_e42
-        __mn_e42 ^= __mn_mem10
-        __mn_mem10 ^= __mn_e42
-        __mn_mem11 ^= __mn_e43
-        __mn_e43 ^= __mn_mem11
-        __mn_mem11 ^= __mn_e43
-        __mn_mem12 ^= __mn_e44
-        __mn_e44 ^= __mn_mem12
-        __mn_mem12 ^= __mn_e44
-        __mn_mem13 ^= __mn_e45
-        __mn_e45 ^= __mn_mem13
-        __mn_mem13 ^= __mn_e45
-        __mn_mem14 ^= __mn_e46
-        __mn_e46 ^= __mn_mem14
-        __mn_mem14 ^= __mn_e46
-        __mn_mem15 ^= __mn_e47
-        __mn_e47 ^= __mn_mem15
-        __mn_mem15 ^= __mn_e47
-        __mn_mem16 ^= __mn_e48
-        __mn_e48 ^= __mn_mem16
-        __mn_mem16 ^= __mn_e48
-        __mn_mem17 ^= __mn_e49
-        __mn_e49 ^= __mn_mem17
-        __mn_mem17 ^= __mn_e49
-        __mn_mem18 ^= __mn_e50
-        __mn_e50 ^= __mn_mem18
-        __mn_mem18 ^= __mn_e50
-        __mn_mem19 ^= __mn_e51
-        __mn_e51 ^= __mn_mem19
-        __mn_mem19 ^= __mn_e51
-        __mn_mem20 ^= __mn_e52
-        __mn_e52 ^= __mn_mem20
-        __mn_mem20 ^= __mn_e52
-        __mn_mem21 ^= __mn_e53
-        __mn_e53 ^= __mn_mem21
-        __mn_mem21 ^= __mn_e53
-        __mn_mem22 ^= __mn_e54
-        __mn_e54 ^= __mn_mem22
-        __mn_mem22 ^= __mn_e54
-        __mn_mem23 ^= __mn_e55
-        __mn_e55 ^= __mn_mem23
-        __mn_mem23 ^= __mn_e55
-        __mn_mem24 ^= __mn_e56
-        __mn_e56 ^= __mn_mem24
-        __mn_mem24 ^= __mn_e56
-        __mn_mem25 ^= __mn_e57
-        __mn_e57 ^= __mn_mem25
-        __mn_mem25 ^= __mn_e57
-        __mn_mem26 ^= __mn_e58
-        __mn_e58 ^= __mn_mem26
-        __mn_mem26 ^= __mn_e58
-        __mn_mem27 ^= __mn_e59
-        __mn_e59 ^= __mn_mem27
-        __mn_mem27 ^= __mn_e59
-        __mn_mem28 ^= __mn_e60
-        __mn_e60 ^= __mn_mem28
-        __mn_mem28 ^= __mn_e60
-        __mn_mem29 ^= __mn_e61
-        __mn_e61 ^= __mn_mem29
-        __mn_mem29 ^= __mn_e61
-        push(__mn_e31, __mn_hist)
-        __mn_e31 += __mn_mem16
+        push(__mn_e1, __mn_hist)
+        __mn_e1 += __mn_mem16
         push(__mn_mem25, __mn_hist)
-        __mn_mem25 += __mn_e31
-        push(__mn_e31, __mn_scratch)
-        __mn_e62 += 99
-        show(__mn_e62, char)
-        __mn_e62 -= 99
-        __mn_e63 += 105
-        show(__mn_e63, char)
-        __mn_e63 -= 105
-        __mn_e64 += 112
-        show(__mn_e64, char)
-        __mn_e64 -= 112
-        __mn_e65 += 104
-        show(__mn_e65, char)
-        __mn_e65 -= 104
-        __mn_e66 += 101
-        show(__mn_e66, char)
-        __mn_e66 -= 101
-        __mn_e67 += 114
-        show(__mn_e67, char)
-        __mn_e67 -= 114
-        __mn_e68 += 58
-        show(__mn_e68, char)
-        __mn_e68 -= 58
-        __mn_e69 += 32
-        show(__mn_e69, char)
-        __mn_e69 -= 32
-        call __mn_hist_floor_snap(__mn_hist)
+        __mn_mem25 += __mn_e1
+        push(__mn_e1, __mn_scratch)
+        __mn_e2 += 99
+        show(__mn_e2, char)
+        __mn_e2 -= 99
+        __mn_e3 += 105
+        show(__mn_e3, char)
+        __mn_e3 -= 105
+        __mn_e4 += 112
+        show(__mn_e4, char)
+        __mn_e4 -= 112
+        __mn_e5 += 104
+        show(__mn_e5, char)
+        __mn_e5 -= 104
+        __mn_e6 += 101
+        show(__mn_e6, char)
+        __mn_e6 -= 101
+        __mn_e7 += 114
+        show(__mn_e7, char)
+        __mn_e7 -= 114
+        __mn_e8 += 58
+        show(__mn_e8, char)
+        __mn_e8 -= 58
+        __mn_e9 += 32
+        show(__mn_e9, char)
+        __mn_e9 -= 32
         call __mn_putd(__mn_mem24, __mn_hist, __mn_scratch)
-        uncall __mn_putd(__mn_mem24, __mn_hist, __mn_scratch)
-        __mn_e70 += 10
-        show(__mn_e70, char)
-        __mn_e70 -= 10
-        push(__mn_e70, __mn_scratch)
-        push(__mn_e69, __mn_scratch)
-        push(__mn_e68, __mn_scratch)
-        push(__mn_e67, __mn_scratch)
-        push(__mn_e66, __mn_scratch)
-        push(__mn_e65, __mn_scratch)
-        push(__mn_e64, __mn_scratch)
-        push(__mn_e63, __mn_scratch)
-        push(__mn_e62, __mn_scratch)
-        __mn_e71 += 76
-        show(__mn_e71, char)
-        __mn_e71 -= 76
-        __mn_e72 += 58
-        show(__mn_e72, char)
-        __mn_e72 -= 58
-        __mn_e73 += 32
-        show(__mn_e73, char)
-        __mn_e73 -= 32
-        __mn_e74 += 8
-        call __mn_shr_into(__mn_e75, __mn_mem25, __mn_e74, __mn_hist, __mn_scratch)
-        push(__mn_e74, __mn_scratch)
-        __mn_e76 += 255
-        call __mn_and_into(__mn_e77, __mn_e75, __mn_e76, __mn_hist, __mn_scratch)
-        push(__mn_e76, __mn_scratch)
-        push(__mn_e75, __mn_scratch)
-        call __mn_hist_floor_snap(__mn_hist)
-        call __mn_putd(__mn_e77, __mn_hist, __mn_scratch)
-        uncall __mn_putd(__mn_e77, __mn_hist, __mn_scratch)
-        __mn_e78 += 32
-        show(__mn_e78, char)
-        __mn_e78 -= 32
-        __mn_e79 += 32
-        show(__mn_e79, char)
-        __mn_e79 -= 32
-        __mn_e80 += 82
-        show(__mn_e80, char)
-        __mn_e80 -= 82
-        __mn_e81 += 58
-        show(__mn_e81, char)
-        __mn_e81 -= 58
-        __mn_e82 += 32
-        show(__mn_e82, char)
-        __mn_e82 -= 32
-        __mn_e83 += 255
-        call __mn_and_into(__mn_e84, __mn_mem25, __mn_e83, __mn_hist, __mn_scratch)
-        push(__mn_e83, __mn_scratch)
-        call __mn_hist_floor_snap(__mn_hist)
-        call __mn_putd(__mn_e84, __mn_hist, __mn_scratch)
-        uncall __mn_putd(__mn_e84, __mn_hist, __mn_scratch)
-        __mn_e85 += 10
-        show(__mn_e85, char)
-        __mn_e85 -= 10
-        push(__mn_e85, __mn_scratch)
-        push(__mn_e84, __mn_scratch)
-        push(__mn_e82, __mn_scratch)
-        push(__mn_e81, __mn_scratch)
-        push(__mn_e80, __mn_scratch)
-        push(__mn_e79, __mn_scratch)
-        push(__mn_e78, __mn_scratch)
-        push(__mn_e77, __mn_scratch)
-        push(__mn_e73, __mn_scratch)
-        push(__mn_e72, __mn_scratch)
-        push(__mn_e71, __mn_scratch)
+        __mn_e10 += 10
+        show(__mn_e10, char)
+        __mn_e10 -= 10
+        push(__mn_e10, __mn_scratch)
+        push(__mn_e9, __mn_scratch)
+        push(__mn_e8, __mn_scratch)
+        push(__mn_e7, __mn_scratch)
+        push(__mn_e6, __mn_scratch)
+        push(__mn_e5, __mn_scratch)
+        push(__mn_e4, __mn_scratch)
+        push(__mn_e3, __mn_scratch)
+        push(__mn_e2, __mn_scratch)
+        __mn_e11 += 76
+        show(__mn_e11, char)
+        __mn_e11 -= 76
+        __mn_e12 += 58
+        show(__mn_e12, char)
+        __mn_e12 -= 58
+        __mn_e13 += 32
+        show(__mn_e13, char)
+        __mn_e13 -= 32
+        __mn_e14 += 8
+        call __mn_shr_into(__mn_e15, __mn_mem25, __mn_e14, __mn_hist, __mn_scratch)
+        push(__mn_e14, __mn_scratch)
+        __mn_e16 += 255
+        call __mn_and_into(__mn_e17, __mn_e15, __mn_e16, __mn_hist, __mn_scratch)
+        push(__mn_e16, __mn_scratch)
+        push(__mn_e15, __mn_scratch)
+        call __mn_putd(__mn_e17, __mn_hist, __mn_scratch)
+        __mn_e18 += 32
+        show(__mn_e18, char)
+        __mn_e18 -= 32
+        __mn_e19 += 32
+        show(__mn_e19, char)
+        __mn_e19 -= 32
+        __mn_e20 += 82
+        show(__mn_e20, char)
+        __mn_e20 -= 82
+        __mn_e21 += 58
+        show(__mn_e21, char)
+        __mn_e21 -= 58
+        __mn_e22 += 32
+        show(__mn_e22, char)
+        __mn_e22 -= 32
+        __mn_e23 += 255
+        call __mn_and_into(__mn_e24, __mn_mem25, __mn_e23, __mn_hist, __mn_scratch)
+        push(__mn_e23, __mn_scratch)
+        call __mn_putd(__mn_e24, __mn_hist, __mn_scratch)
+        __mn_e25 += 10
+        show(__mn_e25, char)
+        __mn_e25 -= 10
+        push(__mn_e25, __mn_scratch)
+        push(__mn_e24, __mn_scratch)
+        push(__mn_e22, __mn_scratch)
+        push(__mn_e21, __mn_scratch)
+        push(__mn_e20, __mn_scratch)
+        push(__mn_e19, __mn_scratch)
+        push(__mn_e18, __mn_scratch)
+        push(__mn_e17, __mn_scratch)
+        push(__mn_e13, __mn_scratch)
+        push(__mn_e12, __mn_scratch)
+        push(__mn_e11, __mn_scratch)
         // return
-    push(__mn_e85, __mn_hist)
-    delocal int __mn_e85 = 0
-    push(__mn_e84, __mn_hist)
-    delocal int __mn_e84 = 0
-    push(__mn_e83, __mn_hist)
-    delocal int __mn_e83 = 0
-    push(__mn_e82, __mn_hist)
-    delocal int __mn_e82 = 0
-    push(__mn_e81, __mn_hist)
-    delocal int __mn_e81 = 0
-    push(__mn_e80, __mn_hist)
-    delocal int __mn_e80 = 0
-    push(__mn_e79, __mn_hist)
-    delocal int __mn_e79 = 0
-    push(__mn_e78, __mn_hist)
-    delocal int __mn_e78 = 0
-    push(__mn_e77, __mn_hist)
-    delocal int __mn_e77 = 0
-    push(__mn_e76, __mn_hist)
-    delocal int __mn_e76 = 0
-    push(__mn_e75, __mn_hist)
-    delocal int __mn_e75 = 0
-    push(__mn_e74, __mn_hist)
-    delocal int __mn_e74 = 0
-    push(__mn_e73, __mn_hist)
-    delocal int __mn_e73 = 0
-    push(__mn_e72, __mn_hist)
-    delocal int __mn_e72 = 0
-    push(__mn_e71, __mn_hist)
-    delocal int __mn_e71 = 0
-    push(__mn_e70, __mn_hist)
-    delocal int __mn_e70 = 0
-    push(__mn_e69, __mn_hist)
-    delocal int __mn_e69 = 0
-    push(__mn_e68, __mn_hist)
-    delocal int __mn_e68 = 0
-    push(__mn_e67, __mn_hist)
-    delocal int __mn_e67 = 0
-    push(__mn_e66, __mn_hist)
-    delocal int __mn_e66 = 0
-    push(__mn_e65, __mn_hist)
-    delocal int __mn_e65 = 0
-    push(__mn_e64, __mn_hist)
-    delocal int __mn_e64 = 0
-    push(__mn_e63, __mn_hist)
-    delocal int __mn_e63 = 0
-    push(__mn_e62, __mn_hist)
-    delocal int __mn_e62 = 0
-    push(__mn_e61, __mn_hist)
-    delocal int __mn_e61 = 0
-    push(__mn_e60, __mn_hist)
-    delocal int __mn_e60 = 0
-    push(__mn_e59, __mn_hist)
-    delocal int __mn_e59 = 0
-    push(__mn_e58, __mn_hist)
-    delocal int __mn_e58 = 0
-    push(__mn_e57, __mn_hist)
-    delocal int __mn_e57 = 0
-    push(__mn_e56, __mn_hist)
-    delocal int __mn_e56 = 0
-    push(__mn_e55, __mn_hist)
-    delocal int __mn_e55 = 0
-    push(__mn_e54, __mn_hist)
-    delocal int __mn_e54 = 0
-    push(__mn_e53, __mn_hist)
-    delocal int __mn_e53 = 0
-    push(__mn_e52, __mn_hist)
-    delocal int __mn_e52 = 0
-    push(__mn_e51, __mn_hist)
-    delocal int __mn_e51 = 0
-    push(__mn_e50, __mn_hist)
-    delocal int __mn_e50 = 0
-    push(__mn_e49, __mn_hist)
-    delocal int __mn_e49 = 0
-    push(__mn_e48, __mn_hist)
-    delocal int __mn_e48 = 0
-    push(__mn_e47, __mn_hist)
-    delocal int __mn_e47 = 0
-    push(__mn_e46, __mn_hist)
-    delocal int __mn_e46 = 0
-    push(__mn_e45, __mn_hist)
-    delocal int __mn_e45 = 0
-    push(__mn_e44, __mn_hist)
-    delocal int __mn_e44 = 0
-    push(__mn_e43, __mn_hist)
-    delocal int __mn_e43 = 0
-    push(__mn_e42, __mn_hist)
-    delocal int __mn_e42 = 0
-    push(__mn_e41, __mn_hist)
-    delocal int __mn_e41 = 0
-    push(__mn_e40, __mn_hist)
-    delocal int __mn_e40 = 0
-    push(__mn_e39, __mn_hist)
-    delocal int __mn_e39 = 0
-    push(__mn_e38, __mn_hist)
-    delocal int __mn_e38 = 0
-    push(__mn_e37, __mn_hist)
-    delocal int __mn_e37 = 0
-    push(__mn_e36, __mn_hist)
-    delocal int __mn_e36 = 0
-    push(__mn_e35, __mn_hist)
-    delocal int __mn_e35 = 0
-    push(__mn_e34, __mn_hist)
-    delocal int __mn_e34 = 0
-    push(__mn_e33, __mn_hist)
-    delocal int __mn_e33 = 0
-    push(__mn_e32, __mn_hist)
-    delocal int __mn_e32 = 0
-    push(__mn_e31, __mn_hist)
-    delocal int __mn_e31 = 0
-    push(__mn_e30, __mn_hist)
-    delocal int __mn_e30 = 0
-    push(__mn_e29, __mn_hist)
-    delocal int __mn_e29 = 0
-    push(__mn_e28, __mn_hist)
-    delocal int __mn_e28 = 0
-    push(__mn_e27, __mn_hist)
-    delocal int __mn_e27 = 0
-    push(__mn_e26, __mn_hist)
-    delocal int __mn_e26 = 0
     push(__mn_e25, __mn_hist)
     delocal int __mn_e25 = 0
     push(__mn_e24, __mn_hist)
