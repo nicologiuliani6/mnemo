@@ -124,16 +124,16 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 
 ### Tipi scalari mancanti
 
-- **`char` come variabile** — solo dentro string literals e `printf("%c", …)`. `char c = 'a';` come variabile locale non supportato.
-- **`short`, `long`, `long long`, `unsigned short/long/long long`** — solo `int` / `unsigned int` / `bool` / `_Bool`. Tutti gli interi sono word-size della VM.
+- ~~**`char` come variabile**~~ — ora supportato (`char c = 'A'; char d = c+1;` funziona).
+- ~~**`short`, `long`, `long long`, `unsigned short/long/long long`**~~ — già accettati come scalari (alias `int` via VM word-size).
 - **`float`, `double`, `long double`** — nessun FP. La VM Kairos opera solo su interi.
-- **`size_t`, `ptrdiff_t`, `intptr_t`, `uintN_t`** — typedef stdint/stddef non disponibili. Usare `int`.
-- **`enum` come tipo esplicito di variabile** — costanti enum sì (espanse a int literal), ma non `enum E e;` come tipo.
+- ~~**`size_t`, `ptrdiff_t`, `intptr_t`, `uintN_t`**~~ — ora disponibili via `mnemo/fake_include/{stddef,stdint}.h` (auto-incluse). Tutti aliasati a `int` / `unsigned int`.
+- ~~**`enum` come tipo esplicito di variabile**~~ — `enum Color c = GREEN;` funziona (testato).
 
 ### Puntatori
 
-- **Aritmetica puntatore**: `p + 1`, `p++`, `p - q`, `*(p+i)` non supportati. Solo `*p`, `a[i]`, `s->f`, `&id`, `&struct.field`.
-- **Puntatori multi-livello**: `int **p`. Solo un livello (`int *p`).
+- ~~**Aritmetica puntatore**~~: `p + 1`, `p++`, `p - q`, `*(p+i)` ora supportati su array (mappati a `a[i]`).
+- ~~**Puntatori multi-livello**~~: `int **q = &p; **q` funziona (testato).
 - **`void *`** — non supportato; puntatori sono typed.
 - **`const`, `volatile`, `restrict` qualifiers** — parser tollera ma nessuna semantica.
 - **Pointer-to-array, pointer-to-function** come tipi compositi: solo function pointer compile-time risolto (`p = f` o `&f` con `f` same-file).
@@ -164,7 +164,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 
 ### Storage / linkage
 
-- **`static` locali** — non supportato (semantica reversibile complessa).
+- **`static` locali** — non accumula valore tra chiamate (testato: f() ritorna sempre 1 invece di 1,2,3). Treated as regular local; semantica statefulness non implementata.
 - **`extern` con definizione altrove** — solo dichiarazioni file-scope.
 - **`register`, `auto` keywords** — ignorate.
 - **Translation unit multipli** — solo single-file compilation.
@@ -202,7 +202,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **Side effects con risultato non-restored**: `x = f(x)` dove `f` ha effetti → richiede uncall implicit.
 - **Operatori non-reversibili** (`/`, `%`) — lib reversibili (`__mn_divmod_nonneg`) gestiscono cases positivi; segno tramite guardia bit.
 - **`==`, `!=`, `<`, `>` etc. come espressioni** — solo come condizione `if` / loop guard.
-- **Casts impliciti complessi** — supportati solo tra int↔bool↔unsigned int.
+- **Casts scalari espliciti** — `(int)x`, `(long)x`, `(unsigned short)x` ecc ora accettati (no-op nella VM word-size). Era limitato a int↔bool↔unsigned int.
 - **Memory aliasing arbitrario** — caller-callee mem cell aliasing non sempre supportato.
 
 ---
