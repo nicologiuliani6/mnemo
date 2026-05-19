@@ -2,6 +2,24 @@
 
 ## OPEN
 
+### [P3] opt A+B: snap subset + procedure sig reduction — DONE 2026-05-19
+
+**A** (snap subset): `--opt-uncall-user-calls` ora snappa solo le celle in `callee_mem_touches[name]` invece di tutte `__mn_mem*`. Applicato sia in `_lower_funccall_with_ret` (call singola) sia in parallel2 par-uncall. Stack history molto più corta.
+
+**B** (sig reduction): ogni `procedure f(...)` ora dichiara formali `int __mn_mem<i>` solo per `i in callee_mem_touches[f]`. Tutti i call site (call/uncall singole, parallel2, parallel_with, parallel_with1, pthread_start, pthread_start1) passano lo stesso sottoinsieme. Probe pass sempre eseguito (anche senza `--opt-uncall-user-calls`).
+
+Implementazione:
+- `_compute_callee_mem_touches`: punto-fisso, callee-frame indices [0..S-1].
+- `_collect_mem_refs_from_seq`: `ICall`/`IUncall` args NON contati come direct refs (solo `(proc, args)` per propagazione fixpoint).
+- `_parallel_branch_mem_actuals(left, callee_name)`: actuals = sorted touches mappate caller-side (base=0 per left, S per right, shared se in `parallel_file_shared_slots`).
+- `_lower_user_function`: `param_order = sorted(callee_mem_touches[name])` (fallback range(total_cells) se entry mancante).
+
+Esempio fib.c (S=10):
+- `procedure fibonacci(int __mn_mem4, int __mn_mem5, ...)` (era 10 celle).
+- `procedure fib_left(int __mn_mem0, int __mn_mem2, int __mn_mem4, int __mn_mem5, ...)` (4 celle invece di 10).
+
+Validato: make test 36/36 PASS, test-unit 6/6 OK, test-gcc-compat 68/68 PASS, fib.c opt-uncall → 89, ex33 opt-uncall → 55. Tests parallel partition aggiornati (sottoinsiemi possono differire tra workers, invariante è offset partizione applicato).
+
 ### [P3] opt-uncall su `par … and … rap` — DONE 2026-05-18
 
 `mnemo_pthread_parallel2(f0, f1, …)` con `--opt-uncall-user-calls` ora emette:

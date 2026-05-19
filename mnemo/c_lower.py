@@ -24,6 +24,7 @@ import ast as pyast
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import pycparser.c_ast as c
 
@@ -593,6 +594,9 @@ class _Ctx:
     """Funzioni che sono worker di `mnemo_pthread_parallel2`: niente opt-uncall nei loro body
     (par-uncall esterno richiede body invertibili senza pattern snap/uncall interno)."""
     par2_workers: frozenset[str] = field(default_factory=frozenset)
+    """Per ogni user fn, indici `__mn_mem<i>` che il body può toccare (transitivo).
+    Usato da opt-uncall per snap solo celle effettivamente mutate."""
+    callee_mem_touches: dict[str, frozenset[int]] = field(default_factory=dict)
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -677,19 +681,27 @@ def _ptr_pool_mem_names(ctx: _Ctx) -> tuple[str, ...]:
     return tuple(f"__mn_mem{i}" for i in range(n))
 
 
-def _parallel_branch_mem_actuals(ctx: _Ctx, *, left: bool) -> list[str]:
+def _parallel_branch_mem_actuals(
+    ctx: _Ctx, *, left: bool, callee_name: str | None = None
+) -> list[str]:
     """
     Argomenti `call f(__mn_mem*, …)` per un ramo PAR a due worker.
     - Indici in `layout.parallel_file_shared_slots`: stesso actual `__mn_mem{i}` (memoria file-scope condivisa).
     - Altrimenti: ramo sinistro `__mn_mem{i}`, destro `__mn_mem{S+i}` (finestre disgiunte).
+    - Se `callee_name` ha entry in `ctx.callee_mem_touches`, sottoinsieme delle celle toccate.
     """
     if ctx.mem_layout is None:
         raise MnemoCompileError("layout memoria mancante (parallel)")
     s = ctx.mem_layout.total_cells
     shared = ctx.mem_layout.parallel_file_shared_slots
     base = 0 if left else s
+    if callee_name is not None:
+        ct = ctx.callee_mem_touches.get(callee_name)
+    else:
+        ct = None
+    idxs = sorted(ct) if ct is not None else list(range(s))
     out: list[str] = []
-    for i in range(s):
+    for i in idxs:
         if i in shared:
             out.append(f"__mn_mem{i}")
         else:
@@ -1740,7 +1752,11 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             raise MnemoCompileError(
                 "mnemo_pthread_start: il worker deve essere `void f(void)` (nessun parametro)"
             )
-        mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
+        _ct0 = ctx.callee_mem_touches.get(f0)
+        if _ct0 is None:
+            mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
+        else:
+            mem_args = [f"__mn_mem{i}" for i in sorted(_ct0)]
         chx = _file_scope_channel_actuals(ctx)
         stk = _kairos_stack_actuals(ctx)
         return [IPar([[ICall(f0, mem_args + chx + stk)]])]
@@ -1761,7 +1777,11 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
                 "mnemo_pthread_start1: la funzione deve essere definita nel file"
             )
         pre = _pthread_assign_worker_first_scalar_arg(f0, a1, ctx)
-        mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
+        _ct0 = ctx.callee_mem_touches.get(f0)
+        if _ct0 is None:
+            mem_args = [f"__mn_mem{i}" for i in range(ctx.mem_layout.total_cells)]
+        else:
+            mem_args = [f"__mn_mem{i}" for i in sorted(_ct0)]
         chx = _file_scope_channel_actuals(ctx)
         ctx.use_hist = True
         stk = _kairos_stack_actuals(ctx)
@@ -1802,13 +1822,13 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
                     [
                         ICall(
                             f_work,
-                            _parallel_branch_mem_actuals(ctx, left=False) + chx + [wh, ws],
+                            _parallel_branch_mem_actuals(ctx, left=False, callee_name=f_work) + chx + [wh, ws],
                         )
                     ],
                     [
                         ICall(
                             f_cont,
-                            _parallel_branch_mem_actuals(ctx, left=True) + chx + [ch_h, ch_s],
+                            _parallel_branch_mem_actuals(ctx, left=True, callee_name=f_cont) + chx + [ch_h, ch_s],
                         )
                     ],
                 ]
@@ -1850,13 +1870,13 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
                     [
                         ICall(
                             f_work,
-                            _parallel_branch_mem_actuals(ctx, left=False) + chx + [wh, ws],
+                            _parallel_branch_mem_actuals(ctx, left=False, callee_name=f_work) + chx + [wh, ws],
                         )
                     ],
                     [
                         ICall(
                             f_cont,
-                            _parallel_branch_mem_actuals(ctx, left=True) + chx + [ch_h, ch_s],
+                            _parallel_branch_mem_actuals(ctx, left=True, callee_name=f_cont) + chx + [ch_h, ch_s],
                         )
                     ],
                 ]
@@ -1961,8 +1981,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         chx = _file_scope_channel_actuals(ctx)
         pi0 = _call_pi_channel_kairos_names(fd0, raw0, ctx)
         pi1 = _call_pi_channel_kairos_names(fd1, raw1, ctx)
-        left_mem_actuals = _parallel_branch_mem_actuals(ctx, left=True)
-        right_mem_actuals = _parallel_branch_mem_actuals(ctx, left=False)
+        left_mem_actuals = _parallel_branch_mem_actuals(ctx, left=True, callee_name=f0)
+        right_mem_actuals = _parallel_branch_mem_actuals(ctx, left=False, callee_name=f1)
         lh, ls = _fresh_par_branch_stack_pair(ctx)
         rh, rs = _fresh_par_branch_stack_pair(ctx)
         left_args = left_mem_actuals + pi0 + chx + [lh, ls]
@@ -1993,7 +2013,25 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         if par_uncall_eligible:
             snap_temps: list[tuple[int, str]] = []
             snap_xors_post: list[Instr] = []
-            for kk in range(ctx.physical_mem_cells):
+            t0 = ctx.callee_mem_touches.get(f0)
+            t1 = ctx.callee_mem_touches.get(f1)
+            cells_to_snap: set[int] = set()
+            if t0 is None:
+                cells_to_snap.update(range(ctx.physical_mem_cells))
+            else:
+                for actual in left_mem_actuals:
+                    ci = _mem_idx_or_none(actual)
+                    if ci is not None:
+                        cells_to_snap.add(ci)
+            if t1 is None:
+                cells_to_snap.update(range(ctx.physical_mem_cells))
+            else:
+                for actual in right_mem_actuals:
+                    ci = _mem_idx_or_none(actual)
+                    if ci is not None:
+                        cells_to_snap.add(ci)
+            cell_iter = sorted(c for c in cells_to_snap if c < ctx.physical_mem_cells)
+            for kk in cell_iter:
                 t_cell = ctx.fresh_temp()
                 snap_temps.append((kk, t_cell))
                 snap_xors_post.append(IXorEq(t_cell, Var(f"__mn_mem{kk}")))
@@ -2859,18 +2897,11 @@ def _lower_putchar(expr: c.Node, ctx: _Ctx) -> list[Instr]:
 
 
 def _io_opt_uncall_wrap(ctx: "_Ctx", call_ins: "ICall") -> list[Instr]:
-    """Avvolge una `call` void verso __mn_putd/__mn_putx con
-    snap + call + uncall quando `--opt-uncall-user-calls` è attivo.
-    Riduce la pressione su __mn_hist (la stampa è no-op in inverse → side effect rimane).
+    """Pass-through: __mn_putd/__mn_putx hanno body con call ricorsive (__mn_putd_uint).
+    `uncall` su questi triggera bug VM nel pass inverse profondo (SIGSEGV).
+    Manteniamo solo la call forward; show è no-op in inverse, side effect rimane.
     """
-    if not ctx.opt_uncall_user_calls:
-        return [call_ins]
-    ctx.use_hist = True
-    return [
-        ICall("__mn_hist_floor_snap", [ctx.hist]),
-        call_ins,
-        IUncall(call_ins.proc, call_ins.args),
-    ]
+    return [call_ins]
 
 
 def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
@@ -4156,6 +4187,121 @@ def _function_ir_calls_proc_in(fn: Function, names: set[str]) -> bool:
     return any(rec(b.instrs) for b in fn.blocks)
 
 
+_MEM_NAME_PREFIX = "__mn_mem"
+
+
+def _mem_idx_or_none(name: str | None) -> int | None:
+    if not name or not name.startswith(_MEM_NAME_PREFIX):
+        return None
+    suf = name[len(_MEM_NAME_PREFIX):]
+    if not suf.isdigit():
+        return None
+    return int(suf)
+
+
+def _collect_mem_refs_from_seq(seq: list[Any]) -> tuple[set[int], list[tuple[str, list[str]]]]:
+    """Restituisce (mem indices direttamente referenziati, [(callee, args)] di ICall/IUncall)."""
+    refs: set[int] = set()
+    calls: list[tuple[str, list[str]]] = []
+
+    def add(n: str | None) -> None:
+        i = _mem_idx_or_none(n)
+        if i is not None:
+            refs.add(i)
+
+    def add_operand(o: Any) -> None:
+        if isinstance(o, Var):
+            add(o.name)
+        elif isinstance(o, str):
+            add(o)
+
+    def rec(ss: list[Any]) -> None:
+        for ins in ss:
+            if isinstance(ins, IConst):
+                add(ins.dst)
+            elif isinstance(ins, (IAddEq, ISubEq, IXorEq)):
+                add(ins.dst); add_operand(ins.rhs)
+            elif isinstance(ins, IHistPush):
+                add(ins.var)
+            elif isinstance(ins, (ICall, IUncall)):
+                calls.append((ins.proc, list(ins.args)))
+            elif isinstance(ins, IShow):
+                add(ins.var)
+            elif isinstance(ins, IIfKairos):
+                add(ins.lhs); add(ins.rhs)
+                rec(ins.then_instrs)
+                if ins.else_instrs is not None:
+                    rec(ins.else_instrs)
+            elif isinstance(ins, IFromUntilKairos):
+                add(ins.entry_lhs); add(ins.entry_rhs)
+                add(ins.until_lhs); add(ins.until_rhs)
+                rec(ins.body_instrs)
+            elif isinstance(ins, ILocalBlock):
+                add(ins.var)
+                rec(ins.body_instrs)
+            elif isinstance(ins, IPar):
+                for br in ins.branches:
+                    rec(br)
+            elif isinstance(ins, ISsend):
+                for a in ins.payload_atoms:
+                    add(a)
+            elif isinstance(ins, ISrecv):
+                for d in ins.dests:
+                    add(d)
+    rec(seq)
+    return refs, calls
+
+
+def _function_direct_mem_touches(fn: Function) -> tuple[set[int], list[tuple[str, list[str]]]]:
+    refs: set[int] = set()
+    calls: list[tuple[str, list[str]]] = []
+    for b in fn.blocks:
+        r, c_ = _collect_mem_refs_from_seq(b.instrs)
+        refs |= r
+        calls.extend(c_)
+    return refs, calls
+
+
+def _compute_callee_mem_touches(
+    probe_map: dict[str, Function],
+    total_cells: int,
+) -> dict[str, frozenset[int]]:
+    """Per ogni user fn, set di indici `__mn_mem<i>` che il body (incluse callee) può toccare.
+
+    Chiusura a punto-fisso. Per callee non-user (lib, builtin), assume tutti i mem cell args
+    toccati (conservativo). Mappa posizionale: callee touched index `j` → caller's arg<j>.
+    """
+    direct: dict[str, set[int]] = {}
+    calls: dict[str, list[tuple[str, list[str]]]] = {}
+    for n, fn in probe_map.items():
+        d, c_ = _function_direct_mem_touches(fn)
+        direct[n] = d
+        calls[n] = c_
+
+    touched: dict[str, set[int]] = {n: set(direct[n]) for n in probe_map}
+    changed = True
+    while changed:
+        changed = False
+        for n in probe_map:
+            for callee, args in calls[n]:
+                arg_mem: list[int | None] = [_mem_idx_or_none(a) for a in args]
+                if callee in probe_map:
+                    callee_t = touched[callee]
+                    for j in callee_t:
+                        if j < len(arg_mem) and arg_mem[j] is not None:
+                            ci = arg_mem[j]
+                            assert ci is not None
+                            if ci not in touched[n]:
+                                touched[n].add(ci)
+                                changed = True
+                else:
+                    for ai in arg_mem:
+                        if ai is not None and ai not in touched[n]:
+                            touched[n].add(ai)
+                            changed = True
+    return {n: frozenset(s) for n, s in touched.items()}
+
+
 def _uncall_excluded_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
     """
     Chiusura: direttamente unsafe (pool, par, …) oppure che chiama una funzione già
@@ -4328,7 +4474,11 @@ def _lower_funccall_with_ret(
                 idx = layout.slot_of[(name, log_key)]
                 dst = f"__mn_mem{idx}"
                 pre_uc.extend(_lower_assign(dst, ex, ctx))
-            mem_args = [f"__mn_mem{i}" for i in range(layout.total_cells)]
+            _ct_callee = ctx.callee_mem_touches.get(name)
+            if _ct_callee is None:
+                mem_args = [f"__mn_mem{i}" for i in range(layout.total_cells)]
+            else:
+                mem_args = [f"__mn_mem{i}" for i in sorted(_ct_callee)]
             pi_suffix = _call_pi_channel_kairos_names(callee_fd, orig_exprs, ctx)
             ctx.use_hist = True
             chx = _file_scope_channel_actuals(ctx)
@@ -4357,7 +4507,12 @@ def _lower_funccall_with_ret(
             uncall_with_restore: list[Instr] = []
             snap_pairs: list[tuple[int, str]] = []
             if apply_uncall_opt or apply_void_uncall_opt:
-                for kk in range(layout.total_cells):
+                touched = ctx.callee_mem_touches.get(name)
+                if touched is None:
+                    cell_iter = list(range(layout.total_cells))
+                else:
+                    cell_iter = sorted(i for i in touched if i < layout.total_cells)
+                for kk in cell_iter:
                     t_cell = ctx.fresh_temp()
                     snap_pairs.append((kk, t_cell))
                     uncall_with_restore.append(IXorEq(t_cell, Var(f"__mn_mem{kk}")))
@@ -6189,6 +6344,7 @@ def _lower_user_function(
     opt_uncall_user_calls: bool = False,
     uncall_excluded_via_vm_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
+    callee_mem_touches: dict[str, frozenset[int]] | None = None,
 ) -> Function:
     name = fdef.decl.name
     fd = fdef.decl.type
@@ -6227,6 +6383,7 @@ def _lower_user_function(
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_excluded_via_vm_targets=uncall_excluded_via_vm_targets,
         par2_workers=par2_workers,
+        callee_mem_touches=callee_mem_touches or {},
     )
     _bind_ctx_layout(ctx, layout, name)
     ctx.file_scope_channel_order = file_scope_channel_order
@@ -6243,7 +6400,11 @@ def _lower_user_function(
             n = f"__mn_mem{i}"
             ctx.int_locals.add(n)
             ctx.decl_order.append(n)
-    param_order = [f"__mn_mem{i}" for i in range(layout.total_cells)]
+    _ct_self = (callee_mem_touches or {}).get(name)
+    if _ct_self is None:
+        param_order = [f"__mn_mem{i}" for i in range(layout.total_cells)]
+    else:
+        param_order = [f"__mn_mem{i}" for i in sorted(_ct_self)]
 
     pm = _Ctx()
     pm.typedef_map = dict(file_td)
@@ -6395,7 +6556,13 @@ def lower_file_to_program(
 
     par2_workers_all = infer_par2_workers_all(ast)
 
-    def _lower_one_user(ext_phys: tuple[c.FuncDef, int], *, opt_uc: bool, uc_excl: frozenset[str]):
+    def _lower_one_user(
+        ext_phys: tuple[c.FuncDef, int],
+        *,
+        opt_uc: bool,
+        uc_excl: frozenset[str],
+        touches: dict[str, frozenset[int]] | None = None,
+    ):
         ext, fn_phys = ext_phys
         return _lower_user_function(
             ext,
@@ -6415,19 +6582,23 @@ def lower_file_to_program(
             opt_uncall_user_calls=opt_uc,
             uncall_excluded_via_vm_targets=uc_excl,
             par2_workers=par2_workers_all,
+            callee_mem_touches=touches,
         )
 
+    user_fns_probe = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
+    probe_by_name = {fn.name: fn for fn in user_fns_probe}
+    bad_uncall_via_vm = _uncall_excluded_transitive_closure(probe_by_name)
+    mem_touches = _compute_callee_mem_touches(probe_by_name, layout.total_cells)
     if opt_uncall_user_calls:
-        user_fns_probe = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
-        probe_by_name = {fn.name: fn for fn in user_fns_probe}
-        bad_uncall_via_vm = _uncall_excluded_transitive_closure(probe_by_name)
         user_fns = [
-            _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm) for s in user_fn_specs
+            _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm, touches=mem_touches)
+            for s in user_fn_specs
         ]
     else:
-        user_fns = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
-        probe_by_name = {fn.name: fn for fn in user_fns}
-        bad_uncall_via_vm = _uncall_excluded_transitive_closure(probe_by_name)
+        user_fns = [
+            _lower_one_user(s, opt_uc=False, uc_excl=frozenset(), touches=mem_touches)
+            for s in user_fn_specs
+        ]
 
     main_phys = (
         phys
@@ -6461,6 +6632,7 @@ def lower_file_to_program(
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_excluded_via_vm_targets=bad_uncall_via_vm,
         par2_workers=par2_workers_all,
+        callee_mem_touches=mem_touches,
     )
     _bind_ctx_layout(ctx, layout, "main")
     ctx.file_scope_channel_order = fs_ch_order
