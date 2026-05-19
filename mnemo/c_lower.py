@@ -6481,6 +6481,17 @@ def _lower_user_function(
                     elem_size=esz,
                     array_decay_pointer=True,
                 )
+            else:
+                # `int *a` come parametro: treat as decay-array di size ARR_MAX
+                # backed da pool slot. Permette `a[i]` lowerato via pool_load.
+                pname = _int_ptr_var_decl_name(p, file_td)
+                if pname is not None and pname not in ctx.array_info:
+                    ctx.array_info[pname] = _ArrayInfo(
+                        dims=[ARR_MAX],
+                        total=ARR_MAX,
+                        elem_size=4,
+                        array_decay_pointer=True,
+                    )
     for p in fd.args.params if fd.args else []:
         if isinstance(p, c.Decl):
             st_tag = _struct_tag_for_decl_type(p.type, ctx)
