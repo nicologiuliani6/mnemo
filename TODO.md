@@ -2,6 +2,26 @@
 
 ## OPEN
 
+### [P3] VM optimization: encrypt 5.4x → 2.30x — DONE 2026-05-19
+
+Cleanup hot path in `vm_invert.h`:
+
+1. **Debug log gating**: 8 `// #region agent log` blocks (fopen+fwrite+fclose per invocation) → gated by `MNEMO_AGENT_LOG`. Encrypt sys time 15s → 1s.
+2. **strdup elimination**: `invert_op_to_line` non più strdup(buffer) — buffer è già thread-locale (vm_par.h dup_buffer); mutations transienti (`*newline='\0'` poi restore).
+3. **Arena allocation**: per-invert one malloc instead of N strdups per line. `lp[]` punta nell'arena, single free.
+4. **Opcode int dispatch**: nuovo `enum InvOpTag`, `classify_op()` (line 75 vm_invert.h), `lp_op[]` array precompute al collection. Inner loop dispatch via switch.
+5. **Per-frame analysis cache** (`_fa_cache[64]`): collect_loops/ifs/par_ranges results cached per base frame name. ~50KB scan evitato.
+6. **strstr cache**: `_is_divmod_nonneg`/`_is_bit_k_signed` computed once outside hot loop.
+7. **line_loop/if_zone fast path**: per ops non-JMPF/LABEL/JMP, skip strcmp-based variant.
+8. **char_id_map first-char filter + lookup combine**: VarIndexer lookups (chiamati in ogni op handler) ora hanno first-char prefix check; `char_id_map_lookup` ritorna -1 per miss invece di richiedere doppia scansione `exists+get`.
+
+Encrypt timing:
+- baseline 7.9s
+- --opt-uncall-user-calls 18s (era 47s pre-opt)
+- ratio 2.30x (era 5.4x).
+
+Test regression: 36 mnemo + 14 unit + 71 gcc-compat = 121 PASS.
+
 ### [P3] opt A+B: snap subset + procedure sig reduction — DONE 2026-05-19
 
 **A** (snap subset): `--opt-uncall-user-calls` ora snappa solo le celle in `callee_mem_touches[name]` invece di tutte `__mn_mem*`. Applicato sia in `_lower_funccall_with_ret` (call singola) sia in parallel2 par-uncall. Stack history molto più corta.
