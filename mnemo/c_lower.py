@@ -2248,6 +2248,15 @@ def _int_ptr_var_decl_name(node: c.Decl, td: dict[str, c.Node]) -> str | None:
         ("unsigned",),
         ("char",),
         ("unsigned", "char"),
+        ("void",),
+        ("short",),
+        ("short", "int"),
+        ("long",),
+        ("long", "int"),
+        ("unsigned", "short"),
+        ("unsigned", "long"),
+        ("_Bool",),
+        ("bool",),
     ):
         return None
     if inner.declname is None:
