@@ -343,9 +343,9 @@ Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E
 | **`goto`**, **`setjmp`**, inline assembly | Non supportati. |
 | **Bit-field** | Non supportati. |
 | **`&` (indirizzo) generico** | Solo nel **subset** documentato (es. `&x`, `&struct.campo` dove il lowering lo ammette); non tutti gli indirizzi del C. |
-| **Aritmetica puntatori** | Non la stessa libertà del C: niente “cursori” arbitrari su `p+1` in generale. |
-| **Libreria C standard** | Non c’è `stdio` / `string` / `stdlib` **POSIX** nel senso di linking: ciò che usi deve essere **built-in** Mnemo (`printf` limitato, `malloc`/`free` pool) o **tuo** codice / header minimi. |
-| **`#include`** | Il preprocessore gira, ma includere header pesanti (es. `<stdio.h>` con `-DMNEMO`) può **rompere il parse** (`stdarg.h`, ecc.). |
+| **Aritmetica puntatori** | `p+i`, `p++`, `*(p+i)`, `q-p` supportati su array; oltre il subset pool il comportamento non è quello del C. |
+| **Libreria C standard** | Non c’è `stdio` / `string` / `stdlib` **POSIX** nel senso di linking: ciò che usi deve essere **built-in** Mnemo (`printf` limitato, `malloc`/`free` pool) o **tuo** codice / header minimi. Mnemo fornisce header fake (`mnemo/fake_include/`) con typedef per `size_t`, `int*_t`, `uint*_t` (aliasati a `int`/`unsigned int`). |
+| **`#include`** | Il preprocessore gira con `-nostdinc` + `-I<mnemo/fake_include>`: gli header standard usati (`stddef.h`, `stdint.h`, `stdio.h`, `stdlib.h`, `string.h`) sono **fake**. Header utente possono essere inclusi liberamente. |
 | **`argv` / ambiente OS** | `argv` è uno **stub** sintattico; non è un array di stringhe reali come su POSIX. |
 | **`main` e uscita** | Il valore di ritorno è propagato come `__mn_exit` nella VM, non sempre identico a `exit()` POSIX. |
 | **Thread** | Con **`mnemo run`** i “pthread” sono **thread Kairos** (`par`), non pthread del kernel; con **gcc** su `mps.h` senza `MNEMO` sono pthread reali **solo** dove l’header lo definisce. |
@@ -387,7 +387,9 @@ Per il dettaglio sintattico e i limiti pratici vedi la sezione seguente e i mess
 Vedi anche [Mnemo rispetto al C standard](#mnemo-rispetto-al-c-standard).
 
 - VLA, **funzioni variadiche C**, `goto`, floating point, bit-field, `&` oltre il modello pool, molte estensioni GCC.
-- `stdio.h` nel preprocessato Mnemo: tipicamente **evitato** dove introduce `stdarg.h` non parsabile.
+- **`static` locali**: non accumulano stato tra chiamate (trattati come locali ordinarie).
+- **Nested struct**: `p.a.x` su `struct Outer { struct Inner a; };` non funziona (flattening single-level); workaround `Inner *p_a = &p.a; p_a->x`.
+- **Nested struct initializer**: `{{1,2},{3,4}}` non supportato; usa assegnamenti separati.
 - Inizializzatori struct/union `{…}` oltre i casi implementati; parità ABI/padding con GCC; semantica UB del C pieno — valgono i vincoli delle procedure Kairos (es. divisori positivi dove richiesto).
 
 ---
