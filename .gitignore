@@ -4,6 +4,13 @@ __pycache__/
 dist/
 build/
 c_examples/*.kairos
+c_examples/gcc_compat/*.kairos
+c_test/*.kairos
+c_test/libvm.so
+c_examples/libvm.so
+# gcc-compiled binaries di test
+c_test/fib
+c_examples/ex21_loops_cond_main
 .claude/
 .cursor/
 CLAUDE.md

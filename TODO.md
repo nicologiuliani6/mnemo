@@ -118,6 +118,95 @@ Tempo stimato residuo: 6-10 ore + design review. Tutti probe reverted, baseline 
 
 ---
 
+## C standard — features non implementate
+
+Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.cursor/rules/mnemo-c-subset.mdc` e `README.md` §"Mnemo rispetto al C standard". Lista delle features C ancora non supportate, ordinate per impatto/difficoltà:
+
+### Tipi scalari mancanti
+
+- **`char` come variabile** — solo dentro string literals e `printf("%c", …)`. `char c = 'a';` come variabile locale non supportato.
+- **`short`, `long`, `long long`, `unsigned short/long/long long`** — solo `int` / `unsigned int` / `bool` / `_Bool`. Tutti gli interi sono word-size della VM.
+- **`float`, `double`, `long double`** — nessun FP. La VM Kairos opera solo su interi.
+- **`size_t`, `ptrdiff_t`, `intptr_t`, `uintN_t`** — typedef stdint/stddef non disponibili. Usare `int`.
+- **`enum` come tipo esplicito di variabile** — costanti enum sì (espanse a int literal), ma non `enum E e;` come tipo.
+
+### Puntatori
+
+- **Aritmetica puntatore**: `p + 1`, `p++`, `p - q`, `*(p+i)` non supportati. Solo `*p`, `a[i]`, `s->f`, `&id`, `&struct.field`.
+- **Puntatori multi-livello**: `int **p`. Solo un livello (`int *p`).
+- **`void *`** — non supportato; puntatori sono typed.
+- **`const`, `volatile`, `restrict` qualifiers** — parser tollera ma nessuna semantica.
+- **Pointer-to-array, pointer-to-function** come tipi compositi: solo function pointer compile-time risolto (`p = f` o `&f` con `f` same-file).
+
+### Array
+
+- **VLA (variable-length array)**: `int a[n]` con `n` runtime non supportato.
+- **Array element count > 1024** (`ARR_MAX`).
+- **Array multidimensionali dinamici** — solo dimensioni costanti compile-time.
+- **Designated initializers**: `int a[] = {[3]=1, [5]=2};` non supportato.
+- **Compound literals**: `(int[]){1,2,3}` non supportato.
+
+### Funzioni
+
+- **Variadic user functions**: definire `int f(int n, ...)` non supportato. `printf` è caso speciale builtin.
+- **Function pointer runtime** — solo compile-time resolved.
+- **Nested function definitions** (estensione GCC).
+- **Old-style K&R function declarations**.
+
+### Control flow
+
+- **`goto`** — non supportato (rompe reversibilità).
+- **`setjmp` / `longjmp`** — non supportati.
+- **`switch` con body non-block**: `switch(x) case 1: …;` deve essere `switch(x) { case 1: … }`.
+- **`break` nested in `if` verso switch esterno**: errore.
+- **`continue` complesso in loop annidati**: alcuni pattern.
+- **Fall-through `case`** senza `break` esplicito — comportamento limitato.
+
+### Storage / linkage
+
+- **`static` locali** — non supportato (semantica reversibile complessa).
+- **`extern` con definizione altrove** — solo dichiarazioni file-scope.
+- **`register`, `auto` keywords** — ignorate.
+- **Translation unit multipli** — solo single-file compilation.
+- **`#include` di header utente** — `gcc -E -DMNEMO` espande, ma struct/typedef da altri header limitate.
+
+### Struct / union
+
+- **Bit-fields**: `unsigned x : 3;` non supportato.
+- **Anonymous struct/union**.
+- **Struct con array a lunghezza variabile** (flexible array members).
+- **`offsetof`** macro.
+
+### Stdlib
+
+- **`<stdio.h>`** — solo `printf` (sottoinsieme): `%d`, `%u`, `%x`, `%c`, `%s` letterali. Niente `scanf`, `fopen`, `fprintf`, `puts`, ecc.
+- **`<stdlib.h>`** — `malloc`/`free` via ptr_pool (con limite size). Niente `calloc`, `realloc`, `atoi`, `exit`.
+- **`<string.h>`** — niente `strcmp`, `strlen`, `memcpy`, ecc.
+- **`<math.h>`** — niente FP libs.
+- **`<stdarg.h>`** — non supportato (no variadic user).
+- **`<time.h>`, `<unistd.h>`, `<sys/*>`** — non supportati.
+
+### Misc
+
+- **Inline asm** (`__asm__`, `asm volatile`) — non supportato.
+- **`__attribute__`, `__builtin_*`** — non supportati.
+- **`_Generic`** (C11) — non supportato.
+- **`_Alignas`, `_Alignof`** — non supportati.
+- **Complex numbers** (`_Complex`) — non supportati.
+- **`_Atomic`** — non supportati (concorrenza solo via mutex π).
+- **`argv` POSIX** — `int main(int argc, char **argv)` accettato sintatticamente ma `argv` è stub: niente argomenti command-line reali.
+- **`errno`, signal handling** — non supportati.
+
+### Semantica reversibile (vincoli speciali Mnemo)
+
+- **Side effects con risultato non-restored**: `x = f(x)` dove `f` ha effetti → richiede uncall implicit.
+- **Operatori non-reversibili** (`/`, `%`) — lib reversibili (`__mn_divmod_nonneg`) gestiscono cases positivi; segno tramite guardia bit.
+- **`==`, `!=`, `<`, `>` etc. come espressioni** — solo come condizione `if` / loop guard.
+- **Casts impliciti complessi** — supportati solo tra int↔bool↔unsigned int.
+- **Memory aliasing arbitrario** — caller-callee mem cell aliasing non sempre supportato.
+
+---
+
 ## Storico
 
 (precedenti debug encrypt opt-uncall — risolti via guardie divmod / bit_k_signed / move_int loop inversion)
