@@ -226,6 +226,8 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **`==`, `!=`, `<`, `>` etc. come espressioni** — solo come condizione `if` / loop guard.
 - **Casts scalari espliciti** — `(int)x`, `(long)x`, `(unsigned short)x` ecc ora accettati (no-op nella VM word-size). Era limitato a int↔bool↔unsigned int.
 - **Memory aliasing arbitrario** — caller-callee mem cell aliasing non sempre supportato.
+- **Ricorsione diretta NON in parallel2/opt-uncall**: `int f(int n) { return n + f(n-1); }` chiamata direttamente da main ritorna 0. Funziona solo wrappata in parallel2(f, g) o via opt-uncall su callee non-self.
+- **Array param `int *a`**: il callee deve dichiarare `int a[N]` (size esplicita); `int *a` come parametro array fallisce "'a' non è un array dichiarato".
 
 ---
 
