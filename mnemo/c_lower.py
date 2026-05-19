@@ -2295,6 +2295,11 @@ def _cast_accepts_pointer_or_scalar(cast_node: c.Cast, ctx: _Ctx) -> bool:
         return _is_scalar_type_names(tt.type.names, td)
     if isinstance(tt, c.Typename):
         q = tt.type
+        # Scalar cast: `(int)x`, `(unsigned)x`, `(long)x`, ecc.
+        if isinstance(q, c.TypeDecl) and isinstance(q.type, c.IdentifierType):
+            if q.type.names == ["void"]:
+                return True
+            return _is_scalar_type_names(q.type.names, td)
         if isinstance(q, c.PtrDecl):
             leaf = q
             while isinstance(leaf, c.PtrDecl):

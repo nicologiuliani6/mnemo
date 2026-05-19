@@ -34,7 +34,18 @@ def parse_c(path: str) -> c_ast.FileAST:
     # fake_libc_include (pycparser sorgente) non è sempre incluso nel wheel;
     # per file senza #include basta -E -std=c99. Con #include si può installare
     # pycparser da sorgente o aggiungere -I verso una copia degli header fake.
-    cpp_args = ["-E", "-std=c99", "-DMNEMO"]
+    # Mnemo modella tutti gli interi come word-size della VM. Aliasing dei tipi
+    # stdlib (intN_t, uintN_t) a int/unsigned via -D: utili anche senza include.
+    # size_t/ssize_t/ptrdiff_t/intptr_t/uintptr_t NON ridefinite via -D perché
+    # entrano in conflitto con typedef di stddef.h se l'utente include header
+    # standard. Il sorgente che li usa deve includere <stddef.h>/<stdint.h>;
+    # i typedef risultanti (es. `unsigned long`) sono già accettati come scalari.
+    cpp_args = [
+        "-E", "-std=c99", "-DMNEMO",
+        "-Dint8_t=int", "-Dint16_t=int", "-Dint32_t=int", "-Dint64_t=int",
+        "-Duint8_t=unsigned int", "-Duint16_t=unsigned int",
+        "-Duint32_t=unsigned int", "-Duint64_t=unsigned int",
+    ]
     fake = _fake_libc_include()
     if os.path.isdir(fake):
         cpp_args.append(f"-I{fake}")
