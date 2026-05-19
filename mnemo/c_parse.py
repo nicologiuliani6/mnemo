@@ -34,18 +34,21 @@ def parse_c(path: str) -> c_ast.FileAST:
     # fake_libc_include (pycparser sorgente) non è sempre incluso nel wheel;
     # per file senza #include basta -E -std=c99. Con #include si può installare
     # pycparser da sorgente o aggiungere -I verso una copia degli header fake.
-    # Mnemo modella tutti gli interi come word-size della VM. Aliasing dei tipi
-    # stdlib (intN_t, uintN_t) a int/unsigned via -D: utili anche senza include.
-    # size_t/ssize_t/ptrdiff_t/intptr_t/uintptr_t NON ridefinite via -D perché
-    # entrano in conflitto con typedef di stddef.h se l'utente include header
-    # standard. Il sorgente che li usa deve includere <stddef.h>/<stdint.h>;
-    # i typedef risultanti (es. `unsigned long`) sono già accettati come scalari.
-    cpp_args = [
-        "-E", "-std=c99", "-DMNEMO",
-        "-Dint8_t=int", "-Dint16_t=int", "-Dint32_t=int", "-Dint64_t=int",
-        "-Duint8_t=unsigned int", "-Duint16_t=unsigned int",
-        "-Duint32_t=unsigned int", "-Duint64_t=unsigned int",
-    ]
+    # Mnemo modella tutti gli interi come word-size della VM. Fake headers in
+    # `mnemo/fake_include/` definiscono size_t / int*_t / uint*_t / ptrdiff_t /
+    # intptr_t come `int` o `unsigned int`. Path precede include di sistema via
+    # `-I` prima del path system di gcc → priorità ai nostri header.
+    cpp_args = ["-E", "-std=c99", "-DMNEMO"]
+    mnemo_fake = os.path.join(os.path.dirname(__file__), "fake_include")
+    if os.path.isdir(mnemo_fake):
+        cpp_args.insert(0, f"-I{mnemo_fake}")
+        cpp_args.append("-nostdinc")
+        # Auto-include stddef/stdint: size_t, int*_t, uint*_t disponibili
+        # senza #include esplicito.
+        cpp_args.extend([
+            "-include", os.path.join(mnemo_fake, "stddef.h"),
+            "-include", os.path.join(mnemo_fake, "stdint.h"),
+        ])
     fake = _fake_libc_include()
     if os.path.isdir(fake):
         cpp_args.append(f"-I{fake}")
