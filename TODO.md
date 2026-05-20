@@ -212,7 +212,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 
 ### Storage / linkage
 
-- **`static` locali** — non accumula valore tra chiamate (testato: f() ritorna sempre 1 invece di 1,2,3). Treated as regular local; semantica statefulness non implementata.
+- ~~**`static` locali**~~ — supportati: AST pre-pass `_hoist_static_locals` (c_lower.py) trasloca `static int n = K;` a file-scope con nome sintetico `__mn_static_<func>_<name>`. Init non-zero applicato in main pre-instrs via `IAddEq`. Testato `generic_static_local.c` (counter 1,2,3 + summer init=100).
 - **`extern` con definizione altrove** — solo dichiarazioni file-scope.
 - ~~**`register`, `auto` keywords**~~: testato OK (ignorate, codice compila e produce valore corretto).
 - **Translation unit multipli** — solo single-file compilation.

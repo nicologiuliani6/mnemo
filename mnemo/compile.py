@@ -5,6 +5,7 @@ from __future__ import annotations
 from mnemo.c_lower import (
     PTHREAD_ABI_TWO_REGION_PAR,
     _hoist_compound_literals_in_ast,
+    _hoist_static_locals,
     infer_auto_lib_files,
     infer_lib_files_from_calls,
     lower_file_to_program,
@@ -200,6 +201,8 @@ def compile_c_to_kairos(
     # contenente. Deve girare PRIMA di `compute_program_mem_layout` così le celle
     # vengono allocate per gli array sintetici.
     _hoist_compound_literals_in_ast(ast)
+    # `static int n = …;` → file-scope Decl rinominato. Persiste tra chiamate.
+    _hoist_static_locals(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),

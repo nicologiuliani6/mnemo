@@ -6936,6 +6936,47 @@ def _hoist_compound_literals(funcdef: c.FuncDef) -> list[c.Decl]:
     return new_decls
 
 
+def _scalar_int_decl_name_for_init(decl: c.Decl, file_td: dict[str, c.Node]) -> str | None:
+    """Se `decl` è un Decl scalare `int`/typedef-of-int (no struct/union/array/ptr),
+    ritorna il nome del declarator; altrimenti None. Usato per inferire i Decl
+    file-scope che supportano init Constant."""
+    if decl.init is None or decl.name is None:
+        return None
+    t = decl.type
+    if not isinstance(t, c.TypeDecl):
+        return None
+    inner = t.type
+    if isinstance(inner, c.IdentifierType):
+        names = inner.names
+        if _is_scalar_type_names(names, file_td):
+            return decl.name
+    return None
+
+
+def _int_constant_value(node: c.Node) -> int | None:
+    """Valuta letteralmente `node` come int. None se non è Constant int/char/bool
+    o UnaryOp `-` su Constant. Conservativo — non valuta espressioni complesse."""
+    if isinstance(node, c.Constant):
+        try:
+            if node.type == "char":
+                v = node.value.strip("'")
+                if len(v) == 1:
+                    return ord(v)
+                if v.startswith("\\"):
+                    esc = {"n": 10, "t": 9, "r": 13, "0": 0, "\\": 92, "'": 39}
+                    return esc.get(v[1])
+                return None
+            return int(node.value, 0)
+        except (ValueError, AttributeError):
+            return None
+    if isinstance(node, c.UnaryOp) and node.op in ("-", "+"):
+        inner = _int_constant_value(node.expr)
+        if inner is None:
+            return None
+        return -inner if node.op == "-" else inner
+    return None
+
+
 def _hoist_compound_literals_in_ast(ast: c.FileAST) -> None:
     """Applica `_hoist_compound_literals` a ogni FuncDef del file."""
     for ext in ast.ext:
@@ -6949,6 +6990,89 @@ def _hoist_compound_literals_in_ast(ast: c.FileAST) -> None:
             continue
         items = list(body.block_items or [])
         body.block_items = decls + items
+
+
+def _rename_id_in_subtree(node: c.Node | None, old: str, new: str) -> None:
+    """Walk shallow + sostituisce ogni `c.ID(name=old)` con `c.ID(name=new)` in-place
+    sui attrs sub-Node di `node`. Non rinomina `ID` dentro `Decl` (declarator) o
+    `ParamList.exprs[*].name` di sub-Decl (sarebbero scope diversi)."""
+    if node is None:
+        return
+    for attr in getattr(node, "__slots__", ()):
+        if attr in ("coord", "__weakref__"):
+            continue
+        val = getattr(node, attr, None)
+        if isinstance(val, c.ID) and val.name == old:
+            val.name = new
+        elif isinstance(val, list):
+            for item in val:
+                if isinstance(item, c.ID) and item.name == old:
+                    item.name = new
+                elif hasattr(item, "__slots__"):
+                    _rename_id_in_subtree(item, old, new)
+        elif hasattr(val, "__slots__"):
+            _rename_id_in_subtree(val, old, new)
+
+
+def _hoist_static_locals(ast: c.FileAST) -> None:
+    """Hoist `static int n = …;` declarations dentro le funzioni a livello file.
+    Senza questo, ogni chiamata della funzione re-inizializza `n` (semantica
+    locale normale) — non match gcc.
+
+    Per ogni `static`-tagged Decl in un FuncDef body:
+    1. Rinomina a `__mn_static_<func>_<name>` (univoco per funzione).
+    2. Rimuove storage `static` e sposta la Decl a file-scope (ast.ext).
+    3. Sostituisce ogni `ID(name)` nel body della funzione con `ID(synth)`.
+
+    Caveat reversibilità: file-scope vars sono globali, le mutazioni dentro la
+    funzione persistono tra chiamate (semantica gcc). opt-uncall su una
+    funzione che muta uno static deve includerlo nel snap (file-scope memN già
+    parte del layout).
+    """
+    new_file_decls: list[c.Decl] = []
+    for ext in ast.ext:
+        if not isinstance(ext, c.FuncDef) or ext.body is None:
+            continue
+        fname = ext.decl.name or "_"
+        body = ext.body
+        if not isinstance(body, c.Compound):
+            continue
+        items = list(body.block_items or [])
+        new_items: list[c.Node] = []
+        for item in items:
+            if (
+                isinstance(item, c.Decl)
+                and item.storage
+                and "static" in item.storage
+                and item.name is not None
+            ):
+                orig = item.name
+                synth = f"__mn_static_{fname}_{orig}"
+                # Rinomina declname interno (TypeDecl.declname) per riflettere il
+                # nuovo identificatore.
+                new_type = _rename_decl_type(item.type, synth)
+                new_decl = c.Decl(
+                    name=synth,
+                    quals=list(item.quals or []),
+                    align=list(item.align or []) if item.align else [],
+                    storage=[],
+                    funcspec=list(item.funcspec or []),
+                    type=new_type,
+                    init=item.init,
+                    bitsize=item.bitsize,
+                    coord=item.coord,
+                )
+                new_file_decls.append(new_decl)
+                # Sostituisci references nel body (escluso questa Decl che
+                # rimuoviamo) — rinominali a `synth`.
+                _rename_id_in_subtree(body, orig, synth)
+                # Non includere `item` in new_items: lo trasloca a file-scope.
+                continue
+            new_items.append(item)
+        body.block_items = new_items
+    if new_file_decls:
+        # File-scope Decl in testa: precede tutte le FuncDef per ordine init.
+        ast.ext = new_file_decls + list(ast.ext)
 
 
 def lower_file_to_program(
@@ -7149,6 +7273,25 @@ def lower_file_to_program(
             instrs.append(IConst(pn, 0))
     if _file_ast_needs_ptr_pool(ast):
         instrs.append(IConst(_PTR_POOL_CTR, layout.heap_base))
+
+    # Inizializza variabili file-scope `int g = K;` (e static locals hoisted)
+    # con K != 0. Le celle sono già zero per default, quindi `mem += K` setta
+    # il valore iniziale. Per static locals (semantica gcc): l'init avviene
+    # una sola volta, alla partenza del programma — equivalente a init main.
+    for ext in ast.ext:
+        if not isinstance(ext, c.Decl) or ext.init is None:
+            continue
+        if isinstance(ext.type, c.FuncDecl):
+            continue
+        # Solo scalar int / typedef-of-int con init Constant non-zero supportato qui.
+        nm = _scalar_int_decl_name_for_init(ext, file_td)
+        if nm is None:
+            continue
+        val = _int_constant_value(ext.init)
+        if val is None or val == 0:
+            continue
+        pn = _phys(ctx, nm)
+        instrs.append(IAddEq(pn, Imm(val)))
 
     _scope_init_params(ctx, [name for name, _role in main_param_setup])
     instrs.extend(
