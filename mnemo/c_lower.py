@@ -5315,11 +5315,32 @@ def _if_continue_only(node: c.If) -> bool:
     return _is_continue_only_stmt(node.iftrue) and node.iffalse is None
 
 
+def _is_break_only_stmt(stmt: c.Node | None) -> bool:
+    if stmt is None:
+        return False
+    if isinstance(stmt, c.Break):
+        return True
+    if isinstance(stmt, c.Compound):
+        items = stmt.block_items or []
+        return len(items) == 1 and _is_break_only_stmt(items[0])
+    return False
+
+
+def _if_break_only(node: c.If) -> bool:
+    return _is_break_only_stmt(node.iftrue) and node.iffalse is None
+
+
 def _lower_stmt_list_tail_continue(
     stmts: list[c.Node], ctx: _Ctx, ct_var: str | None
 ) -> list[Instr]:
     if not stmts:
         return []
+    # Pick up the loop's br_var (if any) from the loop stack — used to gate
+    # the tail of the body after a `break` (or `if (cond) break`) in the
+    # middle of the iteration.
+    br_var: str | None = (
+        ctx.loop_stack[-1].br_var if ctx.loop_stack else None
+    )
     for i, s in enumerate(stmts):
         if isinstance(s, c.Continue):
             if ct_var is None:
@@ -5337,6 +5358,27 @@ def _lower_stmt_list_tail_continue(
             ctx.use_hist = True
             inc = [IHistPush(ctx.hist, ct_var), IAddEq(ct_var, Imm(1))]
             branch = _lower_if_from_expr(s.cond, inc, None, ctx)
+            return head + branch + gated
+        if isinstance(s, c.Break):
+            if br_var is None:
+                raise MnemoCompileError(
+                    "break fuori da loop (o break in switch annidato senza loop)"
+                )
+            head = _lower_stmt_list_tail_continue(stmts[:i], ctx, ct_var)
+            ctx.use_hist = True
+            inc = [IHistPush(ctx.hist, br_var), IAddEq(br_var, Imm(1))]
+            return head + inc
+        if isinstance(s, c.If) and _if_break_only(s):
+            if br_var is None:
+                raise MnemoCompileError(
+                    "break fuori da loop (o break in switch annidato senza loop)"
+                )
+            head = _lower_stmt_list_tail_continue(stmts[:i], ctx, ct_var)
+            tail = _lower_stmt_list_tail_continue(stmts[i + 1 :], ctx, ct_var)
+            ctx.use_hist = True
+            inc = [IHistPush(ctx.hist, br_var), IAddEq(br_var, Imm(1))]
+            branch = _lower_if_from_expr(s.cond, inc, None, ctx)
+            gated = [IIfKairos(br_var, "==", "0", tail, None)] if tail else []
             return head + branch + gated
     out: list[Instr] = []
     for s in stmts:
