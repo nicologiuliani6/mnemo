@@ -381,6 +381,10 @@ Per il dettaglio sintattico e i limiti pratici vedi la sezione seguente e i mess
 - Assegnamenti `=`, `+=`, …, `++`/`--` su lvalue ammessi dal lowering.
 - `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`.
 - `switch`/`case`/`default` (fall-through lineare; `break` annidato in `if` verso lo stesso switch → errore).
+- Inizializzatori designati C99:
+  - 1D array: `int a[5] = {[2]=42, [4]=99};`
+  - Multi-D array: `int m[3][3] = {[0][0]=1, [2][2]=9};`
+  - Struct: `struct P p = {.x=1, .y=2};` (mix posizionale + named ok).
 
 ### Non supportato (estratti)
 
