@@ -4028,6 +4028,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         ins = _lower_funccall_with_ret(expr, ctx, t)
         return ins, Var(t), [t]
 
+    if isinstance(expr, c.CompoundLiteral):
+        raise MnemoCompileError(
+            "espressione AST non supportata: CompoundLiteral "
+            "(`(T[]){...}`). Workaround: dichiara prima un array locale "
+            "(`int tmp[N] = {...};`) e passa `tmp`."
+        )
     raise MnemoCompileError(f"espressione AST non supportata: {type(expr).__name__}")
 
 
