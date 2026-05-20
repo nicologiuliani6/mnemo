@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mnemo.c_lower import (
     PTHREAD_ABI_TWO_REGION_PAR,
+    _hoist_compound_literals_in_ast,
     infer_auto_lib_files,
     infer_lib_files_from_calls,
     lower_file_to_program,
@@ -195,6 +196,10 @@ def compile_c_to_kairos(
     except OSError as e:
         raise MnemoCompileError(f"file non trovato o non leggibile: {path}") from e
     ast = parse_c(path)
+    # CompoundLiteral hoist: `(T[]){...}` → Decl sintetico nel body della funzione
+    # contenente. Deve girare PRIMA di `compute_program_mem_layout` così le celle
+    # vengono allocate per gli array sintetici.
+    _hoist_compound_literals_in_ast(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),

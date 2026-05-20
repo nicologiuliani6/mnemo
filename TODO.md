@@ -179,7 +179,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 
 - ~~**Aritmetica puntatore**~~: `p + 1`, `p++`, `p - q`, `*(p+i)` ora supportati su array (mappati a `a[i]`).
 - ~~**Puntatori multi-livello**~~: `int **q = &p; **q` funziona (testato).
-- **`void *`** — non supportato; puntatori sono typed.
+- ~~**`void *`**~~ — supportato; mappato a pool slot. `void *p = &x; int *q = (int *)p;` testato OK.
 - ~~**`const`, `volatile`, `restrict` qualifiers**~~: testato OK (parser tollera, codice compila e produce valore corretto; semantica enforce non implementata).
 - **Pointer-to-array, pointer-to-function** come tipi compositi: solo function pointer compile-time risolto (`p = f` o `&f` con `f` same-file).
 
@@ -192,7 +192,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - ~~**Designated init multi-D**~~: `int m[3][3] = {[0][0]=1, [1][1]=5}` ora supportato (full-index designator `[r][c]`; nested InitList non ancora).
 - ~~**Designated init struct**~~: `struct P p = {.x=1, .y=2};` ora supportato (mix posizionale + named `{100, .z=300}` ok).
 - ~~**ArrayRef multi-D senza `*` esplicito nel sorgente**~~: bug collaterale risolto — `m[i][j]` ora autoinclude `mul.kairos` (lowering del calcolo riga-maggiore usa `__mn_mul_into`).
-- **Compound literals**: `(int[]){1,2,3}` non supportato.
+- ~~**Compound literals**: `(int[]){1,2,3}`~~: supportato — `_hoist_compound_literals_in_ast` (c_lower.py) trasforma `CompoundLiteral` in Decl sintetico nel body della funzione contenente, prima di `compute_program_mem_layout`. Testato `generic_compound_literal.c`.
 
 ### Funzioni
 
@@ -224,7 +224,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **Anonymous struct/union**.
 - ~~**Nested struct** (es. `struct Outer { struct Inner a; ...}`)~~: field access `p.a.x` ora supportato (flattening ricorsivo: `_flatten_struct_fields` espande sub-struct by-name in storage locals piatti `o__a__x`). Init list designato struct annidato ancora non testato a fondo.
 - **Struct con array a lunghezza variabile** (flexible array members).
-- **Nested struct initializer** (`Pair p = {{1,2},{3,4}};`): "troppi elementi" — flat init `Point p = {3,4}` OK.
+- ~~**Nested struct initializer** (`Pair p = {{1,2},{3,4}};`)~~: supportato — `struct Rect r = {{1,2},{5,7}};` testato OK (`generic_nested_struct_init.c`).
 - **`offsetof`** macro.
 
 ### Stdlib

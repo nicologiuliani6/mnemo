@@ -4027,10 +4027,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return ins, Var(t), [t]
 
     if isinstance(expr, c.CompoundLiteral):
+        # CompoundLiteral dovrebbe essere hoisted da `_hoist_compound_literals_in_ast`
+        # prima di arrivare qui. Se ci arriviamo, è un contesto non gestito dal pre-pass
+        # (es. expression annidata dentro nodi non walked).
         raise MnemoCompileError(
-            "espressione AST non supportata: CompoundLiteral "
-            "(`(T[]){...}`). Workaround: dichiara prima un array locale "
-            "(`int tmp[N] = {...};`) e passa `tmp`."
+            "CompoundLiteral non hoisted (contesto non supportato). "
+            "Workaround: dichiara prima un Decl locale (`int tmp[N] = {...};`)."
         )
     raise MnemoCompileError(f"espressione AST non supportata: {type(expr).__name__}")
 
@@ -6836,6 +6838,119 @@ def _lower_user_function(
     )
 
 
+def _rename_decl_type(type_node: c.Node, new_name: str) -> c.Node:
+    """Clona shallow `type_node` (ArrayDecl/PtrDecl/TypeDecl) sostituendo il declname
+    interno (TypeDecl.declname) con `new_name`. Usato per hoist di CompoundLiteral:
+    Typename ha declname=None, ma il Decl sintetico richiede il nome reale.
+    """
+    if isinstance(type_node, c.TypeDecl):
+        return c.TypeDecl(
+            declname=new_name,
+            quals=list(type_node.quals or []),
+            align=type_node.align,
+            type=type_node.type,
+            coord=type_node.coord,
+        )
+    if isinstance(type_node, c.ArrayDecl):
+        return c.ArrayDecl(
+            type=_rename_decl_type(type_node.type, new_name),
+            dim=type_node.dim,
+            dim_quals=list(type_node.dim_quals or []),
+            coord=type_node.coord,
+        )
+    if isinstance(type_node, c.PtrDecl):
+        return c.PtrDecl(
+            quals=list(type_node.quals or []),
+            type=_rename_decl_type(type_node.type, new_name),
+            coord=type_node.coord,
+        )
+    return type_node
+
+
+def _hoist_compound_literals(funcdef: c.FuncDef) -> list[c.Decl]:
+    """Hoist `(T[]){...}` / `(struct T){...}` compound literals nel body della funzione
+    come Decl sintetici. Sostituisce ogni `CompoundLiteral` con `ID(name)`. Restituisce
+    la lista dei Decl da prependere al body.
+
+    Mnemo non supporta CompoundLiteral come espressione perché la sua memoria è
+    pre-allocata da `layout_collect.py` per ogni decl statico; hoisting trasforma
+    il pattern in una sequenza Decl(hidden) + ID-ref, riusando le pipeline esistenti.
+    """
+    new_decls: list[c.Decl] = []
+    counter = [0]
+
+    def make_decl(cl: c.CompoundLiteral) -> c.Decl:
+        name = f"__mn_cl{counter[0]}"
+        counter[0] += 1
+        type_node = cl.type.type
+        # `int[]` (no dim): inferisci dim da InitList length
+        if isinstance(type_node, c.ArrayDecl) and type_node.dim is None and isinstance(cl.init, c.InitList):
+            n = len(cl.init.exprs or [])
+            type_node = c.ArrayDecl(
+                type=type_node.type,
+                dim=c.Constant("int", str(n), cl.coord),
+                dim_quals=list(type_node.dim_quals or []),
+                coord=type_node.coord,
+            )
+        decl_type = _rename_decl_type(type_node, name)
+        return c.Decl(
+            name=name,
+            quals=[],
+            align=[],
+            storage=[],
+            funcspec=[],
+            type=decl_type,
+            init=cl.init,
+            bitsize=None,
+            coord=cl.coord,
+        )
+
+    def visit(node: c.Node | None) -> None:
+        if node is None:
+            return
+        # Walk children: pycparser slots include sub-Node attrs.
+        for attr in getattr(node, "__slots__", ()):
+            if attr in ("coord", "__weakref__"):
+                continue
+            val = getattr(node, attr, None)
+            if isinstance(val, c.CompoundLiteral):
+                d = make_decl(val)
+                # Ricorri SUL contenuto della CompoundLiteral prima di hoist
+                # (es. nested CL — improbabile ma safe).
+                visit(val.init)
+                new_decls.append(d)
+                setattr(node, attr, c.ID(d.name, val.coord))
+            elif isinstance(val, list):
+                for i, item in enumerate(val):
+                    if isinstance(item, c.CompoundLiteral):
+                        d = make_decl(item)
+                        visit(item.init)
+                        new_decls.append(d)
+                        val[i] = c.ID(d.name, item.coord)
+                    elif hasattr(item, "__slots__"):
+                        visit(item)
+            elif hasattr(val, "__slots__"):
+                visit(val)
+
+    visit(funcdef.body)
+    return new_decls
+
+
+def _hoist_compound_literals_in_ast(ast: c.FileAST) -> None:
+    """Applica `_hoist_compound_literals` a ogni FuncDef del file."""
+    for ext in ast.ext:
+        if not isinstance(ext, c.FuncDef) or ext.body is None:
+            continue
+        decls = _hoist_compound_literals(ext)
+        if not decls:
+            continue
+        body = ext.body
+        if not isinstance(body, c.Compound):
+            continue
+        items = list(body.block_items or [])
+        body.block_items = decls + items
+
+
 def lower_file_to_program(
     ast: c.FileAST,
     *,
@@ -6849,6 +6964,9 @@ def lower_file_to_program(
         raise MnemoCompileError(
             f"ptr_pool_size deve essere tra 1 e {PTR_POOL_MAX}, non {ptr_pool_size}"
         )
+    # Note: `_hoist_compound_literals_in_ast(ast)` deve essere chiamato DAL caller
+    # (compile.py) PRIMA di `compute_program_mem_layout`, altrimenti i Decl sintetici
+    # non sono nel layout.
     main_fn = _find_main(ast)
     if main_fn is None:
         raise MnemoCompileError("nessuna funzione int main(...) trovata")
