@@ -63,6 +63,8 @@ def _emit_instr_seq(lines: list[str], instrs: list[Instr], indent: str) -> None:
             and str(ins.dst).startswith("__mn_e")
             and isinstance(ins.rhs, Imm)
             and isinstance(instrs[i + 1].rhs, Imm)
+            and ins.rhs.value >= 0
+            and instrs[i + 1].rhs.value >= 0
         ):
             nxt = instrs[i + 1]
             lines.append(
@@ -80,7 +82,12 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         lines.append(f"{indent}// {ins.text}")
         return
     if isinstance(ins, IConst):
-        lines.append(f"{indent}{ins.dst} += {ins.value}")
+        if ins.value < 0:
+            # Kairos parser rifiuta letterali negativi (`+= -1` → token non atteso).
+            # Equivalente reversibile: `dst -= N`.
+            lines.append(f"{indent}{ins.dst} -= {-ins.value}")
+        else:
+            lines.append(f"{indent}{ins.dst} += {ins.value}")
         return
     if isinstance(ins, ICopy):
         lines.append(
@@ -89,10 +96,16 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         )
         return
     if isinstance(ins, IAddEq):
-        lines.append(f"{indent}{ins.dst} += {_emit_operand_for_expr(ins.rhs)}")
+        if isinstance(ins.rhs, Imm) and ins.rhs.value < 0:
+            lines.append(f"{indent}{ins.dst} -= {-ins.rhs.value}")
+        else:
+            lines.append(f"{indent}{ins.dst} += {_emit_operand_for_expr(ins.rhs)}")
         return
     if isinstance(ins, ISubEq):
-        lines.append(f"{indent}{ins.dst} -= {_emit_operand_for_expr(ins.rhs)}")
+        if isinstance(ins.rhs, Imm) and ins.rhs.value < 0:
+            lines.append(f"{indent}{ins.dst} += {-ins.rhs.value}")
+        else:
+            lines.append(f"{indent}{ins.dst} -= {_emit_operand_for_expr(ins.rhs)}")
         return
     if isinstance(ins, IXorEq):
         lines.append(f"{indent}{ins.dst} ^= {_emit_operand_for_expr(ins.rhs)}")
