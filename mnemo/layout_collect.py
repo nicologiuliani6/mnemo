@@ -1094,6 +1094,11 @@ def compute_program_mem_layout(
             continue
         if isinstance(ext.type, c.FuncDecl):
             continue
+        # `extern T name;` forward declaration: la definizione vera è altrove
+        # (un altro Decl più avanti nello stesso file, o un'altra TU che Mnemo
+        # non supporta). Skip per evitare "variabile file-scope duplicata".
+        if ext.storage and "extern" in ext.storage and ext.init is None:
+            continue
         imm = L._immediate_named_scalar_typedef(ext)
         if imm in ("pthread_mutex_t", "mnemo_kairos_channel_t"):
             continue

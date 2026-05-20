@@ -213,7 +213,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 ### Storage / linkage
 
 - ~~**`static` locali**~~ — supportati: AST pre-pass `_hoist_static_locals` (c_lower.py) trasloca `static int n = K;` a file-scope con nome sintetico `__mn_static_<func>_<name>`. Init non-zero applicato in main pre-instrs via `IAddEq`. Testato `generic_static_local.c` (counter 1,2,3 + summer init=100).
-- **`extern` con definizione altrove** — solo dichiarazioni file-scope.
+- ~~**`extern` con definizione nello stesso file**~~ — supportato: `layout_collect.py` skippa Decls con `storage='extern'` e `init=None` (forward decl). La definizione vera (senza extern) allocava la cella. Multi-TU extern resta non supportato. Testato `generic_extern_decl.c`.
 - ~~**`register`, `auto` keywords**~~: testato OK (ignorate, codice compila e produce valore corretto).
 - **Translation unit multipli** — solo single-file compilation.
 - **`#include` di header utente** — `gcc -E -DMNEMO` espande, ma struct/typedef da altri header limitate.
@@ -255,7 +255,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **Casts scalari espliciti** — `(int)x`, `(long)x`, `(unsigned short)x` ecc ora accettati (no-op nella VM word-size). Era limitato a int↔bool↔unsigned int.
 - **Memory aliasing arbitrario** — caller-callee mem cell aliasing non sempre supportato.
 - **Ricorsione diretta NON in parallel2/opt-uncall**: `int f(int n) { return n + f(n-1); }` chiamata direttamente da main ritorna 0. Funziona solo wrappata in parallel2(f, g) o via opt-uncall su callee non-self.
-- **Array param `int *a`**: il callee deve dichiarare `int a[N]` (size esplicita); `int *a` come parametro array fallisce "'a' non è un array dichiarato".
+- ~~**Array param `int *a`**~~: supportato, testato `/tmp/intptr_param.c` (sum(int*, int) iterando a[i] funziona).
 
 ---
 
