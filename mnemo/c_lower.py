@@ -80,7 +80,7 @@ BUILTIN_KAIROS_PROCS = frozenset(
 )
 
 # I/O host: gestiti nel lowering, non sono procedure Kairos.
-MNEMO_IO_BUILTINS = frozenset({"putchar", "printf"})
+MNEMO_IO_BUILTINS = frozenset({"putchar", "printf", "puts"})
 
 # ABI C “pthread” / π-calculus: lowering diretto (non sono procedure Kairos).
 PTHREAD_ABI_NAMES = frozenset(
@@ -4556,6 +4556,27 @@ def _lower_funccall_with_ret(
         if ret_sink is not None:
             raise MnemoCompileError("printf è void")
         return _lower_printf(node, ctx)
+    if name == "puts":
+        # `puts(s)` = `printf("...\n")` per letterale o `printf("%s\n", s)`
+        # per ID. Mnemo non supporta full POSIX puts (return int = !EOF), ma
+        # `puts` come void è ampiamente usato per debug — coperto qui.
+        if ret_sink is not None:
+            raise MnemoCompileError("puts: valore di ritorno non supportato (usa come void)")
+        el = node.args
+        exprs = list(el.exprs) if el is not None else []
+        if len(exprs) != 1:
+            raise MnemoCompileError("puts: atteso 1 argomento")
+        arg = exprs[0]
+        coord = node.coord
+        if isinstance(arg, c.Constant) and arg.type == "string":
+            raw = _literal_c_string(arg)
+            fmt_node = c.Constant("string", '"' + raw.replace("\\", "\\\\").replace('"', '\\"') + '\\n"', coord)
+            synth = c.FuncCall(c.ID("printf", coord), c.ExprList([fmt_node], coord), coord)
+            return _lower_printf(synth, ctx)
+        # Non-literal: usa printf("%s\n", arg)
+        fmt_node = c.Constant("string", '"%s\\n"', coord)
+        synth = c.FuncCall(c.ID("printf", coord), c.ExprList([fmt_node, arg], coord), coord)
+        return _lower_printf(synth, ctx)
     if name in ("init_mutexes", "destroy_mutexes"):
         if ret_sink is not None:
             raise MnemoCompileError(f"{name} è void")

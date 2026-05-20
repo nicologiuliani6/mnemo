@@ -229,7 +229,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 
 ### Stdlib
 
-- **`<stdio.h>`** — solo `printf` (sottoinsieme): `%d`, `%u`, `%x`, `%c`, `%s` letterali. Niente `scanf`, `fopen`, `fprintf`, `puts`, ecc.
+- **`<stdio.h>`** — `printf` (sottoinsieme: `%d`, `%u`, `%x`, `%c`, `%s`), `putchar`, `puts` (lowered to printf+`\n`). Niente `scanf`, `fopen`, `fprintf`, ecc.
 - **`<stdlib.h>`** — `malloc`/`free` via ptr_pool (con limite size). Niente `calloc`, `realloc`, `atoi`, `exit`.
 - **`<string.h>`** — niente `strcmp`, `strlen`, `memcpy`, ecc.
 - **`<math.h>`** — niente FP libs.
