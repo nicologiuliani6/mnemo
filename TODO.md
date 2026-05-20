@@ -2,37 +2,30 @@
 
 ## OPEN
 
-### [P2] PC.c par-uncall correctness — PARTIAL FIX 2026-05-20
+### [P2] PC.c par-uncall correctness — DONE 2026-05-20
 
-Gate aggiunto: `par_uncall_eligible` ora esclude worker se in
-`channel_using_targets`. PC.c con `--opt-uncall-user-calls` ora exit=0
-(prima exit=1 con `[VM] MINEQ: variabile '__mn_lc0' è NULL` durante
-par-uncall inverse). Test aggiornato (`test_par_uncall_channels.py`)
-per asserire che producer/consumer non ricevano par-uncall.
+Root cause: Kairos `collect_loops` (`vm_invert.h`) usava un unico
+`in_loop` flag e un unico descriptor index. Con from-loop nested
+(mutex `from` dentro outer `for`) inner LABEL/JMPF sovrascrivevano i
+campi del descriptor outer e inner `LABEL FROM_ERR` chiudeva
+prematuramente lo slot via `n++`. Risultato: descriptor outer
+corrotto → inverse walk re-entrava nell'inner loop body dopo aver
+eliminato `__mn_lc0` via op_delocal → `[VM] MINEQ: __mn_lc0 NULL`.
 
-**Bug VM sottostante**: par-uncall lancia 2 thread `is_inverse=0` che
-eseguono `uncall producer`/`uncall consumer` concorrentemente. Ogni
-thread chiama `invert_op_to_line` su frame clonato (`producer@tXXX`).
-Loop counter `__mn_lc0` viene riportato NULL durante MINEQ. Probabile:
-- `op_local` per `__mn_lc0` (inverse DELOCAL) non eseguito sul clone
-  frame perché qualche path skippa l'init.
-- Oppure stesso pattern di `recursion senza parallel2`: clone frame
-  aliasing fa sì che la Var* lc0 venga liberata da un altro thread.
+Fix in Kairos (`fix(vm): collect_loops handles nested from-loops correctly`):
+stack UID-keyed; slot aperto lazy on first reference (JMPF FROM_ERR
+può precedere LABEL FROM_START); chiuso da LABEL FROM_ERR_<UID>.
 
-Tentativo `__thread` su `_fa_cache`: non risolve. Cache disabilita
-diversamente: `DELOCAL valore finale errato lc1=9 atteso=0` — bug
-diverso, probabilmente loop body inversion mancante.
+Side bug Mnemo: `_lower_mps_srecv_inline` non azzerava `t_recv` tra
+iter → consumer di PC.c stampava 0,1,3,6,10,… (triangolari) invece
+di 0..9. Fix: `IHistPush(scratch, t_recv)` dopo deref_assign.
 
-Per ripristinare par-uncall su channel workers serve fix VM:
-1. Verificare semantica `clone_frame_for_thread` per locali (LOCAL
-   stack preservato?).
-2. Trace su quale thread vede `__mn_lc0=NULL`: producer thread può
-   essere bloccato da consumer thread che reclama lo slot?
-3. Possibilmente, sequenzializza par-uncall per channel workers
-   (snap → call f0; call f1; ... → uncall f0; uncall f1 sequenziale).
-   Questo manterrebbe symmetric channel inverse senza race su frame.
+Gate `channel_using_targets` rimosso da `par_uncall_eligible`.
+`test_par_uncall_channels.py` ora asserisce che par-uncall È emesso
+per producer/consumer.
 
-Tempo stimato: 4-8 ore + design review.
+PC.c con `--opt-uncall-user-calls`: exit=0, dump `__mn_exit: 0`,
+output corretto 0..9 producer/consumer.
 
 ### [P3] VM optimization: encrypt 5.4x → 2.30x — DONE 2026-05-19
 
