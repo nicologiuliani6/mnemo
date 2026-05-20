@@ -5355,6 +5355,12 @@ def _lower_next_clause(node: c.Node | None, ctx: _Ctx) -> list[Instr]:
         if node.expr is None:
             return []
         return _lower_expr_as_stmt(node.expr, ctx)
+    if isinstance(node, c.ExprList):
+        # `for (...; ...; i+=1, j-=1)`: ogni stmt in sequenza.
+        out: list[Instr] = []
+        for e in node.exprs:
+            out.extend(_lower_expr_as_stmt(e, ctx))
+        return out
     return _lower_expr_as_stmt(node, ctx)
 
 
@@ -5459,6 +5465,15 @@ def _lower_for_init(init: c.Node | None, ctx: _Ctx) -> list[Instr]:
         if init.expr is None:
             return []
         return _lower_expr_as_stmt(init.expr, ctx)
+    if isinstance(init, c.ExprList):
+        # `for (i=0, j=10; ...; ...)`: ogni Assignment/FuncCall in sequenza.
+        out: list[Instr] = []
+        for e in init.exprs:
+            if isinstance(e, (c.Assignment, c.FuncCall)):
+                out.extend(_lower_stmt(e, ctx))
+            else:
+                out.extend(_lower_expr_as_stmt(e, ctx))
+        return out
     raise MnemoCompileError(f"for-init non supportato: {type(init).__name__}")
 
 
