@@ -3711,6 +3711,17 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             t = ctx.fresh_temp()
             ins = i0 + [ISubEq(t, op0)]
             return ins, Var(t), t0 + [t]
+        if expr.op == "_Alignof":
+            # Mnemo: tutti gli scalari sono word-VM (int=4); alignment di una
+            # struct = alignment del campo più "largo", che è sempre uno
+            # scalare in Mnemo (no FP/double). Quindi _Alignof(T) = sizeof
+            # del MAX scalare = _SIZEOF_SCALAR.
+            inner = expr.expr
+            if isinstance(inner, c.Typename):
+                return [], Imm(_SIZEOF_SCALAR), []
+            raise MnemoCompileError(
+                "_Alignof: supportato solo su tipo (`_Alignof(T)`)"
+            )
         if expr.op == "sizeof":
             inner = expr.expr
             if isinstance(inner, c.Typename):

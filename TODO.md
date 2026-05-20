@@ -241,7 +241,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **Inline asm** (`__asm__`, `asm volatile`) — non supportato.
 - **`__attribute__`, `__builtin_*`** — non supportati.
 - **`_Generic`** (C11) — non supportato.
-- **`_Alignas`, `_Alignof`** — non supportati.
+- ~~**`_Alignas`, `_Alignof`**~~: supportati. `_Alignas` accettato dal parser (no-op); `_Alignof(T)` ritorna `_SIZEOF_SCALAR` (4) per qualunque T — Mnemo è word-VM, allineamento sempre 4. Testato `generic_alignof.c`.
 - **Complex numbers** (`_Complex`) — non supportati.
 - **`_Atomic`** — non supportati (concorrenza solo via mutex π).
 - **`argv` POSIX** — `int main(int argc, char **argv)` accettato sintatticamente ma `argv` è stub: niente argomenti command-line reali.
