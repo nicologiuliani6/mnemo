@@ -1080,6 +1080,45 @@ def _flatten_init_list(init: c.InitList) -> list[c.Node]:
     return out
 
 
+def _array_init_dense_1d(init: c.InitList, array_size: int) -> list[c.Node | None]:
+    """Per `int a[N] = {...}` produce lista densa di lunghezza N.
+    Supporta init posizionali e designated `[idx] = val`. Indici mancanti
+    restano None (cell già a 0 dopo decl). Mix positional/designated:
+    designated resetta il cursore a idx+1 (standard C99).
+    """
+    out: list[c.Node | None] = [None] * array_size
+    pos = 0
+    for e in init.exprs:
+        if isinstance(e, c.NamedInitializer):
+            if len(e.name) != 1:
+                raise MnemoCompileError(
+                    "designated init: solo `[idx] = expr` 1D supportato"
+                )
+            d = e.name[0]
+            if not isinstance(d, c.Constant):
+                raise MnemoCompileError(
+                    "designated init: indice deve essere costante intera"
+                )
+            try:
+                idx = int(d.value, 0)
+            except (TypeError, ValueError):
+                raise MnemoCompileError(
+                    f"designated init: indice non intero '{d.value}'"
+                )
+            if not (0 <= idx < array_size):
+                raise MnemoCompileError(
+                    f"designated init: indice {idx} fuori range [0,{array_size})"
+                )
+            out[idx] = e.expr
+            pos = idx + 1
+        else:
+            if pos >= array_size:
+                break
+            out[pos] = e
+            pos += 1
+    return out
+
+
 def _fold_exprlist_as_comma_chain(el: c.ExprList) -> c.Node:
     """`(a, b, c)` nel parser è spesso `ExprList`, equivalente a catena di `,`."""
     if len(el.exprs) == 1:
@@ -5719,8 +5758,24 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if node.init is None:
                 return []
             if isinstance(node.init, c.InitList):
-                flat = _flatten_init_list(node.init)
+                has_named = any(isinstance(e, c.NamedInitializer) for e in node.init.exprs)
                 out: list[Instr] = []
+                if has_named and len(dims) == 1:
+                    dense = _array_init_dense_1d(node.init, tot)
+                    for j, el in enumerate(dense):
+                        if el is None:
+                            continue
+                        out.extend(
+                            _lower_assign(
+                                _phys(ctx, _array_elem_local(logical, j)), el, ctx
+                            )
+                        )
+                    return out
+                if has_named:
+                    raise MnemoCompileError(
+                        "designated init: supportato solo per array 1D"
+                    )
+                flat = _flatten_init_list(node.init)
                 for j, el in enumerate(flat):
                     if j >= tot:
                         break

@@ -187,7 +187,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - ~~**Aritmetica puntatore**~~: `p + 1`, `p++`, `p - q`, `*(p+i)` ora supportati su array (mappati a `a[i]`).
 - ~~**Puntatori multi-livello**~~: `int **q = &p; **q` funziona (testato).
 - **`void *`** — non supportato; puntatori sono typed.
-- **`const`, `volatile`, `restrict` qualifiers** — parser tollera ma nessuna semantica.
+- ~~**`const`, `volatile`, `restrict` qualifiers**~~: testato OK (parser tollera, codice compila e produce valore corretto; semantica enforce non implementata).
 - **Pointer-to-array, pointer-to-function** come tipi compositi: solo function pointer compile-time risolto (`p = f` o `&f` con `f` same-file).
 
 ### Array
@@ -195,7 +195,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **VLA (variable-length array)**: `int a[n]` con `n` runtime non supportato.
 - **Array element count > 1024** (`ARR_MAX`).
 - **Array multidimensionali dinamici** — solo dimensioni costanti compile-time.
-- **Designated initializers**: `int a[] = {[3]=1, [5]=2};` non supportato.
+- ~~**Designated initializers 1D**~~: `int a[5] = {[2]=42, [4]=99};` ora supportato (incluso mix posizionale + designated `{1,2,[4]=50,60}`). Solo array 1D; multi-D ancora limitato.
 - **Compound literals**: `(int[]){1,2,3}` non supportato.
 
 ### Funzioni
@@ -211,14 +211,14 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **`setjmp` / `longjmp`** — non supportati.
 - **`switch` con body non-block**: `switch(x) case 1: …;` deve essere `switch(x) { case 1: … }`.
 - **`break` nested in `if` verso switch esterno**: errore.
-- **`continue` complesso in loop annidati**: alcuni pattern.
-- **Fall-through `case`** senza `break` esplicito — comportamento limitato.
+- ~~**`continue` complesso in loop annidati**~~: testato OK (continue verso inner/outer match gcc).
+- ~~**Fall-through `case`** senza `break` esplicito~~: testato OK (fall-through pieno e parziale match gcc; `case` vuoto con solo `break` esplicito).
 
 ### Storage / linkage
 
 - **`static` locali** — non accumula valore tra chiamate (testato: f() ritorna sempre 1 invece di 1,2,3). Treated as regular local; semantica statefulness non implementata.
 - **`extern` con definizione altrove** — solo dichiarazioni file-scope.
-- **`register`, `auto` keywords** — ignorate.
+- ~~**`register`, `auto` keywords**~~: testato OK (ignorate, codice compila e produce valore corretto).
 - **Translation unit multipli** — solo single-file compilation.
 - **`#include` di header utente** — `gcc -E -DMNEMO` espande, ma struct/typedef da altri header limitate.
 
