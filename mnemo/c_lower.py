@@ -2158,8 +2158,6 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             and f1 not in ctx.uncall_excluded_via_vm_targets
             and not _func_is_recursive_user(ctx.file_ast, f0)
             and not _func_is_recursive_user(ctx.file_ast, f1)
-            and f0 not in ctx.channel_using_targets
-            and f1 not in ctx.channel_using_targets
         )
         if par_uncall_eligible:
             snap_temps: list[tuple[int, str]] = []
@@ -4272,6 +4270,12 @@ def _lower_mps_srecv_inline(ch: c.Node, ans_ptr: c.Node, ctx: _Ctx) -> list[Inst
         t_recv = ctx.fresh_temp()
         out: list[Instr] = [ISrecv([t_recv], chname)]
         out.extend(_lower_deref_assign(ans_ptr.name, c.ID(t_recv, coord), ctx))
+        # Azzeramento per-iter: senza questa push, in un loop ogni srecv
+        # accumula nel t_recv (semantica Kairos `srecv <dst>, ch` è `dst += msg`).
+        # PC.c: consumer riceveva 0,1,2,3,... ma stampava 0,1,3,6,10 (triangolari)
+        # perché t_recv non veniva azzerato tra iter.
+        ctx.use_scratch = True
+        out.append(IHistPush(ctx.scratch, t_recv))
         return out
     raise MnemoCompileError(
         "srecv: secondo argomento atteso `&msg` o `int *p` (forma semplice)"

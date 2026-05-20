@@ -1,11 +1,11 @@
 """Test par-uncall pattern + channel workers (PC.c style).
 
 Verifica che:
-1. Funzioni con ssend/srecv NON ricevano opt-uncall single-call.
-2. PC.c con --opt-uncall-user-calls produce esecuzione corretta (exit 0):
-   il pattern par-uncall su worker con canali è disabilitato perché
-   l'inverse VM panics con MINEQ NULL su loop counter (bug VM, da fixare
-   in vm_invert.h interaction con par-inverse cloned frames).
+1. Funzioni con ssend/srecv NON ricevano opt-uncall single-call (single-call
+   pattern fa snap+uncall in caller, semantica spezza con canali).
+2. PC.c con --opt-uncall-user-calls riceve par-uncall (pattern par-uncall su
+   thread cloni funziona dopo fix collect_loops vm_invert.h: il bug MINEQ NULL
+   su loop counter veniva da collect_loops che non gestiva from-loop nested).
 3. Funzioni senza ssend/srecv ricevono opt-uncall normalmente.
 """
 
@@ -27,11 +27,11 @@ def _write_c(src: str) -> str:
 
 
 class TestParUncallChannels(unittest.TestCase):
-    def test_PC_dot_c_opt_uncall_no_par_uncall_for_channel_workers(self) -> None:
-        """PC.c con opt-uncall: par-uncall NON emesso per producer/consumer (usano canali).
+    def test_PC_dot_c_opt_uncall_par_uncall_for_channel_workers(self) -> None:
+        """PC.c con opt-uncall: par-uncall emesso per producer/consumer.
 
-        Il pattern par-uncall su worker channel-using crasha il VM (MINEQ NULL su
-        loop counter durante invert_op_to_line di frame clonato in thread inverso).
+        Dopo fix collect_loops in Kairos vm_invert.h (gestione corretta di
+        from-loop nested), il pattern par-uncall su worker con canali funziona.
         """
         ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pc_path = os.path.join(ROOT, "c_test", "PC.c")
@@ -40,13 +40,13 @@ class TestParUncallChannels(unittest.TestCase):
         k = compile_c_to_kairos(pc_path, opt_uncall_user_calls=True)
         has_uncall_producer = re.search(r"uncall producer\(", k) is not None
         has_uncall_consumer = re.search(r"uncall consumer\(", k) is not None
-        self.assertFalse(
+        self.assertTrue(
             has_uncall_producer,
-            "PC.c: par-uncall su producer (channel-using) deve essere disabilitato",
+            "PC.c: par-uncall su producer deve essere emesso",
         )
-        self.assertFalse(
+        self.assertTrue(
             has_uncall_consumer,
-            "PC.c: par-uncall su consumer (channel-using) deve essere disabilitato",
+            "PC.c: par-uncall su consumer deve essere emesso",
         )
 
     def test_non_channel_fn_keeps_opt_uncall(self) -> None:
