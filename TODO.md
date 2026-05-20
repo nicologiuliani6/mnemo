@@ -195,8 +195,10 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **VLA (variable-length array)**: `int a[n]` con `n` runtime non supportato.
 - **Array element count > 1024** (`ARR_MAX`).
 - **Array multidimensionali dinamici** — solo dimensioni costanti compile-time.
-- ~~**Designated initializers 1D**~~: `int a[5] = {[2]=42, [4]=99};` ora supportato (incluso mix posizionale + designated `{1,2,[4]=50,60}`). Solo array 1D; multi-D ancora limitato.
+- ~~**Designated initializers 1D**~~: `int a[5] = {[2]=42, [4]=99};` ora supportato (incluso mix posizionale + designated `{1,2,[4]=50,60}`).
+- ~~**Designated init multi-D**~~: `int m[3][3] = {[0][0]=1, [1][1]=5}` ora supportato (full-index designator `[r][c]`; nested InitList non ancora).
 - ~~**Designated init struct**~~: `struct P p = {.x=1, .y=2};` ora supportato (mix posizionale + named `{100, .z=300}` ok).
+- ~~**ArrayRef multi-D senza `*` esplicito nel sorgente**~~: bug collaterale risolto — `m[i][j]` ora autoinclude `mul.kairos` (lowering del calcolo riga-maggiore usa `__mn_mul_into`).
 - **Compound literals**: `(int[]){1,2,3}` non supportato.
 
 ### Funzioni

@@ -1119,6 +1119,50 @@ def _array_init_dense_1d(init: c.InitList, array_size: int) -> list[c.Node | Non
     return out
 
 
+def _array_init_dense_nd(init: c.InitList, dims: list[int]) -> list[c.Node | None]:
+    """Multi-D designated: `int m[R][C] = {[r][c]=val, ...}` → flat row-major.
+    Supporta solo full-index designators (`[r][c]` con tutti gli indici), non
+    nested InitList. Mix con posizionali avanza il cursore lineare.
+    """
+    tot = 1
+    for d in dims:
+        tot *= d
+    out: list[c.Node | None] = [None] * tot
+    pos = 0
+    for e in init.exprs:
+        if isinstance(e, c.NamedInitializer):
+            if len(e.name) != len(dims):
+                raise MnemoCompileError(
+                    f"designated init multi-D: serve indice per ogni dimensione "
+                    f"(atteso {len(dims)}, dato {len(e.name)})"
+                )
+            lin = 0
+            for k, d in enumerate(e.name):
+                if not isinstance(d, c.Constant):
+                    raise MnemoCompileError(
+                        "designated init: indice deve essere costante intera"
+                    )
+                try:
+                    ix = int(d.value, 0)
+                except (TypeError, ValueError):
+                    raise MnemoCompileError(
+                        f"designated init: indice non intero '{d.value}'"
+                    )
+                if not (0 <= ix < dims[k]):
+                    raise MnemoCompileError(
+                        f"designated init: indice {ix} fuori range [0,{dims[k]})"
+                    )
+                lin = lin * dims[k] + ix
+            out[lin] = e.expr
+            pos = lin + 1
+        else:
+            if pos >= tot:
+                break
+            out[pos] = e
+            pos += 1
+    return out
+
+
 def _fold_exprlist_as_comma_chain(el: c.ExprList) -> c.Node:
     """`(a, b, c)` nel parser è spesso `ExprList`, equivalente a catena di `,`."""
     if len(el.exprs) == 1:
@@ -5792,8 +5836,11 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if isinstance(node.init, c.InitList):
                 has_named = any(isinstance(e, c.NamedInitializer) for e in node.init.exprs)
                 out: list[Instr] = []
-                if has_named and len(dims) == 1:
-                    dense = _array_init_dense_1d(node.init, tot)
+                if has_named:
+                    if len(dims) == 1:
+                        dense = _array_init_dense_1d(node.init, tot)
+                    else:
+                        dense = _array_init_dense_nd(node.init, list(dims))
                     for j, el in enumerate(dense):
                         if el is None:
                             continue
@@ -5803,10 +5850,6 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             )
                         )
                     return out
-                if has_named:
-                    raise MnemoCompileError(
-                        "designated init: supportato solo per array 1D"
-                    )
                 flat = _flatten_init_list(node.init)
                 for j, el in enumerate(flat):
                     if j >= tot:
@@ -6336,6 +6379,12 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
                 needed.add("mul.kairos")
                 needed.add("divmod.kairos")
                 needed.add("bits.kairos")
+        if isinstance(node, c.ArrayRef):
+            # Multi-D ArrayRef (es. m[i][j]): lowering genera implicitamente
+            # __mn_mul_into per il calcolo dell'indice riga-maggiore i*COLS+j.
+            # Senza `*` esplicito nel C source, mul.kairos non sarebbe incluso.
+            if isinstance(node.name, c.ArrayRef):
+                needed.add("mul.kairos")
         if not hasattr(node, "children"):
             return
         for _name, ch in node.children():
