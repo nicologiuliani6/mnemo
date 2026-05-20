@@ -5466,7 +5466,7 @@ def _lower_while(node: c.While, ctx: _Ctx) -> list[Instr]:
     )
     need_br = _has_break_targeting_loop(node.stmt, False)
     need_ct = _has_continue_targeting_loop(node.stmt, False) and not noop_ct
-    br_v = ctx.fresh_temp() if need_br else None
+    br_v = ctx.fresh_loop_ct() if need_br else None
     ct_v = ctx.fresh_loop_ct() if need_ct else None
 
     ctx.loop_stack.append(_LoopFrame(br_v, ct_v))
@@ -5488,9 +5488,17 @@ def _lower_while(node: c.While, ctx: _Ctx) -> list[Instr]:
         ctx.loop_stack.pop()
 
     first_eval = _build_truth_incr_lc_br(cond, lc, ctx, br_v)
-    return first_eval + _build_counter_loop_instrs(
+    loop_instrs = first_eval + _build_counter_loop_instrs(
         body, lc, lc, "==", "0", ctx, needs_entry_guard=True
     )
+    if need_br:
+        assert br_v is not None
+        # Wrap loop in ILocalBlock(br_v): isolates per-invocation; senza
+        # questo wrap, br_v resterebbe a 1 dopo un break, e una eventuale
+        # ri-esecuzione del while (es. annidato in for esterno) salterebbe
+        # tutte le iterazioni.
+        loop_instrs = [ILocalBlock(br_v, loop_instrs + _reset_lc_val(br_v, ctx))]
+    return loop_instrs
 
 
 def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
@@ -5509,7 +5517,7 @@ def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
     )
     need_br = _has_break_targeting_loop(node.stmt, False)
     need_ct = _has_continue_targeting_loop(node.stmt, False) and not noop_ct
-    br_v = ctx.fresh_temp() if need_br else None
+    br_v = ctx.fresh_loop_ct() if need_br else None
     ct_v = ctx.fresh_loop_ct() if need_ct else None
 
     ctx.loop_stack.append(_LoopFrame(br_v, ct_v))
@@ -5530,9 +5538,13 @@ def _lower_dowhile(node: c.DoWhile, ctx: _Ctx) -> list[Instr]:
     finally:
         ctx.loop_stack.pop()
 
-    return _build_counter_loop_instrs(
+    loop_instrs = _build_counter_loop_instrs(
         body, lc, lc, "==", "0", ctx, needs_entry_guard=False
     )
+    if need_br:
+        assert br_v is not None
+        loop_instrs = [ILocalBlock(br_v, loop_instrs + _reset_lc_val(br_v, ctx))]
+    return loop_instrs
 
 
 def _lower_for_init(init: c.Node | None, ctx: _Ctx) -> list[Instr]:
@@ -5580,7 +5592,7 @@ def _lower_for(node: c.For, ctx: _Ctx) -> list[Instr]:
     lc = ctx.fresh_temp()
     need_br = _has_break_targeting_loop(node.stmt, False)
     need_ct = _has_continue_targeting_loop(node.stmt, False) and not noop_ct
-    br_v = ctx.fresh_temp() if need_br else None
+    br_v = ctx.fresh_loop_ct() if need_br else None
     ct_v = ctx.fresh_loop_ct() if need_ct else None
     next_instrs = _lower_next_clause(node.next, ctx)
     next_part = _append_maybe_guarded_by_break(next_instrs, br_v)
@@ -5605,9 +5617,13 @@ def _lower_for(node: c.For, ctx: _Ctx) -> list[Instr]:
         ctx.loop_stack.pop()
 
     first_eval = _build_truth_incr_lc_br(cond, lc, ctx, br_v)
-    return pre + first_eval + _build_counter_loop_instrs(
+    loop_instrs = first_eval + _build_counter_loop_instrs(
         body, lc, lc, "==", "0", ctx, needs_entry_guard=True
     )
+    if need_br:
+        assert br_v is not None
+        loop_instrs = [ILocalBlock(br_v, loop_instrs + _reset_lc_val(br_v, ctx))]
+    return pre + loop_instrs
 
 
 def _stmt_never_falls_through(node: c.Node | None) -> bool:
