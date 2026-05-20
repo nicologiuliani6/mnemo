@@ -196,6 +196,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 - **Array element count > 1024** (`ARR_MAX`).
 - **Array multidimensionali dinamici** — solo dimensioni costanti compile-time.
 - ~~**Designated initializers 1D**~~: `int a[5] = {[2]=42, [4]=99};` ora supportato (incluso mix posizionale + designated `{1,2,[4]=50,60}`). Solo array 1D; multi-D ancora limitato.
+- ~~**Designated init struct**~~: `struct P p = {.x=1, .y=2};` ora supportato (mix posizionale + named `{100, .z=300}` ok).
 - **Compound literals**: `(int[]){1,2,3}` non supportato.
 
 ### Funzioni

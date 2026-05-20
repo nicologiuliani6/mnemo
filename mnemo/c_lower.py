@@ -5727,8 +5727,40 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if node.init is not None:
                 if not isinstance(node.init, c.InitList):
                     raise MnemoCompileError("init struct: serve `{ ... }`")
-                flat_s = _flatten_init_list(node.init)
+                has_named_s = any(
+                    isinstance(e, c.NamedInitializer) for e in node.init.exprs
+                )
                 out_s: list[Instr] = []
+                if has_named_s:
+                    field_order = [
+                        fn for fn, fty in fields
+                        if not _type_node_is_pthread_mutex(fty, ctx.typedef_map)
+                    ]
+                    pos = 0
+                    for e in node.init.exprs:
+                        if isinstance(e, c.NamedInitializer):
+                            if len(e.name) != 1 or not isinstance(e.name[0], c.ID):
+                                raise MnemoCompileError(
+                                    "designated init struct: solo `.field = expr`"
+                                )
+                            fname = e.name[0].name
+                            if fname not in field_order:
+                                raise MnemoCompileError(
+                                    f"designated init struct: campo `.{fname}` non in struct"
+                                )
+                            loc = _struct_field_local(logical, fname)
+                            out_s.extend(_lower_assign(_phys(ctx, loc), e.expr, ctx))
+                            pos = field_order.index(fname) + 1
+                        else:
+                            if pos >= len(field_order):
+                                raise MnemoCompileError(
+                                    "init struct: troppi elementi posizionali"
+                                )
+                            loc = _struct_field_local(logical, field_order[pos])
+                            out_s.extend(_lower_assign(_phys(ctx, loc), e, ctx))
+                            pos += 1
+                    return out_s
+                flat_s = _flatten_init_list(node.init)
                 ix = 0
                 for fn, fty in fields:
                     if _type_node_is_pthread_mutex(fty, ctx.typedef_map):
