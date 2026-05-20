@@ -5055,11 +5055,19 @@ def _eval_to_var(
 
 def _kairos_atom(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], str, list[str]]:
     if isinstance(expr, c.Constant):
-        return [], str(_const_int(expr)), []
+        v = _const_int(expr)
+        if v < 0:
+            t = ctx.fresh_temp()
+            return [ISubEq(t, Imm(-v))], t, [t]
+        return [], str(v), []
     if isinstance(expr, c.UnaryOp) and expr.op == "-" and isinstance(
         expr.expr, c.Constant
     ):
-        return [], str(-_const_int(expr.expr)), []
+        v = -_const_int(expr.expr)
+        if v < 0:
+            t = ctx.fresh_temp()
+            return [ISubEq(t, Imm(-v))], t, [t]
+        return [], str(v), []
     if isinstance(expr, c.ID):
         log = _scope_resolve(ctx, expr.name)
         if log in ctx.int_locals:
