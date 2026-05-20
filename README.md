@@ -392,7 +392,7 @@ Vedi anche [Mnemo rispetto al C standard](#mnemo-rispetto-al-c-standard).
 
 - VLA, **funzioni variadiche C**, `goto`, floating point, bit-field, `&` oltre il modello pool, molte estensioni GCC.
 - **`static` locali**: non accumulano stato tra chiamate (trattati come locali ordinarie).
-- **Nested struct**: `p.a.x` su `struct Outer { struct Inner a; };` non funziona (flattening single-level); workaround `Inner *p_a = &p.a; p_a->x`.
+- **Nested struct**: `p.a.x` su `struct Outer { struct Inner a; };` ora funziona (flattening ricorsivo). Inizializzatori list annidati `Outer o = {{1,2},3}` ancora limitati: usa assegnamenti separati.
 - **Nested struct initializer**: `{{1,2},{3,4}}` non supportato; usa assegnamenti separati.
 - Inizializzatori struct/union `{…}` oltre i casi implementati; parità ABI/padding con GCC; semantica UB del C pieno — valgono i vincoli delle procedure Kairos (es. divisori positivi dove richiesto).
 

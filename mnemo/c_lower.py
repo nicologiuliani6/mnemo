@@ -383,8 +383,20 @@ def _is_scalar_type_names(names: list[str], td: dict[str, c.Node]) -> bool:
     return tuple(ex) in _SCALAR_NAMES
 
 
-def _flatten_struct_fields(st: c.Struct, prefix: str = "") -> list[tuple[str, c.Node]]:
-    """Campi struct con annidamento inline: `struct { int y; } n` → `prefix+n__y`."""
+def _flatten_struct_fields(
+    st: c.Struct,
+    prefix: str = "",
+    *,
+    struct_specs: dict[str, list[tuple[str, c.Node]]] | None = None,
+) -> list[tuple[str, c.Node]]:
+    """Campi struct con annidamento inline: `struct { int y; } n` → `prefix+n__y`.
+
+    Se `struct_specs` viene passato, si espandono anche i campi che sono
+    riferimenti per-nome a un'altra struct già definita (`struct Inner i`),
+    producendo `prefix + i__<campo>` per ciascun campo di Inner. Senza
+    `struct_specs` si lascia il campo nested come (prefix+fname, type), come
+    in precedenza (back-compat per `union_flat_fields` / typedef pass).
+    """
     out: list[tuple[str, c.Node]] = []
     for d in st.decls or []:
         if not isinstance(d, c.Decl) or not d.name:
@@ -392,7 +404,19 @@ def _flatten_struct_fields(st: c.Struct, prefix: str = "") -> list[tuple[str, c.
         fname = str(d.name)
         cur = _strip_typedecl(d.type)
         if isinstance(cur, c.Struct) and cur.decls:
-            out.extend(_flatten_struct_fields(cur, prefix + fname + "__"))
+            out.extend(
+                _flatten_struct_fields(
+                    cur, prefix + fname + "__", struct_specs=struct_specs
+                )
+            )
+        elif (
+            struct_specs is not None
+            and isinstance(cur, c.Struct)
+            and cur.name
+            and cur.name in struct_specs
+        ):
+            for sub_fn, sub_fty in struct_specs[cur.name]:
+                out.append((prefix + fname + "__" + sub_fn, sub_fty))
         else:
             out.append((prefix + fname, d.type))
     if not out:
@@ -427,7 +451,7 @@ def _maybe_register_struct_from_typedef(name: str, type_node: c.Node, specs: dic
     u = _strip_typedecl(type_node)
     if isinstance(u, c.Struct) and u.decls:
         tag = u.name if u.name else name
-        specs[tag] = _flatten_struct_fields(u)
+        specs[tag] = _flatten_struct_fields(u, struct_specs=specs)
 
 
 def _maybe_register_union_from_typedef(
@@ -462,7 +486,7 @@ def collect_file_typedefs_structs_unions_enums(
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct):
             st = ext.type
             if st.decls and st.name:
-                specs[st.name] = _flatten_struct_fields(st)
+                specs[st.name] = _flatten_struct_fields(st, struct_specs=specs)
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Union):
             un = ext.type
             if un.decls and un.name:
@@ -5721,7 +5745,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             st = node.type
             if st.decls:
                 if st.name:
-                    ctx.struct_specs[st.name] = _flatten_struct_fields(st)
+                    ctx.struct_specs[st.name] = _flatten_struct_fields(
+                        st, struct_specs=ctx.struct_specs
+                    )
                 return []
             return []
 

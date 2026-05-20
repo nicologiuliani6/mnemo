@@ -229,7 +229,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 
 - **Bit-fields**: `unsigned x : 3;` non supportato.
 - **Anonymous struct/union**.
-- **Nested struct** (es. `struct Outer { struct Inner a; ...}`): field access `p.a.x` fallisce — flattening single-level (`a__x` non costruito). Workaround: usa puntatore al sub-struct.
+- ~~**Nested struct** (es. `struct Outer { struct Inner a; ...}`)~~: field access `p.a.x` ora supportato (flattening ricorsivo: `_flatten_struct_fields` espande sub-struct by-name in storage locals piatti `o__a__x`). Init list designato struct annidato ancora non testato a fondo.
 - **Struct con array a lunghezza variabile** (flexible array members).
 - **Nested struct initializer** (`Pair p = {{1,2},{3,4}};`): "troppi elementi" — flat init `Point p = {3,4}` OK.
 - **`offsetof`** macro.
