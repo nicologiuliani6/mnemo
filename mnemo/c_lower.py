@@ -388,6 +388,7 @@ def _flatten_struct_fields(
     prefix: str = "",
     *,
     struct_specs: dict[str, list[tuple[str, c.Node]]] | None = None,
+    typedef_map: dict[str, c.Node] | None = None,
 ) -> list[tuple[str, c.Node]]:
     """Campi struct con annidamento inline: `struct { int y; } n` → `prefix+n__y`.
 
@@ -406,7 +407,8 @@ def _flatten_struct_fields(
         if isinstance(cur, c.Struct) and cur.decls:
             out.extend(
                 _flatten_struct_fields(
-                    cur, prefix + fname + "__", struct_specs=struct_specs
+                    cur, prefix + fname + "__",
+                    struct_specs=struct_specs, typedef_map=typedef_map,
                 )
             )
         elif (
@@ -417,6 +419,33 @@ def _flatten_struct_fields(
         ):
             for sub_fn, sub_fty in struct_specs[cur.name]:
                 out.append((prefix + fname + "__" + sub_fn, sub_fty))
+        elif (
+            struct_specs is not None
+            and typedef_map is not None
+            and isinstance(cur, c.IdentifierType)
+            and len(cur.names) == 1
+            and cur.names[0] in typedef_map
+        ):
+            leaf = _follow_typedef_chain(list(cur.names), typedef_map, set())
+            if (
+                isinstance(leaf, c.Struct)
+                and leaf.name
+                and leaf.name in struct_specs
+            ):
+                for sub_fn, sub_fty in struct_specs[leaf.name]:
+                    out.append((prefix + fname + "__" + sub_fn, sub_fty))
+            elif (
+                isinstance(leaf, c.Struct)
+                and leaf.decls
+            ):
+                out.extend(
+                    _flatten_struct_fields(
+                        leaf, prefix + fname + "__",
+                        struct_specs=struct_specs, typedef_map=typedef_map,
+                    )
+                )
+            else:
+                out.append((prefix + fname, d.type))
         else:
             out.append((prefix + fname, d.type))
     if not out:
@@ -447,11 +476,18 @@ def _union_scalar_fields(un: c.Union) -> list[tuple[str, c.Node]]:
     return _union_flat_fields(un)
 
 
-def _maybe_register_struct_from_typedef(name: str, type_node: c.Node, specs: dict[str, list[tuple[str, c.Node]]]) -> None:
+def _maybe_register_struct_from_typedef(
+    name: str,
+    type_node: c.Node,
+    specs: dict[str, list[tuple[str, c.Node]]],
+    typedef_map: dict[str, c.Node] | None = None,
+) -> None:
     u = _strip_typedecl(type_node)
     if isinstance(u, c.Struct) and u.decls:
         tag = u.name if u.name else name
-        specs[tag] = _flatten_struct_fields(u, struct_specs=specs)
+        specs[tag] = _flatten_struct_fields(
+            u, struct_specs=specs, typedef_map=typedef_map
+        )
 
 
 def _maybe_register_union_from_typedef(
@@ -478,7 +514,7 @@ def collect_file_typedefs_structs_unions_enums(
     for ext in ast.ext:
         if isinstance(ext, c.Typedef):
             td[ext.name] = ext.type
-            _maybe_register_struct_from_typedef(ext.name, ext.type, specs)
+            _maybe_register_struct_from_typedef(ext.name, ext.type, specs, typedef_map=td)
             _maybe_register_union_from_typedef(ext.name, ext.type, union_specs)
             u = _strip_typedecl(ext.type)
             if isinstance(u, c.Enum) and u.values:
@@ -486,7 +522,9 @@ def collect_file_typedefs_structs_unions_enums(
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct):
             st = ext.type
             if st.decls and st.name:
-                specs[st.name] = _flatten_struct_fields(st, struct_specs=specs)
+                specs[st.name] = _flatten_struct_fields(
+                    st, struct_specs=specs, typedef_map=td
+                )
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Union):
             un = ext.type
             if un.decls and un.name:
@@ -5769,7 +5807,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if st.decls:
                 if st.name:
                     ctx.struct_specs[st.name] = _flatten_struct_fields(
-                        st, struct_specs=ctx.struct_specs
+                        st,
+                        struct_specs=ctx.struct_specs,
+                        typedef_map=ctx.typedef_map,
                     )
                 return []
             return []
