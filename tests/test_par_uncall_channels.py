@@ -2,8 +2,10 @@
 
 Verifica che:
 1. Funzioni con ssend/srecv NON ricevano opt-uncall single-call.
-2. Quando entrambi i worker di parallel2 hanno ssend/srecv, par-uncall
-   è applicato (snap mem → par → diff → par-uncall → swap).
+2. PC.c con --opt-uncall-user-calls produce esecuzione corretta (exit 0):
+   il pattern par-uncall su worker con canali è disabilitato perché
+   l'inverse VM panics con MINEQ NULL su loop counter (bug VM, da fixare
+   in vm_invert.h interaction con par-inverse cloned frames).
 3. Funzioni senza ssend/srecv ricevono opt-uncall normalmente.
 """
 
@@ -25,8 +27,12 @@ def _write_c(src: str) -> str:
 
 
 class TestParUncallChannels(unittest.TestCase):
-    def test_par_uncall_on_PC_dot_c(self) -> None:
-        """PC.c reale: parallel2(producer, consumer) → par-uncall pattern emesso."""
+    def test_PC_dot_c_opt_uncall_no_par_uncall_for_channel_workers(self) -> None:
+        """PC.c con opt-uncall: par-uncall NON emesso per producer/consumer (usano canali).
+
+        Il pattern par-uncall su worker channel-using crasha il VM (MINEQ NULL su
+        loop counter durante invert_op_to_line di frame clonato in thread inverso).
+        """
         ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pc_path = os.path.join(ROOT, "c_test", "PC.c")
         if not os.path.exists(pc_path):
@@ -34,10 +40,14 @@ class TestParUncallChannels(unittest.TestCase):
         k = compile_c_to_kairos(pc_path, opt_uncall_user_calls=True)
         has_uncall_producer = re.search(r"uncall producer\(", k) is not None
         has_uncall_consumer = re.search(r"uncall consumer\(", k) is not None
-        self.assertTrue(has_uncall_producer,
-            "PC.c parallel2 deve emettere uncall producer")
-        self.assertTrue(has_uncall_consumer,
-            "PC.c parallel2 deve emettere uncall consumer")
+        self.assertFalse(
+            has_uncall_producer,
+            "PC.c: par-uncall su producer (channel-using) deve essere disabilitato",
+        )
+        self.assertFalse(
+            has_uncall_consumer,
+            "PC.c: par-uncall su consumer (channel-using) deve essere disabilitato",
+        )
 
     def test_non_channel_fn_keeps_opt_uncall(self) -> None:
         """Funzione pure-int senza canali continua ad avere opt-uncall."""
@@ -53,6 +63,28 @@ int main(void) {
             k = compile_c_to_kairos(path, opt_uncall_user_calls=True)
             self.assertIn("uncall f(", k,
                 "Funzione int->int senza canali deve avere opt-uncall pattern")
+        finally:
+            os.unlink(path)
+
+    def test_non_channel_parallel2_keeps_par_uncall(self) -> None:
+        """parallel2 con worker senza canali continua ad avere par-uncall."""
+        src = """
+void mnemo_pthread_parallel2(void (*a)(int), void (*b)(int), int arg_a, int arg_b);
+void f(int x) { int t = x; t += 1; t -= 1; }
+void g(int x) { int t = x; t += 2; t -= 2; }
+int main(void) {
+    mnemo_pthread_parallel2(f, g, 1, 2);
+    return 0;
+}
+"""
+        path = _write_c(src)
+        try:
+            k = compile_c_to_kairos(path, opt_uncall_user_calls=True)
+            self.assertRegex(
+                k,
+                r"uncall f\(",
+                "parallel2 pure-int → par-uncall deve essere emesso",
+            )
         finally:
             os.unlink(path)
 

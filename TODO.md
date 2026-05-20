@@ -2,6 +2,38 @@
 
 ## OPEN
 
+### [P2] PC.c par-uncall correctness — PARTIAL FIX 2026-05-20
+
+Gate aggiunto: `par_uncall_eligible` ora esclude worker se in
+`channel_using_targets`. PC.c con `--opt-uncall-user-calls` ora exit=0
+(prima exit=1 con `[VM] MINEQ: variabile '__mn_lc0' è NULL` durante
+par-uncall inverse). Test aggiornato (`test_par_uncall_channels.py`)
+per asserire che producer/consumer non ricevano par-uncall.
+
+**Bug VM sottostante**: par-uncall lancia 2 thread `is_inverse=0` che
+eseguono `uncall producer`/`uncall consumer` concorrentemente. Ogni
+thread chiama `invert_op_to_line` su frame clonato (`producer@tXXX`).
+Loop counter `__mn_lc0` viene riportato NULL durante MINEQ. Probabile:
+- `op_local` per `__mn_lc0` (inverse DELOCAL) non eseguito sul clone
+  frame perché qualche path skippa l'init.
+- Oppure stesso pattern di `recursion senza parallel2`: clone frame
+  aliasing fa sì che la Var* lc0 venga liberata da un altro thread.
+
+Tentativo `__thread` su `_fa_cache`: non risolve. Cache disabilita
+diversamente: `DELOCAL valore finale errato lc1=9 atteso=0` — bug
+diverso, probabilmente loop body inversion mancante.
+
+Per ripristinare par-uncall su channel workers serve fix VM:
+1. Verificare semantica `clone_frame_for_thread` per locali (LOCAL
+   stack preservato?).
+2. Trace su quale thread vede `__mn_lc0=NULL`: producer thread può
+   essere bloccato da consumer thread che reclama lo slot?
+3. Possibilmente, sequenzializza par-uncall per channel workers
+   (snap → call f0; call f1; ... → uncall f0; uncall f1 sequenziale).
+   Questo manterrebbe symmetric channel inverse senza race su frame.
+
+Tempo stimato: 4-8 ore + design review.
+
 ### [P3] VM optimization: encrypt 5.4x → 2.30x — DONE 2026-05-19
 
 Cleanup hot path in `vm_invert.h`:

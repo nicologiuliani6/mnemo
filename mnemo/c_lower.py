@@ -2013,6 +2013,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             and f1 not in ctx.uncall_excluded_via_vm_targets
             and not _func_is_recursive_user(ctx.file_ast, f0)
             and not _func_is_recursive_user(ctx.file_ast, f1)
+            and f0 not in ctx.channel_using_targets
+            and f1 not in ctx.channel_using_targets
         )
         if par_uncall_eligible:
             snap_temps: list[tuple[int, str]] = []
