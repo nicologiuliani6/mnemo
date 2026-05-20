@@ -221,7 +221,7 @@ Mnemo compila un sottoinsieme reversibile di C. Per riferimento completo: `.curs
 ### Struct / union
 
 - **Bit-fields**: `unsigned x : 3;` non supportato.
-- **Anonymous struct/union**.
+- ~~**Anonymous struct/union**~~: supportate via AST pre-pass `_name_anonymous_structs_unions` (c_lower.py) che assegna tag `__mn_anon_struct_<N>` / `__mn_anon_union_<N>` e hoista la definizione a file-scope. Testato `generic_anonymous_struct.c`.
 - ~~**Nested struct** (es. `struct Outer { struct Inner a; ...}`)~~: field access `p.a.x` ora supportato (flattening ricorsivo: `_flatten_struct_fields` espande sub-struct by-name in storage locals piatti `o__a__x`). Init list designato struct annidato ancora non testato a fondo.
 - **Struct con array a lunghezza variabile** (flexible array members).
 - ~~**Nested struct initializer** (`Pair p = {{1,2},{3,4}};`)~~: supportato — `struct Rect r = {{1,2},{5,7}};` testato OK (`generic_nested_struct_init.c`).

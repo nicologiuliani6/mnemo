@@ -511,14 +511,18 @@ def collect_file_typedefs_structs_unions_enums(
     specs: dict[str, list[tuple[str, c.Node]]] = {}
     union_specs: dict[str, list[tuple[str, c.Node]]] = {}
     enums: dict[str, int] = {}
+    # Two-pass: prima typedef (per popolare td), poi struct/union decls
+    # (per il flatten che usa td su typedef-referenced fields).
     for ext in ast.ext:
         if isinstance(ext, c.Typedef):
             td[ext.name] = ext.type
-            _maybe_register_struct_from_typedef(ext.name, ext.type, specs, typedef_map=td)
-            _maybe_register_union_from_typedef(ext.name, ext.type, union_specs)
             u = _strip_typedecl(ext.type)
             if isinstance(u, c.Enum) and u.values:
                 enums.update(_enum_constants_from_enum(u))
+    for ext in ast.ext:
+        if isinstance(ext, c.Typedef):
+            _maybe_register_struct_from_typedef(ext.name, ext.type, specs, typedef_map=td)
+            _maybe_register_union_from_typedef(ext.name, ext.type, union_specs)
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct):
             st = ext.type
             if st.decls and st.name:
@@ -6975,6 +6979,82 @@ def _int_constant_value(node: c.Node) -> int | None:
             return None
         return -inner if node.op == "-" else inner
     return None
+
+
+def _name_anonymous_structs_unions(ast: c.FileAST) -> None:
+    """Assegna nomi sintetici a `struct {...}` / `union {...}` anonimi e hoista
+    le DEFINIZIONI inline (con `decls`) a file-scope.
+
+    `struct { int x; int y; } p;` ha `Struct(name=None, decls=[...])`. Mnemo
+    cerca i campi in `file_specs` keyed by tag; per essere registrato, la
+    definizione deve apparire a file-scope. Quindi:
+    1. Genera un tag sintetico `__mn_anon_struct_<N>` / `__mn_anon_union_<N>`.
+    2. Aggiunge `struct <TAG> { ... };` a `ast.ext` (file-scope decl).
+    3. Sostituisce la definizione inline con un riferimento `struct <TAG>`
+       (Struct con decls=None).
+    """
+    counter = [0]
+
+    def name_for(kind: str) -> str:
+        n = counter[0]
+        counter[0] += 1
+        return f"__mn_anon_{kind}_{n}"
+
+    file_scope_decls: list[c.Decl] = []
+
+    def maybe_promote_inline(s: c.Struct | c.Union) -> None:
+        """Se `s` è anonimo con decls inline, dagli un nome sintetico e sposta
+        i decls a un Decl file-scope sintetico. Skip se già aveva un name
+        (struct named, decls vanno gestiti normalmente da
+        collect_file_typedefs_structs_unions_enums)."""
+        if s.decls is None:
+            return
+        if s.name is not None:
+            return  # già named: lascia inline (Mnemo lo registra via file_specs)
+        kind = "struct" if isinstance(s, c.Struct) else "union"
+        s.name = name_for(kind)
+        # Crea una copia con decls per file-scope (mantiene rif inline = no decls).
+        if isinstance(s, c.Struct):
+            fs_su = c.Struct(name=s.name, decls=list(s.decls), coord=s.coord)
+        else:
+            fs_su = c.Union(name=s.name, decls=list(s.decls), coord=s.coord)
+        fs_decl = c.Decl(
+            name=None, quals=[], align=[], storage=[], funcspec=[],
+            type=fs_su, init=None, bitsize=None, coord=s.coord,
+        )
+        file_scope_decls.append(fs_decl)
+        # Trasforma il riferimento inline a un puro tag-ref (no decls). Mantiene
+        # struct_specs registration ok e il sito locale `struct TAG var;`.
+        s.decls = None
+
+    def visit(node: c.Node | None) -> None:
+        if node is None:
+            return
+        for attr in getattr(node, "__slots__", ()):
+            if attr in ("coord", "__weakref__"):
+                continue
+            val = getattr(node, attr, None)
+            if isinstance(val, (c.Struct, c.Union)):
+                # Recurse prima (per nested anon dentro decls), poi promote.
+                if val.decls is not None:
+                    for d in val.decls:
+                        visit(d)
+                    maybe_promote_inline(val)
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, (c.Struct, c.Union)):
+                        if item.decls is not None:
+                            for d in item.decls:
+                                visit(d)
+                            maybe_promote_inline(item)
+                    elif hasattr(item, "__slots__"):
+                        visit(item)
+            elif hasattr(val, "__slots__"):
+                visit(val)
+
+    visit(ast)
+    if file_scope_decls:
+        ast.ext = file_scope_decls + list(ast.ext)
 
 
 def _hoist_compound_literals_in_ast(ast: c.FileAST) -> None:

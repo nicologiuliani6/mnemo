@@ -6,6 +6,7 @@ from mnemo.c_lower import (
     PTHREAD_ABI_TWO_REGION_PAR,
     _hoist_compound_literals_in_ast,
     _hoist_static_locals,
+    _name_anonymous_structs_unions,
     infer_auto_lib_files,
     infer_lib_files_from_calls,
     lower_file_to_program,
@@ -197,6 +198,8 @@ def compile_c_to_kairos(
     except OSError as e:
         raise MnemoCompileError(f"file non trovato o non leggibile: {path}") from e
     ast = parse_c(path)
+    # Anonymous struct/union: `struct { ... } p;` → assegna tag sintetico.
+    _name_anonymous_structs_unions(ast)
     # CompoundLiteral hoist: `(T[]){...}` → Decl sintetico nel body della funzione
     # contenente. Deve girare PRIMA di `compute_program_mem_layout` così le celle
     # vengono allocate per gli array sintetici.
