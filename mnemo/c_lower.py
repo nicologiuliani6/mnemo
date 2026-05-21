@@ -385,6 +385,33 @@ def _is_scalar_type_names(names: list[str], td: dict[str, c.Node]) -> bool:
     return tuple(ex) in _SCALAR_NAMES
 
 
+def _ptr_struct_tag(type_node: object, ctx: object) -> str | None:
+    """Se `type_node` è un PtrDecl che punta a una struct (anche via typedef),
+    ritorna il tag della struct; altrimenti None."""
+    if not isinstance(type_node, c.PtrDecl):
+        return None
+    inner = type_node.type
+    if not isinstance(inner, c.TypeDecl):
+        return None
+    if isinstance(inner.type, c.Struct) and inner.type.name:
+        return inner.type.name
+    if isinstance(inner.type, c.IdentifierType):
+        tdmap = getattr(ctx, "typedef_map", {})
+        for tn in inner.type.names:
+            td = tdmap.get(tn)
+            if td is None:
+                continue
+            if isinstance(td, c.Struct) and td.name:
+                return td.name
+            if (
+                isinstance(td, c.TypeDecl)
+                and isinstance(td.type, c.Struct)
+                and td.type.name
+            ):
+                return td.type.name
+    return None
+
+
 def _flatten_struct_fields(
     st: c.Struct,
     prefix: str = "",
@@ -7010,6 +7037,41 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 f"array[…]: assegnamento con {node.op!r} non supportato"
             )
         if isinstance(node.lvalue, c.UnaryOp) and node.lvalue.op == "*":
+            # `*q = *p;` su struct: espandi in copia per-campo via `q->f = p->f`.
+            # Richiede entrambi i puntatori a struct dello stesso tag.
+            if (
+                node.op == "="
+                and isinstance(node.lvalue.expr, c.ID)
+                and isinstance(node.rvalue, c.UnaryOp)
+                and node.rvalue.op == "*"
+                and isinstance(node.rvalue.expr, c.ID)
+            ):
+                q_log = _scope_resolve(ctx, node.lvalue.expr.name)
+                p_log = _scope_resolve(ctx, node.rvalue.expr.name)
+                tag_q = _ptr_struct_tag(ctx.var_types.get(q_log), ctx)
+                tag_p = _ptr_struct_tag(ctx.var_types.get(p_log), ctx)
+                if (
+                    tag_q is not None
+                    and tag_q == tag_p
+                    and tag_q in ctx.struct_specs
+                ):
+                    out_struct: list[Instr] = []
+                    for fname, _fty in ctx.struct_specs[tag_q]:
+                        lhs_ref = c.StructRef(
+                            c.ID(node.lvalue.expr.name, node.coord),
+                            "->",
+                            c.ID(fname, node.coord),
+                            node.coord,
+                        )
+                        rhs_ref = c.StructRef(
+                            c.ID(node.rvalue.expr.name, node.coord),
+                            "->",
+                            c.ID(fname, node.coord),
+                            node.coord,
+                        )
+                        sub = c.Assignment("=", lhs_ref, rhs_ref, node.coord)
+                        out_struct.extend(_lower_stmt(sub, ctx))
+                    return out_struct
             ei_p, op_p, tm_p = _eval_expr(node.lvalue.expr, ctx)
             if isinstance(op_p, Imm):
                 tmp = ctx.fresh_temp()
