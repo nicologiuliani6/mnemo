@@ -50,8 +50,6 @@ Tempo stimato: 6-10h + design review.
   `_flatten_struct_fields` + `array_info` per i campi array.
 - **Array di struct** (`struct P arr[10]`): non supportato (errore
   "array: elemento supportato solo se scalare").
-- **`struct V t = *p;`**: inizializzazione struct via deref puntatore
-  non implementata. (`*q = *p;` ora espande in copia per-campo.)
 
 ### Stdlib
 

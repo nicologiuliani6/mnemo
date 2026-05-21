@@ -6593,6 +6593,36 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         for fn, _ in fields
                     ]
                     return _lower_funccall_with_ret(norm_sc, ctx, sinks)
+                # `struct V t = *p;` — init da deref struct-ptr.
+                if (
+                    isinstance(node.init, c.UnaryOp)
+                    and node.init.op == "*"
+                    and isinstance(node.init.expr, c.ID)
+                ):
+                    p_log = _scope_resolve(ctx, node.init.expr.name)
+                    tag_p = _ptr_struct_tag(ctx.var_types.get(p_log), ctx)
+                    if tag_p == st_tag and tag_p in ctx.struct_specs:
+                        out_init: list[Instr] = []
+                        for fn_i, fty_i in ctx.struct_specs[tag_p]:
+                            if _type_node_is_pthread_mutex(fty_i, ctx.typedef_map):
+                                continue
+                            lhs_ref = c.StructRef(
+                                c.ID(logical, node.coord),
+                                ".",
+                                c.ID(fn_i, node.coord),
+                                node.coord,
+                            )
+                            rhs_ref = c.StructRef(
+                                c.ID(node.init.expr.name, node.coord),
+                                "->",
+                                c.ID(fn_i, node.coord),
+                                node.coord,
+                            )
+                            sub_init = c.Assignment(
+                                "=", lhs_ref, rhs_ref, node.coord
+                            )
+                            out_init.extend(_lower_stmt(sub_init, ctx))
+                        return out_init
                 if not isinstance(node.init, c.InitList):
                     raise MnemoCompileError("init struct: serve `{ ... }`")
                 has_named_s = any(
