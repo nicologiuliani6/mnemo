@@ -1084,16 +1084,24 @@ def _array_elem_local(base: str, linear: int) -> str:
     return f"__mn_arr_{base}_{linear}"
 
 
-def _eval_const_int_expr(node: c.Node) -> int | None:
+def _eval_const_int_expr(node: c.Node, ctx: object | None = None) -> int | None:
     """Const-folding ricorsivo per espressioni intere: Constant, UnaryOp
     `- + ~ !`, BinaryOp aritmetici/bitwise/comparison, Cast a int, ternario.
+    Se `ctx` è fornito, valuta anche `sizeof(type)` / `sizeof(expr)`.
     None se non valutabile a compile-time."""
     if isinstance(node, c.Constant):
         return _int_constant_value(node)
     if isinstance(node, c.UnaryOp):
         if node.op == "sizeof":
-            return None
-        v = _eval_const_int_expr(node.expr)
+            if ctx is None:
+                return None
+            try:
+                if isinstance(node.expr, c.Typename):
+                    return _sizeof_of_c_type_node(node.expr.type, ctx)
+                return _sizeof_of_c_type_node(node.expr, ctx)
+            except (MnemoCompileError, AttributeError, KeyError):
+                return None
+        v = _eval_const_int_expr(node.expr, ctx)
         if v is None:
             return None
         if node.op == "-":
@@ -1106,8 +1114,8 @@ def _eval_const_int_expr(node: c.Node) -> int | None:
             return 1 if v == 0 else 0
         return None
     if isinstance(node, c.BinaryOp):
-        l = _eval_const_int_expr(node.left)
-        r = _eval_const_int_expr(node.right)
+        l = _eval_const_int_expr(node.left, ctx)
+        r = _eval_const_int_expr(node.right, ctx)
         if l is None or r is None:
             return None
         op = node.op
@@ -1154,19 +1162,21 @@ def _eval_const_int_expr(node: c.Node) -> int | None:
             return 1 if l != r else 0
         return None
     if isinstance(node, c.Cast):
-        return _eval_const_int_expr(node.expr)
+        return _eval_const_int_expr(node.expr, ctx)
     if isinstance(node, c.TernaryOp):
-        cv = _eval_const_int_expr(node.cond)
+        cv = _eval_const_int_expr(node.cond, ctx)
         if cv is None:
             return None
-        return _eval_const_int_expr(node.iftrue if cv != 0 else node.iffalse)
+        return _eval_const_int_expr(
+            node.iftrue if cv != 0 else node.iffalse, ctx
+        )
     return None
 
 
-def _array_dim_const(dim: c.Node | None) -> int:
+def _array_dim_const(dim: c.Node | None, ctx: object | None = None) -> int:
     if dim is None:
         raise MnemoCompileError("array: dimensione mancante")
-    n = _eval_const_int_expr(dim)
+    n = _eval_const_int_expr(dim, ctx)
     if n is None:
         raise MnemoCompileError("array: la dimensione deve essere una costante intera")
     if n < 1:
@@ -1239,9 +1249,9 @@ def _try_parse_array_decl(
                 s = _literal_c_string(init)
                 dims.append(len(s.encode("utf-8")) + 1)
             else:
-                dims.append(_array_dim_const(cur.dim))
+                dims.append(_array_dim_const(cur.dim, ctx))
         else:
-            dims.append(_array_dim_const(cur.dim))
+            dims.append(_array_dim_const(cur.dim, ctx))
         cur = cur.type
         first = False
     if not dims:
@@ -3793,7 +3803,7 @@ def _sizeof_of_c_type_node(node: c.Node, ctx: _Ctx) -> int:
     if isinstance(node, c.PtrDecl):
         return _SIZEOF_POINTER
     if isinstance(node, c.ArrayDecl):
-        n = _array_dim_const(node.dim)
+        n = _array_dim_const(node.dim, ctx)
         return n * _sizeof_of_c_type_node(node.type, ctx)
     if isinstance(node, c.TypeDecl):
         if isinstance(node.type, c.IdentifierType):
