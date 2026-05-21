@@ -4092,9 +4092,25 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             if isinstance(inner, c.UnaryOp) and inner.op == "*":
                 # `sizeof(*p)` su puntatore int → 4.
                 return [], Imm(_SIZEOF_SCALAR), []
+            if isinstance(inner, c.Constant):
+                # `sizeof(letterale)`: dimensione del tipo della costante.
+                if inner.type == "string":
+                    s = _literal_c_string(inner)
+                    return [], Imm(len(s.encode("utf-8")) + 1), []
+                if inner.type == "char":
+                    # gcc: sizeof('a') == sizeof(int) (promozione), Mnemo coerente.
+                    return [], Imm(_SIZEOF_SCALAR), []
+                return [], Imm(_SIZEOF_SCALAR), []
+            if isinstance(inner, c.Cast):
+                # `sizeof((T)x)` = sizeof(T).
+                return [], Imm(_sizeof_of_c_type_node(inner.to_type, ctx)), []
+            if isinstance(inner, (c.BinaryOp, c.TernaryOp, c.FuncCall)):
+                # Espressioni aritmetiche → sizeof(int).
+                return [], Imm(_SIZEOF_SCALAR), []
             raise MnemoCompileError(
                 "sizeof: supportati solo `sizeof (tipo)`, `sizeof nome_variabile`, "
-                "`sizeof a[i]`, `sizeof s.campo`, `sizeof *p`"
+                "`sizeof a[i]`, `sizeof s.campo`, `sizeof *p`, "
+                "`sizeof <espr-aritmetica>`, `sizeof <letterale>`"
             )
         if expr.op == "&":
             inner = expr.expr
