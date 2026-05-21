@@ -552,10 +552,59 @@ def _enum_constants_from_enum(en: c.Enum) -> dict[str, int]:
     out: dict[str, int] = {}
     for ev in en.values.enumerators:
         if ev.value is not None:
-            cur = _const_int(ev.value)
+            cur = _eval_enum_init(ev.value, out)
         out[ev.name] = cur
         cur += 1
     return out
+
+
+def _eval_enum_init(node: c.Node, prev: dict[str, int]) -> int:
+    """Valuta a compile-time il valore di un enumeratore. Supporta Constant,
+    UnaryOp `-`/`+`/`~`/`!`, BinaryOp aritmetici/bit/shift/cmp, ID che
+    referenzia un enumeratore precedente (lookup in `prev`)."""
+    if isinstance(node, c.Constant):
+        return _literal_int_widen(node)
+    if isinstance(node, c.ID):
+        if node.name in prev:
+            return prev[node.name]
+        raise MnemoCompileError(f"enum init: identifier {node.name!r} non risolto")
+    if isinstance(node, c.UnaryOp):
+        v = _eval_enum_init(node.expr, prev)
+        if node.op == "-":
+            return -v
+        if node.op == "+":
+            return v
+        if node.op == "~":
+            return ~v
+        if node.op == "!":
+            return 1 if v == 0 else 0
+        raise MnemoCompileError(f"enum init: unary {node.op!r} non supportato")
+    if isinstance(node, c.BinaryOp):
+        a = _eval_enum_init(node.left, prev)
+        b = _eval_enum_init(node.right, prev)
+        op = node.op
+        if op == "+": return a + b
+        if op == "-": return a - b
+        if op == "*": return a * b
+        if op == "/": return a // b if b else 0
+        if op == "%": return a % b if b else 0
+        if op == "|": return a | b
+        if op == "&": return a & b
+        if op == "^": return a ^ b
+        if op == "<<": return a << b
+        if op == ">>": return a >> b
+        if op == "==": return int(a == b)
+        if op == "!=": return int(a != b)
+        if op == "<":  return int(a < b)
+        if op == ">":  return int(a > b)
+        if op == "<=": return int(a <= b)
+        if op == ">=": return int(a >= b)
+        if op == "&&": return int(bool(a) and bool(b))
+        if op == "||": return int(bool(a) or bool(b))
+        raise MnemoCompileError(f"enum init: binary {op!r} non supportato")
+    raise MnemoCompileError(
+        f"enum init: nodo {type(node).__name__} non supportato"
+    )
 
 
 @dataclass
@@ -1044,6 +1093,8 @@ def _sizeof_array_element_type(cur: c.Node, ctx: _Ctx) -> int | None:
         return None
     if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.IdentifierType):
         return _sizeof_of_c_type_node(cur, ctx)
+    if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.Enum):
+        return _SIZEOF_SCALAR
     return None
 
 
@@ -7312,7 +7363,7 @@ def _hoist_compound_literals(funcdef: c.FuncDef) -> list[c.Decl]:
 
 
 def _scalar_int_decl_name_for_init(decl: c.Decl, file_td: dict[str, c.Node]) -> str | None:
-    """Se `decl` è un Decl scalare `int`/typedef-of-int (no struct/union/array/ptr),
+    """Se `decl` è un Decl scalare `int`/typedef-of-int/enum (no struct/union/array/ptr),
     ritorna il nome del declarator; altrimenti None. Usato per inferire i Decl
     file-scope che supportano init Constant."""
     if decl.init is None or decl.name is None:
@@ -7325,6 +7376,8 @@ def _scalar_int_decl_name_for_init(decl: c.Decl, file_td: dict[str, c.Node]) -> 
         names = inner.names
         if _is_scalar_type_names(names, file_td):
             return decl.name
+    if isinstance(inner, c.Enum):
+        return decl.name
     return None
 
 
@@ -7840,11 +7893,14 @@ def lower_file_to_program(
                 pn = _phys(ctx, cell_name)
                 instrs.append(IAddEq(pn, Imm(v)))
             continue
-        # Solo scalar int / typedef-of-int con init Constant non-zero supportato qui.
+        # Solo scalar int / typedef-of-int / enum con init Constant non-zero.
         nm = _scalar_int_decl_name_for_init(ext, file_td)
         if nm is None:
             continue
-        val = _int_constant_value(ext.init)
+        init_expr = ext.init
+        val: int | None = _int_constant_value(init_expr)
+        if val is None and isinstance(init_expr, c.ID):
+            val = ctx.enum_constants.get(init_expr.name)
         if val is None or val == 0:
             continue
         pn = _phys(ctx, nm)
