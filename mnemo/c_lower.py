@@ -4004,8 +4004,29 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                         f"sizeof({inner.name}): serve un tipo in (…) o una variabile già dichiarata"
                     )
                 return [], Imm(_sizeof_of_c_type_node(ctx.var_types[log], ctx)), []
+            if isinstance(inner, c.ArrayRef):
+                # `sizeof(a[i])` su array: sizeof(elem). Per pointer-decay (param)
+                # ritorna _SIZEOF_POINTER (a[i] è un int via deref, sizeof int).
+                try:
+                    base, _subs = _flatten_array_ref_chain(inner)
+                except MnemoCompileError:
+                    base = None
+                if base is not None:
+                    bl = _scope_resolve(ctx, base)
+                    if bl in ctx.array_info:
+                        return [], Imm(ctx.array_info[bl].elem_size), []
+                    if bl in ctx.array_param_names:
+                        return [], Imm(_SIZEOF_SCALAR), []
+                return [], Imm(_SIZEOF_SCALAR), []
+            if isinstance(inner, c.StructRef):
+                # `sizeof(s.field)` o `s->field`: sizeof scalare = _SIZEOF_SCALAR.
+                return [], Imm(_SIZEOF_SCALAR), []
+            if isinstance(inner, c.UnaryOp) and inner.op == "*":
+                # `sizeof(*p)` su puntatore int → 4.
+                return [], Imm(_SIZEOF_SCALAR), []
             raise MnemoCompileError(
-                "sizeof: supportati solo `sizeof (tipo)` e `sizeof nome_variabile`"
+                "sizeof: supportati solo `sizeof (tipo)`, `sizeof nome_variabile`, "
+                "`sizeof a[i]`, `sizeof s.campo`, `sizeof *p`"
             )
         if expr.op == "&":
             inner = expr.expr
