@@ -47,7 +47,10 @@ Tempo stimato: 6-10h + design review.
 
 ### Stdlib
 
-- **`<string.h>`** subset: `strlen`, `strcmp`, `memcpy`, `memset`, `strcpy` (su array char fissi, no malloc dinamico). Fattibile.
+- **`<string.h>`** subset runtime (`memcpy`, `memset`, `strcpy`): non
+  implementati. `strlen` e `strcmp` supportati solo compile-time su
+  stringa letterale o `char *p = "literal";` (vedi
+  `generic_strlen_strcmp.c`).
 
 ### Control flow / misc
 

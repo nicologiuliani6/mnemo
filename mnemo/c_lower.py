@@ -640,6 +640,8 @@ class _Ctx:
     local_partition1_read_logicals: set[str] = field(default_factory=set)
     # char* = "…" → mappa nome puntatore → base array `__mn_ros_*` (per printf %s su quella variabile).
     char_ptr_string_base: dict[str, str] = field(default_factory=dict)
+    """char* = \"literal\" → valore originale della stringa (per strlen/strcmp compile-time)."""
+    char_ptr_string_value: dict[str, str] = field(default_factory=dict)
     """Slot logici dichiarati come puntatore a funzione (`int (*p)(int)`)."""
     func_ptr_vars: set[str] = field(default_factory=set)
     """Puntatore a funzione (nome logico) → nome procedura risolto a compile-time."""
@@ -3290,6 +3292,47 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
     return out
 
 
+def _string_literal_value_of(expr: c.Node, ctx: _Ctx) -> str | None:
+    """Restituisce il valore della stringa se `expr` è una stringa letterale
+    o un `char *p = \"literal\";` con init costante. Altrimenti None."""
+    if isinstance(expr, c.Constant) and expr.type == "string":
+        return _literal_c_string(expr)
+    if isinstance(expr, c.ID):
+        log = _scope_resolve(ctx, expr.name)
+        if log in ctx.char_ptr_string_value:
+            return ctx.char_ptr_string_value[log]
+    return None
+
+
+def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
+    """`strlen(\"…\")` / `strlen(p)` (p inizializzato da literal) → len.
+    `strcmp(a, b)` su due literal → sign(memcmp). None se runtime."""
+    name = call.name.name
+    args = call.args.exprs if call.args is not None else []
+    if name == "strlen":
+        if len(args) != 1:
+            return None
+        sv = _string_literal_value_of(args[0], ctx)
+        if sv is None:
+            return None
+        return len(sv.encode("utf-8"))
+    if name == "strcmp":
+        if len(args) != 2:
+            return None
+        a = _string_literal_value_of(args[0], ctx)
+        b = _string_literal_value_of(args[1], ctx)
+        if a is None or b is None:
+            return None
+        ba = a.encode("utf-8")
+        bb = b.encode("utf-8")
+        if ba < bb:
+            return -1
+        if ba > bb:
+            return 1
+        return 0
+    return None
+
+
 def _resolve_offsetof_args(expr: c.FuncCall, ctx: _Ctx) -> int:
     """Resolve `__mn_offsetof_str("T-spec", "member-path")` → field-index * _SIZEOF_SCALAR.
 
@@ -4152,6 +4195,10 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
     if isinstance(expr, c.FuncCall):
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
+        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp"):
+            res = _try_eval_string_builtin(expr, ctx)
+            if res is not None:
+                return [], Imm(res), []
         expr, name = _resolve_indirect_callee(expr, ctx)
         if name == "malloc":
             if name not in ctx.extern_procs:
@@ -6300,6 +6347,12 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ctx.decl_order.append(logical)
                 ctx.var_types[logical] = node.type
                 ctx.char_ptr_string_base[logical] = sbase
+                try:
+                    ctx.char_ptr_string_value[logical] = b.decode("utf-8")
+                except UnicodeDecodeError:
+                    ctx.char_ptr_string_value[logical] = b.decode(
+                        "utf-8", errors="replace"
+                    )
                 out: list[Instr] = []
                 for i, byte in enumerate(b):
                     out.extend(
