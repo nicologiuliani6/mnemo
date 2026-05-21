@@ -3134,8 +3134,12 @@ def _char_ptr_string_literal_meta(
 
 def _parse_printf_format(fmt: str) -> list[tuple]:
     """
-    Segmenti printf: ('lit', testo), ('c',), ('d',), ('u',), ('x',), ('p',), ('s',).
-    `%%` → ('lit', '%').
+    Segmenti printf: ('lit', testo), ('c',), ('d', flags, width), ('u', ...),
+    ('x', ...), ('o', ...), ('p',), ('s',). `%%` → ('lit', '%').
+
+    `flags` è un sottoinsieme di {'-', '0'}. `width` è int (0 = nessuna).
+    Per ora il padding viene applicato solo agli argomenti costanti;
+    per i runtime, width/flags vengono ignorati silenziosamente.
     """
     out: list[tuple] = []
     i = 0
@@ -3145,9 +3149,24 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             if buf:
                 out.append(("lit", "".join(buf)))
                 buf = []
-            # Length modifiers (no-op nel word-VM): `l`, `ll`, `h`, `hh`,
-            # `z`, `j`, `t`. Salta prima di leggere la conversion specifier.
             j = i + 1
+            # Flags: `-`, `+`, ` `, `#`, `0` (riconosciuti, ma usiamo solo `-`/`0`).
+            flags = set()
+            while j < len(fmt) and fmt[j] in ("-", "+", " ", "#", "0"):
+                if fmt[j] in ("-", "0"):
+                    flags.add(fmt[j])
+                j += 1
+            # Width (cifre decimali; ignoriamo `*` runtime).
+            width = 0
+            while j < len(fmt) and fmt[j].isdigit():
+                width = width * 10 + int(fmt[j])
+                j += 1
+            # Precision `.N` — ignorata per ora (no `%.3d` reale).
+            if j < len(fmt) and fmt[j] == ".":
+                j += 1
+                while j < len(fmt) and fmt[j].isdigit():
+                    j += 1
+            # Length modifiers (no-op nel word-VM): `l`, `ll`, `h`, `hh`, `z`, `j`, `t`.
             while j < len(fmt) and fmt[j] in ("l", "h", "z", "j", "t"):
                 j += 1
             if j >= len(fmt):
@@ -3160,13 +3179,13 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             elif spec == "c":
                 out.append(("c",))
             elif spec in ("d", "i"):
-                out.append(("d",))
+                out.append(("d", frozenset(flags), width))
             elif spec == "u":
-                out.append(("u",))
+                out.append(("u", frozenset(flags), width))
             elif spec == "x":
-                out.append(("x",))
+                out.append(("x", frozenset(flags), width))
             elif spec == "o":
-                out.append(("o",))
+                out.append(("o", frozenset(flags), width))
             elif spec == "p":
                 out.append(("p",))
             elif spec == "s":
@@ -3174,7 +3193,7 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             else:
                 raise MnemoCompileError(
                     f"printf: conversione non supportata %{spec!r} "
-                    f"(supportati %%c %%d %%i %%u %%x %%p %%s %%%% e testo)"
+                    f"(supportati %%c %%d %%i %%u %%x %%o %%p %%s %%%% e testo)"
                 )
             i = j + 1
         else:
@@ -3183,6 +3202,20 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
     if buf:
         out.append(("lit", "".join(buf)))
     return out
+
+
+def _printf_pad(s: str, flags: frozenset, width: int) -> str:
+    """Applica padding stile printf su una stringa già formattata."""
+    if width <= 0 or len(s) >= width:
+        return s
+    if "-" in flags:
+        return s + " " * (width - len(s))
+    if "0" in flags:
+        # `0` non si applica a stringhe negative speciali; usalo solo su numeri.
+        if s.startswith("-"):
+            return "-" + "0" * (width - len(s)) + s[1:]
+        return "0" * (width - len(s)) + s
+    return " " * (width - len(s)) + s
 
 
 def _ir_emit_byte_as_show_char(
@@ -3281,9 +3314,12 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
         elif k in ("d", "u"):
             ex = exprs[arg_i]
             arg_i += 1
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                for ch in str(val):
+                s = _printf_pad(str(val), flags, width)
+                for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                     out.extend(ins)
                     tm_acc.extend(tt)
@@ -3291,7 +3327,8 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    for ch in str(op.value):
+                    s = _printf_pad(str(op.value), flags, width)
+                    for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                         out.extend(ins)
                         tm_acc.extend(tt)
@@ -3309,9 +3346,12 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
         elif k == "x":
             ex = exprs[arg_i]
             arg_i += 1
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                for ch in _format_hex_u32(val):
+                s = _printf_pad(_format_hex_u32(val), flags, width)
+                for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                     out.extend(ins)
                     tm_acc.extend(tt)
@@ -3319,7 +3359,8 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    for ch in _format_hex_u32(op.value):
+                    s = _printf_pad(_format_hex_u32(op.value), flags, width)
+                    for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                         out.extend(ins)
                         tm_acc.extend(tt)
@@ -3337,9 +3378,12 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
         elif k == "o":
             ex = exprs[arg_i]
             arg_i += 1
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                for ch in _format_oct_u32(val):
+                s = _printf_pad(_format_oct_u32(val), flags, width)
+                for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                     out.extend(ins)
                     tm_acc.extend(tt)
@@ -3347,7 +3391,8 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    for ch in _format_oct_u32(op.value):
+                    s = _printf_pad(_format_oct_u32(op.value), flags, width)
+                    for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                         out.extend(ins)
                         tm_acc.extend(tt)
