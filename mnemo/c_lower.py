@@ -6770,6 +6770,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         rhs_init = node.init
         if isinstance(rhs_init, c.ExprList):
             rhs_init = _fold_exprlist_as_comma_chain(rhs_init)
+        # `const char *b = a;` con `a` char_ptr noto: eredita il binding stringa
+        # così `printf("%s", b)` continua a funzionare.
+        if isinstance(rhs_init, c.ID):
+            src_log = _scope_resolve(ctx, rhs_init.name)
+            if src_log in ctx.char_ptr_string_base:
+                ctx.char_ptr_string_base[logical] = ctx.char_ptr_string_base[src_log]
+            if src_log in ctx.char_ptr_string_value:
+                ctx.char_ptr_string_value[logical] = ctx.char_ptr_string_value[src_log]
         return _lower_assign(_phys(ctx, logical), rhs_init, ctx)
 
     if isinstance(node, c.Assignment):
