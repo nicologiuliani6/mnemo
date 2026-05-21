@@ -41,8 +41,17 @@ Tempo stimato: 6-10h + design review.
 
 ### Struct / union
 
-- **Bit-fields**: `unsigned x : 3;`.
+- **Bit-fields**: `unsigned x : 3;` (valori che stanno nel range
+  funzionano accidentalmente; truncamento sui bit non implementato).
 - **Flexible array members** (struct con `int a[];` finale).
+- **Array come campo struct** (`struct Box { int data[4]; }`): le
+  scritture `b.data[i] = X` non landano perché Mnemo alloca un
+  singolo slot per il campo invece di N. Richiede modifica
+  `_flatten_struct_fields` + `array_info` per i campi array.
+- **Array di struct** (`struct P arr[10]`): non supportato (errore
+  "array: elemento supportato solo se scalare").
+- **`*p = *q` su struct/`struct V t = *p;`**: copia struct via
+  deref puntatore non implementata.
 
 ### Stdlib
 
@@ -53,13 +62,25 @@ Tempo stimato: 6-10h + design review.
 
 ### Control flow / misc
 
-- **Direct self-recursion da main** (`int fib(int n){return fib(n-1)+fib(n-2);}` chiamata da main senza parallel2 wrap). Vedi opt-uncall self-rec sopra.
+- **Direct self-recursion da main** (`int fib(int n){return fib(n-1)+fib(n-2);}` chiamata da main senza parallel2 wrap). Vedi opt-uncall self-rec sopra. Anche `gcd(a,b)` ricorsiva ritorna risultato sbagliato — recursion + return-inside-if non si compone bene.
+- **`return` dentro `switch`/`if`**: la VM reversibile non ha early-exit. `case X: return V;` non propaga V al caller (return diventa no-op se non è l'ultima istruzione). Workaround: `int r; switch{...r=V; break;...} return r;`.
+- **`continue` dentro `if` dentro `while`/`for`**: rompe IF/FI reversibile se l'if-then muta la guardia. Mnemo emette "[VM] IF/FI non reversibile".
+- **Stato muta-guardia in loop** (state machines): `switch(state) { case 0: state=1; break; ...}` dentro while: la guardia non è più vera all'uscita del case.
 - **`_Generic`** (C11). Compile-time, fattibile via AST pre-pass.
+- **Aritmetica negativa**: `a * b` con `b<0` cicla infinito (`__mn_mul_into` assume b>=0). Stesso problema su `/` e `%` con dividendo negativo. Serve nuova `mul_signed.kairos` / `divmod_signed.kairos`.
 
 ### Semantica reversibile
 
 - **Memory aliasing arbitrario**: caller-callee aliasing tra mem cells non sempre supportato.
 - **Side effects con risultato non-restored**: `x = f(x)` dove `f` ha side-effect richiede uncall implicit (non ancora wired).
+- **Assignment-as-expression**: `int a = (x = 5);` non compila (mnemo: "espressione AST non supportata: Assignment"). C lo permette ma serve un valore di ritorno dall'assignment, complicato in reversibile.
+
+### printf
+
+- **printf `%s` con argomento runtime** (non letterale né `char *x = "lit"`): non supportato. Le stringhe come parametri funzione/variabili dinamiche non hanno binding al payload bytes nella VM.
+- **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (no reinterpretazione 2-complement → `2^32 + val`). Su `unsigned` non-negativi funziona.
+- **printf `%o` runtime**: argomento variabile non supportato (manca `__mn_puto`/`puto.kairos` analoga a `putd_uint`).
+- **printf width/flags su argomento runtime**: ignorati silenziosamente (il padding va computato carattere-per-carattere dopo aver conosciuto la magnitudine, complicato).
 
 ---
 
