@@ -7016,7 +7016,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
                     }
                 )
         if isinstance(node, c.Assignment):
-            if node.op in ("<<=", ">>=", "&=", "|="):
+            if node.op in ("<<=", ">>=", "&=", "|=", "^="):
                 needed.update(
                     {
                         "helpers.kairos",
@@ -7025,6 +7025,14 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
                         "bits.kairos",
                     }
                 )
+            elif node.op == "*=":
+                needed.add("mul.kairos")
+            elif node.op == "/=":
+                needed.add("helpers.kairos")
+                needed.add("divmod.kairos")
+            elif node.op == "%=":
+                needed.add("helpers.kairos")
+                needed.add("mod.kairos")
         if isinstance(node, c.BinaryOp):
             if node.op == "*":
                 needed.add("mul.kairos")
