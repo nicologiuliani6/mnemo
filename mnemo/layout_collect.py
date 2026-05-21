@@ -892,6 +892,15 @@ def compute_program_mem_layout(
             st = node.type
             if st.decls and st.name:
                 ctx.struct_specs[st.name] = L._flatten_struct_fields(st)
+                for d in st.decls or []:
+                    if (
+                        isinstance(d, c.Decl)
+                        and d.name
+                        and getattr(d, "bitsize", None) is not None
+                    ):
+                        bw = L._eval_const_int_expr(d.bitsize)
+                        if bw is not None and 1 <= bw <= 32:
+                            ctx.struct_field_bits[(st.name, str(d.name))] = bw
             return
 
         ut = L._union_tag_for_decl_type(node.type, ctx)

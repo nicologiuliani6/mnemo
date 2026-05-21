@@ -571,6 +571,31 @@ def collect_file_typedefs_structs_unions_enums(
     return td, specs, union_specs, enums
 
 
+def collect_file_struct_field_bits(
+    ast: c.FileAST,
+) -> dict[tuple[str, str], int]:
+    """Bit-width per bit-field `unsigned x : N` di ogni struct file-scope.
+    Chiave (tag, field-name) → numero di bit. Solo campi non-nested."""
+    out: dict[tuple[str, str], int] = {}
+    for ext in ast.ext:
+        if (
+            isinstance(ext, c.Decl)
+            and isinstance(ext.type, c.Struct)
+            and ext.type.name
+            and ext.type.decls
+        ):
+            for d in ext.type.decls:
+                if (
+                    isinstance(d, c.Decl)
+                    and d.name
+                    and getattr(d, "bitsize", None) is not None
+                ):
+                    bw = _eval_const_int_expr(d.bitsize)
+                    if bw is not None and 1 <= bw <= 32:
+                        out[(ext.type.name, str(d.name))] = bw
+    return out
+
+
 def collect_file_typedefs_and_structs(
     ast: c.FileAST,
 ) -> tuple[dict[str, c.Node], dict[str, list[tuple[str, c.Node]]]]:
@@ -688,6 +713,8 @@ class _Ctx:
     array_info: dict[str, _ArrayInfo] = field(default_factory=dict)
     typedef_map: dict[str, c.Node] = field(default_factory=dict)
     struct_specs: dict[str, list[tuple[str, c.Node]]] = field(default_factory=dict)
+    """(tag, field-name) → bit-width per bit-field `unsigned x : N`."""
+    struct_field_bits: dict[tuple[str, str], int] = field(default_factory=dict)
     """Variabile C → tag struct per `sizeof(v)` e accessi campo."""
     struct_tag_of_var: dict[str, str] = field(default_factory=dict)
     """Parametri dichiarati come `int a[]` / `int a[N]` (decay a puntatore)."""
@@ -6628,6 +6655,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         struct_specs=ctx.struct_specs,
                         typedef_map=ctx.typedef_map,
                     )
+                    for d in st.decls or []:
+                        if (
+                            isinstance(d, c.Decl)
+                            and d.name
+                            and getattr(d, "bitsize", None) is not None
+                        ):
+                            bw = _eval_const_int_expr(d.bitsize)
+                            if bw is not None and 1 <= bw <= 32:
+                                ctx.struct_field_bits[(st.name, str(d.name))] = bw
                 return []
             return []
 
@@ -7153,8 +7189,20 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if not spec or mangled not in [fn for fn, _ in spec]:
                 raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
             cell = _struct_field_local(base_log, mangled)
+            # Bit-field: trunca rvalue a (1<<N)-1 bit. Solo se rhs è
+            # costante a compile-time: il caso runtime richiederebbe `&`
+            # via bits.kairos che è O(2^N) e blocca su valori non banali.
+            bw = ctx.struct_field_bits.get((tag, mangled))
+            rv_used = node.rvalue
+            if bw is not None and 1 <= bw < 32:
+                rv_const = _eval_const_int_expr(node.rvalue)
+                if rv_const is not None:
+                    mask = (1 << bw) - 1
+                    rv_used = c.Constant(
+                        "int", str(rv_const & mask), node.coord
+                    )
             if node.op == "=":
-                return _lower_assign(_phys(ctx, cell), node.rvalue, ctx)
+                return _lower_assign(_phys(ctx, cell), rv_used, ctx)
             if node.op in _COMPOUND_ASSIGN_OPS:
                 coord = node.coord
                 rhs = c.BinaryOp(
@@ -7731,6 +7779,7 @@ def _lower_user_function(
     channel_using_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
+    file_field_bits: dict[tuple[str, str], int] | None = None,
 ) -> Function:
     name = fdef.decl.name
     fd = fdef.decl.type
@@ -7758,6 +7807,7 @@ def _lower_user_function(
         ptr_pool_size=ptr_pool_size,
         typedef_map=dict(file_td),
         struct_specs=dict(file_specs),
+        struct_field_bits=dict(file_field_bits or {}),
         union_specs=dict(file_unions),
         enum_constants=dict(file_enums),
         mem_layout=layout,
@@ -8253,6 +8303,7 @@ def lower_file_to_program(
     file_td, file_specs, file_unions, file_enums = (
         collect_file_typedefs_structs_unions_enums(ast)
     )
+    file_field_bits = collect_file_struct_field_bits(ast)
     proc_returns_int = _merge_proc_returns_int(ast, file_td)
     du = frozenset(
         ext.decl.name
@@ -8325,6 +8376,7 @@ def lower_file_to_program(
             file_specs=file_specs,
             file_unions=file_unions,
             file_enums=file_enums,
+            file_field_bits=file_field_bits,
             file_scope_channel_order=fs_ch_order,
             file_scope_channel_kairos=file_scope_channel_kairos,
             opt_uncall_user_calls=opt_uc,
@@ -8375,6 +8427,7 @@ def lower_file_to_program(
         ptr_pool_size=ptr_pool_size,
         typedef_map=dict(file_td),
         struct_specs=dict(file_specs),
+        struct_field_bits=dict(file_field_bits),
         union_specs=dict(file_unions),
         enum_constants=dict(file_enums),
         mem_layout=layout,

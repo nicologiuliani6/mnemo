@@ -41,8 +41,10 @@ Tempo stimato: 6-10h + design review.
 
 ### Struct / union
 
-- **Bit-fields**: `unsigned x : 3;` (valori che stanno nel range
-  funzionano accidentalmente; truncamento sui bit non implementato).
+- **Bit-fields runtime**: truncamento `unsigned x : N;` ora attivo
+  per `f.x = E` con E costante a compile-time. Caso runtime
+  (`f.x = v`) non trunca: `&` mask via bits.kairos è O(2^N) e
+  blocca la VM. Workaround: const-folding esplicito lato C.
 - **Flexible array members** (struct con `int a[];` finale).
 - **Array come campo struct** (`struct Box { int data[4]; }`): le
   scritture `b.data[i] = X` non landano perché Mnemo alloca un
