@@ -3815,6 +3815,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             )
         if log in ctx.array_info:
             if not ctx.array_info[log].array_decay_pointer:
+                # Array-to-pointer decay (C semantics): in r-value position un
+                # array nudo è equivalente a `&array[0]`, ovvero l'indirizzo
+                # dell'elemento 0 (uno slot pool).
+                cell0 = _array_elem_local(log, 0)
+                if cell0 in ctx.slot_index:
+                    ctx.addr_taken_logicals.add(cell0)
+                    return [], Imm(ctx.slot_index[cell0]), []
                 raise MnemoCompileError(
                     f"l'array {expr.name!r} non è un valore scalare: usa {expr.name}[…]"
                 )
