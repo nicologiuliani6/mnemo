@@ -7911,31 +7911,37 @@ def lower_file_to_program(
                 fn for fn, fty in fields
                 if not _type_node_is_pthread_mutex(fty, ctx.typedef_map)
             ]
-            has_named = any(
-                isinstance(e, c.NamedInitializer) for e in ext.init.exprs
-            )
-            pos = 0
-            for e in ext.init.exprs:
-                if isinstance(e, c.NamedInitializer):
-                    if len(e.name) != 1 or not isinstance(e.name[0], c.ID):
+            n_fields = len(field_order)
+            # Flatten posizionali (assorbi InitList annidati). Mantieni mappa
+            # designator (named) -> expr.
+            named: dict[str, c.Node] = {}
+            flat_positional: list[c.Node] = []
+
+            def absorb(exprs: list[c.Node], limit: int) -> None:
+                for sub in exprs:
+                    if len(flat_positional) >= limit:
+                        return
+                    if isinstance(sub, c.NamedInitializer):
+                        if len(sub.name) == 1 and isinstance(sub.name[0], c.ID):
+                            named[sub.name[0].name] = sub.expr
                         continue
-                    fname = e.name[0].name
-                    if fname not in field_order:
-                        continue
-                    v = _int_constant_value(e.expr)
+                    if isinstance(sub, c.InitList):
+                        absorb(list(sub.exprs or []), limit)
+                    else:
+                        flat_positional.append(sub)
+
+            absorb(list(ext.init.exprs or []), n_fields)
+            for i, fname in enumerate(field_order):
+                if fname in named:
+                    v = _int_constant_value(named[fname])
                     if v is not None and v != 0:
                         loc = _struct_field_local(varname, fname)
                         instrs.append(IAddEq(_phys(ctx, loc), Imm(v)))
-                    pos = field_order.index(fname) + 1
-                else:
-                    if pos >= len(field_order):
-                        break
-                    v = _int_constant_value(e)
+                elif i < len(flat_positional):
+                    v = _int_constant_value(flat_positional[i])
                     if v is not None and v != 0:
-                        loc = _struct_field_local(varname, field_order[pos])
+                        loc = _struct_field_local(varname, fname)
                         instrs.append(IAddEq(_phys(ctx, loc), Imm(v)))
-                    pos += 1
-                _ = has_named
             continue
         # Array a file-scope con InitList: emit IAddEq cell-by-cell.
         if isinstance(ext.type, c.ArrayDecl):
