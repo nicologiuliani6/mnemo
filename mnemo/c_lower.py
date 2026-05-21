@@ -6162,6 +6162,37 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ctx.decl_order.append(loc)
                 ctx.var_types[loc] = fty
             if node.init is not None:
+                # `struct V v = f(...);` — init da FuncCall che ritorna struct
+                # con stessa firma. Multi-word return su tutte le celle dei campi.
+                if isinstance(node.init, c.FuncCall):
+                    if ctx.mem_layout is None or ctx.file_ast is None:
+                        raise MnemoCompileError(
+                            "init struct da call: layout/AST mancante"
+                        )
+                    norm_sc, callee = _resolve_indirect_callee(node.init, ctx)
+                    fd_u = _get_funcdef(ctx.file_ast, callee)
+                    if fd_u is None or not isinstance(fd_u.decl.type, c.FuncDecl):
+                        raise MnemoCompileError(
+                            f"init struct da `{callee}()`: funzione non trovata"
+                        )
+                    callee_fd = fd_u.decl.type
+                    sz_lhs = _sizeof_struct_tag(st_tag, ctx)
+                    rw_lhs = _return_words_from_bytes(sz_lhs)
+                    sz_ret = _sizeof_return_bytes(callee_fd, ctx)
+                    rw_c = ctx.mem_layout.ret_words.get(callee, 0)
+                    if (
+                        sz_ret != sz_lhs
+                        or rw_c != rw_lhs
+                        or rw_c != len(fields)
+                    ):
+                        raise MnemoCompileError(
+                            f"init struct da `{callee}()`: tipo di ritorno incompatibile"
+                        )
+                    sinks = [
+                        _phys(ctx, _struct_field_local(logical, fn))
+                        for fn, _ in fields
+                    ]
+                    return _lower_funccall_with_ret(norm_sc, ctx, sinks)
                 if not isinstance(node.init, c.InitList):
                     raise MnemoCompileError("init struct: serve `{ ... }`")
                 has_named_s = any(
