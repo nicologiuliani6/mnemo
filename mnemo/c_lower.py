@@ -7245,6 +7245,52 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         if not isinstance(node.lvalue, c.ID):
             raise MnemoCompileError("lvalue non-ID non supportato")
         lhs = _scope_resolve(ctx, node.lvalue.name)
+        # `b = a;` / `b = *p;` con b struct: espandi in copia per-campo.
+        if node.op == "=" and lhs in ctx.struct_tag_of_var:
+            tag_lhs = ctx.struct_tag_of_var[lhs]
+            rv = node.rvalue
+            src_name: str | None = None
+            src_op: str | None = None
+            if isinstance(rv, c.ID):
+                rlog = _scope_resolve(ctx, rv.name)
+                if (
+                    ctx.struct_tag_of_var.get(rlog) == tag_lhs
+                    and tag_lhs in ctx.struct_specs
+                ):
+                    src_name = rv.name
+                    src_op = "."
+            elif (
+                isinstance(rv, c.UnaryOp)
+                and rv.op == "*"
+                and isinstance(rv.expr, c.ID)
+            ):
+                plog = _scope_resolve(ctx, rv.expr.name)
+                if (
+                    _ptr_struct_tag(ctx.var_types.get(plog), ctx) == tag_lhs
+                    and tag_lhs in ctx.struct_specs
+                ):
+                    src_name = rv.expr.name
+                    src_op = "->"
+            if src_name is not None and src_op is not None:
+                out_sa: list[Instr] = []
+                for fn_i, fty_i in ctx.struct_specs[tag_lhs]:
+                    if _type_node_is_pthread_mutex(fty_i, ctx.typedef_map):
+                        continue
+                    lhs_ref = c.StructRef(
+                        c.ID(node.lvalue.name, node.coord),
+                        ".",
+                        c.ID(fn_i, node.coord),
+                        node.coord,
+                    )
+                    rhs_ref = c.StructRef(
+                        c.ID(src_name, node.coord),
+                        src_op,
+                        c.ID(fn_i, node.coord),
+                        node.coord,
+                    )
+                    sub_sa = c.Assignment("=", lhs_ref, rhs_ref, node.coord)
+                    out_sa.extend(_lower_stmt(sub_sa, ctx))
+                return out_sa
         if lhs not in ctx.int_locals:
             raise MnemoCompileError(
                 f"assegnamento a variabile non dichiarata: {node.lvalue.name}"
