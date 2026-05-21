@@ -4105,6 +4105,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             ins = [IConst(lc, 0)]
             ins.extend(_build_truth_incr_lc(expr, lc, ctx))
             return ins, Var(lc), [lc]
+        if expr.op in _CMP_OPS:
+            # `a < b` come valore (rvalue): truth-counter 0/1.
+            lc = ctx.fresh_temp()
+            ins = [IConst(lc, 0)]
+            ins.extend(_build_truth_incr_lc(expr, lc, ctx))
+            return ins, Var(lc), [lc]
         if expr.op == ",":
             i1, o1, tm1 = _eval_expr(expr.left, ctx)
             ctx.use_hist = True
@@ -5498,6 +5504,9 @@ def _lower_predicate_simple(
             assert op in _NEG_CMP
             tm = tm_l + tm_r
             return pre_l + pre_r, (lhs_s, op, rhs_s), tm  # type: ignore[arg-type]
+        pre, vn, tm = _eval_to_var(expr, ctx)
+        return pre, (vn, "!=", "0"), tm
+    if isinstance(expr, (c.FuncCall, c.TernaryOp, c.ArrayRef, c.StructRef, c.UnaryOp, c.Cast)):
         pre, vn, tm = _eval_to_var(expr, ctx)
         return pre, (vn, "!=", "0"), tm
     raise MnemoCompileError(
