@@ -30,7 +30,6 @@ Tempo stimato: 6-10h + design review.
 
 ### Array
 
-- **Designated init multi-D nested InitList** (`int m[3][3] = {{1,2,3},{4,5,6},{7,8,9}}` full-nested non solo flat).
 - Array element count > 1024 (`ARR_MAX`).
 
 ### Funzioni
@@ -45,7 +44,6 @@ Tempo stimato: 6-10h + design review.
 ### Struct / union
 
 - **Bit-fields**: `unsigned x : 3;`.
-- **`offsetof`** macro.
 - **Flexible array members** (struct con `int a[];` finale).
 
 ### Stdlib

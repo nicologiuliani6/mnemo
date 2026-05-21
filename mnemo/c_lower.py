@@ -1186,23 +1186,46 @@ def _array_init_dense_1d(init: c.InitList, array_size: int) -> list[c.Node | Non
 
 
 def _array_init_dense_nd(init: c.InitList, dims: list[int]) -> list[c.Node | None]:
-    """Multi-D designated: `int m[R][C] = {[r][c]=val, ...}` → flat row-major.
-    Supporta solo full-index designators (`[r][c]` con tutti gli indici), non
-    nested InitList. Mix con posizionali avanza il cursore lineare.
+    """Multi-D designated/nested: row-major flat output.
+
+    Supporta:
+    - full-index designator: `[r][c]=val`
+    - partial-index designator + nested InitList: `[r]={a,b,c}`
+    - nested InitList senza designator: `{{1,2,3},{4,5,6}}` (riga per riga)
+    - mix posizionale/designated (avanza cursore lineare)
     """
     tot = 1
     for d in dims:
         tot *= d
     out: list[c.Node | None] = [None] * tot
+
+    def fill_block(start: int, sub_dims: list[int], val: c.Node) -> int:
+        """Place `val` at flat offset starting at `start`. Returns new cursor."""
+        stride = 1
+        for d in sub_dims:
+            stride *= d
+        if isinstance(val, c.InitList) and sub_dims:
+            sub = _array_init_dense_nd(val, sub_dims)
+            for i, v in enumerate(sub):
+                if v is not None:
+                    out[start + i] = v
+            return start + stride
+        if isinstance(val, c.InitList) and not sub_dims:
+            raise MnemoCompileError(
+                "designated init: lista annidata su scalare non supportata"
+            )
+        out[start] = val
+        return start + (stride if sub_dims else 1)
+
     pos = 0
     for e in init.exprs:
         if isinstance(e, c.NamedInitializer):
-            if len(e.name) != len(dims):
+            if len(e.name) > len(dims):
                 raise MnemoCompileError(
-                    f"designated init multi-D: serve indice per ogni dimensione "
-                    f"(atteso {len(dims)}, dato {len(e.name)})"
+                    f"designated init multi-D: troppi indici "
+                    f"(atteso ≤{len(dims)}, dato {len(e.name)})"
                 )
-            lin = 0
+            base = 0
             for k, d in enumerate(e.name):
                 if not isinstance(d, c.Constant):
                     raise MnemoCompileError(
@@ -1218,14 +1241,25 @@ def _array_init_dense_nd(init: c.InitList, dims: list[int]) -> list[c.Node | Non
                     raise MnemoCompileError(
                         f"designated init: indice {ix} fuori range [0,{dims[k]})"
                     )
-                lin = lin * dims[k] + ix
-            out[lin] = e.expr
-            pos = lin + 1
+                base = base * dims[k] + ix
+            sub_dims = dims[len(e.name):]
+            stride = 1
+            for d in sub_dims:
+                stride *= d
+            base *= stride
+            pos = fill_block(base, sub_dims, e.expr)
         else:
             if pos >= tot:
                 break
-            out[pos] = e
-            pos += 1
+            if isinstance(e, c.InitList) and len(dims) > 1:
+                row_size = 1
+                for d in dims[1:]:
+                    row_size *= d
+                row_start = (pos // row_size) * row_size
+                pos = fill_block(row_start, dims[1:], e)
+            else:
+                out[pos] = e
+                pos += 1
     return out
 
 
