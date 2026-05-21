@@ -1084,15 +1084,94 @@ def _array_elem_local(base: str, linear: int) -> str:
     return f"__mn_arr_{base}_{linear}"
 
 
+def _eval_const_int_expr(node: c.Node) -> int | None:
+    """Const-folding ricorsivo per espressioni intere: Constant, UnaryOp
+    `- + ~ !`, BinaryOp aritmetici/bitwise/comparison, Cast a int, ternario.
+    None se non valutabile a compile-time."""
+    if isinstance(node, c.Constant):
+        return _int_constant_value(node)
+    if isinstance(node, c.UnaryOp):
+        if node.op == "sizeof":
+            return None
+        v = _eval_const_int_expr(node.expr)
+        if v is None:
+            return None
+        if node.op == "-":
+            return -v
+        if node.op == "+":
+            return v
+        if node.op == "~":
+            return ~v
+        if node.op == "!":
+            return 1 if v == 0 else 0
+        return None
+    if isinstance(node, c.BinaryOp):
+        l = _eval_const_int_expr(node.left)
+        r = _eval_const_int_expr(node.right)
+        if l is None or r is None:
+            return None
+        op = node.op
+        if op == "+":
+            return l + r
+        if op == "-":
+            return l - r
+        if op == "*":
+            return l * r
+        if op == "/":
+            if r == 0:
+                return None
+            q = abs(l) // abs(r)
+            return -q if (l < 0) ^ (r < 0) else q
+        if op == "%":
+            if r == 0:
+                return None
+            return l - (l // r if (l < 0) == (r < 0) else -(abs(l) // abs(r))) * r
+        if op == "<<":
+            return l << r
+        if op == ">>":
+            return l >> r
+        if op == "&":
+            return l & r
+        if op == "|":
+            return l | r
+        if op == "^":
+            return l ^ r
+        if op == "&&":
+            return 1 if (l != 0 and r != 0) else 0
+        if op == "||":
+            return 1 if (l != 0 or r != 0) else 0
+        if op == "<":
+            return 1 if l < r else 0
+        if op == "<=":
+            return 1 if l <= r else 0
+        if op == ">":
+            return 1 if l > r else 0
+        if op == ">=":
+            return 1 if l >= r else 0
+        if op == "==":
+            return 1 if l == r else 0
+        if op == "!=":
+            return 1 if l != r else 0
+        return None
+    if isinstance(node, c.Cast):
+        return _eval_const_int_expr(node.expr)
+    if isinstance(node, c.TernaryOp):
+        cv = _eval_const_int_expr(node.cond)
+        if cv is None:
+            return None
+        return _eval_const_int_expr(node.iftrue if cv != 0 else node.iffalse)
+    return None
+
+
 def _array_dim_const(dim: c.Node | None) -> int:
     if dim is None:
         raise MnemoCompileError("array: dimensione mancante")
-    if isinstance(dim, c.Constant):
-        n = _const_int(dim)
-        if n < 1:
-            raise MnemoCompileError("array: dimensione >= 1")
-        return n
-    raise MnemoCompileError("array: la dimensione deve essere una costante intera")
+    n = _eval_const_int_expr(dim)
+    if n is None:
+        raise MnemoCompileError("array: la dimensione deve essere una costante intera")
+    if n < 1:
+        raise MnemoCompileError("array: dimensione >= 1")
+    return n
 
 
 def _decl_basename_from_innermost(cur: c.Node) -> str | None:
