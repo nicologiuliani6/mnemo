@@ -1124,10 +1124,23 @@ def _eval_const_int_expr(node: c.Node, ctx: object | None = None) -> int | None:
         if node.op == "sizeof":
             if ctx is None:
                 return None
+            inner = node.expr
             try:
-                if isinstance(node.expr, c.Typename):
-                    return _sizeof_of_c_type_node(node.expr.type, ctx)
-                return _sizeof_of_c_type_node(node.expr, ctx)
+                if isinstance(inner, c.Typename):
+                    return _sizeof_of_c_type_node(inner.type, ctx)
+                if isinstance(inner, c.ID):
+                    log = _scope_resolve(ctx, inner.name)
+                    if log in ctx.array_info:
+                        info = ctx.array_info[log]
+                        return info.total * info.elem_size
+                    if log in ctx.struct_tag_of_var:
+                        return _sizeof_struct_tag(ctx.struct_tag_of_var[log], ctx)
+                    if log in ctx.union_tag_of_var:
+                        return _sizeof_union_tag(ctx.union_tag_of_var[log], ctx)
+                    if log in ctx.var_types:
+                        return _sizeof_of_c_type_node(ctx.var_types[log], ctx)
+                    return None
+                return _sizeof_of_c_type_node(inner, ctx)
             except (MnemoCompileError, AttributeError, KeyError):
                 return None
         v = _eval_const_int_expr(node.expr, ctx)
@@ -3727,6 +3740,98 @@ def _string_literal_value_of(expr: c.Node, ctx: _Ctx) -> str | None:
         log = _scope_resolve(ctx, expr.name)
         if log in ctx.char_ptr_string_value:
             return ctx.char_ptr_string_value[log]
+    return None
+
+
+def _try_lower_memcpy_memset(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
+    """memcpy(dst, src, N) / memset(dst, v, N) compile-time-expanded.
+    Solo se:
+    - dst è ID risolvibile a un array_info (elem_size in {1, 4});
+    - src (memcpy): ID risolvibile a un array_info dello stesso elem_size,
+      oppure stringa letterale (per char[]);
+    - N è costante valutabile a compile-time;
+    - N == sizeof(dst).
+    Per memset, supporta solo v=0 (caso comune); altri richiedono
+    semantica byte-wise non rappresentabile cell-wise.
+    Restituisce None se non applicabile (caller solleverà errore standard).
+    """
+    name = call.name.name
+    args = call.args.exprs if call.args is not None else []
+    if name == "memcpy" and len(args) != 3:
+        return None
+    if name == "memset" and len(args) != 3:
+        return None
+    dst_arg = args[0]
+    if not isinstance(dst_arg, c.ID):
+        return None
+    dst_log = _scope_resolve(ctx, dst_arg.name)
+    dst_info = ctx.array_info.get(dst_log)
+    if dst_info is None or dst_info.elem_size not in (1, 4):
+        return None
+    n_val = _eval_const_int_expr(args[2], ctx)
+    if n_val is None or n_val < 0:
+        return None
+    elem_bytes = dst_info.elem_size
+    total_bytes = dst_info.total * elem_bytes
+    if n_val > total_bytes:
+        return None
+    if n_val % elem_bytes != 0:
+        return None
+    n_elems = n_val // elem_bytes
+    out: list[Instr] = []
+    if name == "memset":
+        v_val = _eval_const_int_expr(args[1], ctx)
+        if v_val is None:
+            return None
+        # Replica byte-pattern al cell-size (es. v=0xAB su elem 4 byte → 0xABABABAB)
+        cell_val = 0
+        for b in range(elem_bytes):
+            cell_val |= (v_val & 0xFF) << (b * 8)
+        for i in range(n_elems):
+            cell_slot = _array_elem_local(dst_log, i)
+            out.extend(
+                _lower_assign(
+                    _phys(ctx, cell_slot),
+                    c.Constant("int", str(cell_val), call.coord),
+                    ctx,
+                )
+            )
+        return out
+    # memcpy
+    src_arg = args[1]
+    if isinstance(src_arg, c.Constant) and src_arg.type == "string" and elem_bytes == 1:
+        bs = _literal_c_string(src_arg).encode("utf-8")
+        if n_val > len(bs) + 1:
+            return None
+        for i in range(n_elems):
+            v = bs[i] if i < len(bs) else 0
+            cell_slot = _array_elem_local(dst_log, i)
+            out.extend(
+                _lower_assign(
+                    _phys(ctx, cell_slot),
+                    c.Constant("int", str(v), call.coord),
+                    ctx,
+                )
+            )
+        return out
+    if isinstance(src_arg, c.ID):
+        src_log = _scope_resolve(ctx, src_arg.name)
+        src_info = ctx.array_info.get(src_log)
+        if src_info is None or src_info.elem_size != elem_bytes:
+            return None
+        if n_elems > src_info.total:
+            return None
+        for i in range(n_elems):
+            src_slot = _array_elem_local(src_log, i)
+            dst_slot = _array_elem_local(dst_log, i)
+            out.extend(
+                _lower_assign(
+                    _phys(ctx, dst_slot),
+                    c.ID(_phys(ctx, src_slot), call.coord),
+                    ctx,
+                )
+            )
+        return out
     return None
 
 
@@ -7420,6 +7525,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
 
     if isinstance(node, c.FuncCall):
         node, nm = _resolve_indirect_callee(node, ctx)
+        # `memcpy(dst, src, N)` / `memset(dst, v, N)` con dst/src array
+        # Mnemo e N const multiplo di sizeof(int): espandi per-slot.
+        if (
+            isinstance(node.name, c.ID)
+            and node.name.name in ("memcpy", "memset")
+        ):
+            mem_ins = _try_lower_memcpy_memset(node, ctx)
+            if mem_ins is not None:
+                return mem_ins
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
             if nm == "mnemo_pthread_parallel2" and any(

@@ -55,10 +55,10 @@ Tempo stimato: 6-10h + design review.
 
 ### Stdlib
 
-- **`<string.h>`** subset runtime (`memcpy`, `memset`, `strcpy`): non
-  implementati. `strlen` e `strcmp` supportati solo compile-time su
-  stringa letterale o `char *p = "literal";` (vedi
-  `generic_strlen_strcmp.c`).
+- **`<string.h>`** runtime (`strcpy`, `strncpy`, `memmove`, ...): non
+  implementati. `strlen` / `strcmp` compile-time su literal/`char *p
+  = "lit";`. `memcpy(dst, src, N)` / `memset(dst, v, N)` espansi
+  a compile-time se dst (e src) sono array Mnemo e N costante.
 
 ### Control flow / misc
 
