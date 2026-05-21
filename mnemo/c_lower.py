@@ -7722,6 +7722,45 @@ def lower_file_to_program(
             continue
         if isinstance(ext.type, c.FuncDecl):
             continue
+        # Struct a file-scope con InitList: emit IAddEq sui campi.
+        st_tag = _struct_tag_for_decl_type(ext.type, ctx)
+        if st_tag is not None and isinstance(ext.init, c.InitList):
+            if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
+                continue
+            varname = str(ext.type.declname)
+            fields = ctx.struct_specs.get(st_tag)
+            if not fields:
+                continue
+            field_order = [
+                fn for fn, fty in fields
+                if not _type_node_is_pthread_mutex(fty, ctx.typedef_map)
+            ]
+            has_named = any(
+                isinstance(e, c.NamedInitializer) for e in ext.init.exprs
+            )
+            pos = 0
+            for e in ext.init.exprs:
+                if isinstance(e, c.NamedInitializer):
+                    if len(e.name) != 1 or not isinstance(e.name[0], c.ID):
+                        continue
+                    fname = e.name[0].name
+                    if fname not in field_order:
+                        continue
+                    v = _int_constant_value(e.expr)
+                    if v is not None and v != 0:
+                        loc = _struct_field_local(varname, fname)
+                        instrs.append(IAddEq(_phys(ctx, loc), Imm(v)))
+                    pos = field_order.index(fname) + 1
+                else:
+                    if pos >= len(field_order):
+                        break
+                    v = _int_constant_value(e)
+                    if v is not None and v != 0:
+                        loc = _struct_field_local(varname, field_order[pos])
+                        instrs.append(IAddEq(_phys(ctx, loc), Imm(v)))
+                    pos += 1
+                _ = has_named
+            continue
         # Array a file-scope con InitList: emit IAddEq cell-by-cell.
         if isinstance(ext.type, c.ArrayDecl):
             ap = _try_parse_array_decl(ext, ctx)
