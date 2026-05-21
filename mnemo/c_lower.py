@@ -4113,8 +4113,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                     )
                 ctx.addr_taken_logicals.add(cell)
                 return [], Imm(ctx.slot_index[cell]), []
+            if isinstance(inner, c.ArrayRef) and isinstance(inner.name, c.ID):
+                # `&a[K]` ≡ `a + K` (l-value indirizzo del K-esimo elemento).
+                synth = c.BinaryOp(op="+", left=inner.name, right=inner.subscript)
+                return _eval_expr(synth, ctx)
             raise MnemoCompileError(
-                "&: supportati `&x` e `&struct.campo` (punto, catena di campi)"
+                "&: supportati `&x`, `&struct.campo`, `&array[idx]`"
             )
         if expr.op == "*":
             inner = expr.expr
