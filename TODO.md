@@ -34,7 +34,6 @@ Tempo stimato: 6-10h + design review.
 ### Funzioni
 
 - **Variadic user functions** (`int f(int n, ...)`). `<stdarg.h>` non implementato.
-- **Old-style K&R declarations**.
 
 ### Storage / linkage
 

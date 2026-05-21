@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mnemo.c_lower import (
     PTHREAD_ABI_TWO_REGION_PAR,
+    _convert_kr_to_ansi,
     _hoist_compound_literals_in_ast,
     _hoist_static_locals,
     _name_anonymous_structs_unions,
@@ -198,6 +199,8 @@ def compile_c_to_kairos(
     except OSError as e:
         raise MnemoCompileError(f"file non trovato o non leggibile: {path}") from e
     ast = parse_c(path)
+    # K&R: convert `int foo(a, b) int a; int b; { … }` → ANSI param form.
+    _convert_kr_to_ansi(ast)
     # Anonymous struct/union: `struct { ... } p;` → assegna tag sintetico.
     _name_anonymous_structs_unions(ast)
     # CompoundLiteral hoist: `(T[]){...}` → Decl sintetico nel body della funzione

@@ -7245,6 +7245,34 @@ def _int_constant_value(node: c.Node) -> int | None:
     return None
 
 
+def _convert_kr_to_ansi(ast: c.FileAST) -> None:
+    """K&R function defs (`int foo(a, b) int a; int b; { … }`) → ANSI.
+    Per ogni FuncDef con `param_decls` non vuoto, sostituisce gli `c.ID`
+    in `decl.type.args.params` con i `c.Decl` di matching name dal
+    `param_decls`, poi azzera `param_decls`.
+    """
+    for ext in ast.ext:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if not getattr(ext, "param_decls", None):
+            continue
+        param_decls = ext.param_decls
+        fd = ext.decl.type
+        if not isinstance(fd, c.FuncDecl) or fd.args is None:
+            continue
+        by_name: dict[str, c.Decl] = {
+            d.name: d for d in param_decls if isinstance(d, c.Decl) and d.name
+        }
+        new_params: list[c.Node] = []
+        for p in fd.args.params:
+            if isinstance(p, c.ID) and p.name in by_name:
+                new_params.append(by_name[p.name])
+            else:
+                new_params.append(p)
+        fd.args.params = new_params
+        ext.param_decls = None
+
+
 def _name_anonymous_structs_unions(ast: c.FileAST) -> None:
     """Assegna nomi sintetici a `struct {...}` / `union {...}` anonimi e hoista
     le DEFINIZIONI inline (con `decls`) a file-scope.
