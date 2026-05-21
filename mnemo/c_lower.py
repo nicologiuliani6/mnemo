@@ -3513,9 +3513,30 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     out.append(
                         IShow(_phys(ctx, _array_elem_local(sbase, i)), True)
                     )
+            elif (
+                isinstance(ex, c.ID)
+                and _scope_resolve(ctx, ex.name) in ctx.array_info
+            ):
+                # `char s[] = "Hello"; printf("%s", s);` — l'array è
+                # registrato in array_info ma non in char_ptr_string_base
+                # (vedi `_literal_c_array_meta` per char[] da letterale).
+                arr_log = _scope_resolve(ctx, ex.name)
+                info = ctx.array_info[arr_log]
+                if info.elem_size != 1:
+                    raise MnemoCompileError(
+                        f"printf %s: {ex.name!r} non è un char[] (elem_size={info.elem_size})"
+                    )
+                # Stampa fino a terminatore o fino a info.total-1, scegliendo
+                # info.total-1 (statico) come limite — il \0 in coda farà
+                # show(0) che è no-op visibile (Kairos VM non stampa 0).
+                for i in range(info.total - 1):
+                    out.append(
+                        IShow(_phys(ctx, _array_elem_local(arr_log, i)), True)
+                    )
             else:
                 raise MnemoCompileError(
-                    'printf %s: letterale "…" oppure char* da `char *x = "…";`'
+                    'printf %s: letterale "…" oppure char* da `char *x = "…";` '
+                    'o `char s[] = "…";`'
                 )
         else:
             raise MnemoCompileError("printf: segmento interno non valido")
