@@ -96,6 +96,32 @@ procedure __mn_putd(int n, stack __mn_hist, stack __mn_scratch)
     fi n < z
     delocal int z = 0
 
+// `%+d` runtime: prepend `+` se n>=0, poi __mn_putd.
+procedure __mn_putd_plus(int n, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    if n >= z then
+        local int p = 0
+        p += 43
+        show(p, char)
+        p -= 43
+        delocal int p = 0
+    fi n >= z
+    delocal int z = 0
+    call __mn_putd(n, __mn_hist, __mn_scratch)
+
+// `% d` runtime: prepend ` ` se n>=0, poi __mn_putd.
+procedure __mn_putd_space(int n, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    if n >= z then
+        local int sp = 0
+        sp += 32
+        show(sp, char)
+        sp -= 32
+        delocal int sp = 0
+    fi n >= z
+    delocal int z = 0
+    call __mn_putd(n, __mn_hist, __mn_scratch)
+
 // Stampa intero non negativo in esadecimale minuscolo.
 // Dipendenze: helpers.kairos, divmod.kairos.
 // REVERSIBILE via `uncall __mn_divmod_nonneg` (vedi __mn_putd_uint).

@@ -74,6 +74,8 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_pool_free",
         "__mn_putd",
         "__mn_putd_uint",
+        "__mn_putd_plus",
+        "__mn_putd_space",
         "__mn_putx",
         "__mn_putx_uint",
         "__mn_puto",
@@ -3317,10 +3319,10 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
                 out.append(("lit", "".join(buf)))
                 buf = []
             j = i + 1
-            # Flags: `-`, `+`, ` `, `#`, `0` (riconosciuti, ma usiamo solo `-`/`0`).
+            # Flags: `-`, `+`, ` `, `#`, `0` (tutti capturati; `#` ancora ignorato).
             flags = set()
             while j < len(fmt) and fmt[j] in ("-", "+", " ", "#", "0"):
-                if fmt[j] in ("-", "0"):
+                if fmt[j] in ("-", "+", " ", "0"):
                     flags.add(fmt[j])
                 j += 1
             # Width (cifre decimali; ignoriamo `*` runtime).
@@ -3378,9 +3380,9 @@ def _printf_pad(s: str, flags: frozenset, width: int) -> str:
     if "-" in flags:
         return s + " " * (width - len(s))
     if "0" in flags:
-        # `0` non si applica a stringhe negative speciali; usalo solo su numeri.
-        if s.startswith("-"):
-            return "-" + "0" * (width - len(s)) + s[1:]
+        # `0` con segno (`-`/`+`/` `): pad zeri DOPO il segno.
+        if s and s[0] in ("-", "+", " "):
+            return s[0] + "0" * (width - len(s)) + s[1:]
         return "0" * (width - len(s)) + s
     return " " * (width - len(s)) + s
 
@@ -3487,7 +3489,15 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
             def _fmt_const(v: int) -> str:
                 if k == "u":
                     return str(v & 0xFFFFFFFF)
-                return str(v)
+                s_v = str(v)
+                # flag `+`: prepend `+` ai valori non-negativi (no `-` già).
+                # flag ` ` (spazio): prepend ` ` se non c'è già un segno
+                # esplicito (`+` ha precedenza su ` `).
+                if v >= 0 and "+" in flags:
+                    s_v = "+" + s_v
+                elif v >= 0 and " " in flags:
+                    s_v = " " + s_v
+                return s_v
 
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
@@ -3509,7 +3519,15 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 elif isinstance(op, Var):
                     # `%u` runtime: usa `__mn_putd_uint` (interpreta val come
                     # unsigned 32-bit). `%d` runtime: `__mn_putd` (signed).
-                    callee = "__mn_putd_uint" if k == "u" else "__mn_putd"
+                    # Flag `+`/` ` runtime su `%d`: usa procs dedicate.
+                    if k == "u":
+                        callee = "__mn_putd_uint"
+                    elif "+" in flags:
+                        callee = "__mn_putd_plus"
+                    elif " " in flags:
+                        callee = "__mn_putd_space"
+                    else:
+                        callee = "__mn_putd"
                     out.extend(
                         _io_opt_uncall_wrap(
                             ctx,
