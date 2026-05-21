@@ -3316,9 +3316,15 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
             arg_i += 1
             flags = piece[1] if len(piece) > 1 else frozenset()
             width = piece[2] if len(piece) > 2 else 0
+
+            def _fmt_const(v: int) -> str:
+                if k == "u":
+                    return str(v & 0xFFFFFFFF)
+                return str(v)
+
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                s = _printf_pad(str(val), flags, width)
+                s = _printf_pad(_fmt_const(val), flags, width)
                 for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                     out.extend(ins)
@@ -3327,17 +3333,20 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    s = _printf_pad(str(op.value), flags, width)
+                    s = _printf_pad(_fmt_const(op.value), flags, width)
                     for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                         out.extend(ins)
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
+                    # `%u` runtime: usa `__mn_putd_uint` (interpreta val come
+                    # unsigned 32-bit). `%d` runtime: `__mn_putd` (signed).
+                    callee = "__mn_putd_uint" if k == "u" else "__mn_putd"
                     out.extend(
                         _io_opt_uncall_wrap(
                             ctx,
-                            ICall("__mn_putd", [op.name] + _kairos_stack_actuals(ctx)),
+                            ICall(callee, [op.name] + _kairos_stack_actuals(ctx)),
                         )
                     )
                     tm_acc.extend(tm)
