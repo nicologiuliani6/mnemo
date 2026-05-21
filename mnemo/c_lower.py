@@ -3059,12 +3059,22 @@ def _literal_char_value(node: c.Constant) -> int:
     """Letterale C `char` / carattere (pycparser: type 'char', value es. \"'a'\")."""
     if node.type != "char":
         raise MnemoCompileError(f"atteso letterale char, type={node.type!r}")
+    raw = node.value
+    if len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+        inner = raw[1:-1]
+        # Escape C non riconosciuti da Python literal_eval ma validi in C.
+        c_escapes = {
+            "a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11,
+            "\\": 92, "'": 39, '"': 34, "?": 63, "0": 0,
+        }
+        if len(inner) == 2 and inner[0] == "\\" and inner[1] in c_escapes:
+            return c_escapes[inner[1]]
     try:
-        s = pyast.literal_eval(node.value)
+        s = pyast.literal_eval(raw)
     except (SyntaxError, ValueError) as e:
-        raise MnemoCompileError(f"letterale char non valido: {node.value!r}") from e
+        raise MnemoCompileError(f"letterale char non valido: {raw!r}") from e
     if not isinstance(s, str) or len(s) != 1:
-        raise MnemoCompileError(f"letterale char non valido: {node.value!r}")
+        raise MnemoCompileError(f"letterale char non valido: {raw!r}")
     return ord(s)
 
 
