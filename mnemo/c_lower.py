@@ -4400,6 +4400,15 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 ins = i1 + i2 + [IAddEq(t, o1), ISubEq(t, o2)]
             return ins, Var(t), tm1 + tm2 + [t]
         if expr.op == "*":
+            # `__mn_mul_into` cicla `b` volte; per `b<0` cicla all'infinito.
+            # Se `b` è costante negativa nota a compile-time, riscrivi come
+            # `-(a * abs(b))` con abs(b) come Constant positiva.
+            rhs_const = _int_constant_value(expr.right)
+            if rhs_const is not None and rhs_const < 0:
+                pos_const = c.Constant("int", str(-rhs_const), expr.coord)
+                synth_mul = c.BinaryOp("*", expr.left, pos_const, expr.coord)
+                synth_neg = c.UnaryOp("-", synth_mul, expr.coord)
+                return _eval_expr(synth_neg, ctx)
             pa, a_name, ca = _eval_to_arg_var(expr.left, ctx)
             pb, b_name, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
