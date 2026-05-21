@@ -374,6 +374,43 @@ procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
 procedure __mn_putx(int n, stack __mn_hist, stack __mn_scratch)
     call __mn_putx_uint(n, __mn_hist, __mn_scratch)
 
+// Stampa intero non negativo in ottale.
+// Dipendenze: helpers.kairos, divmod.kairos.
+// REVERSIBILE via `uncall __mn_divmod_nonneg` (vedi __mn_putd_uint).
+
+procedure __mn_puto_uint(int n, stack __mn_hist, stack __mn_scratch)
+    local int base = 0
+    base += 8
+    local int qu = 0
+    local int rem = 0
+    if n >= base then
+        call __mn_divmod_nonneg(n, base, qu, rem, __mn_hist, __mn_scratch)
+        call __mn_puto_uint(qu, __mn_hist, __mn_scratch)
+        local int ch = 0
+        ch += rem
+        ch += 48
+        show(ch, char)
+        ch -= 48
+        ch -= rem
+        delocal int ch = 0
+        uncall __mn_divmod_nonneg(n, base, qu, rem, __mn_hist, __mn_scratch)
+    else
+        local int ch = 0
+        ch += n
+        ch += 48
+        show(ch, char)
+        ch -= 48
+        ch -= n
+        delocal int ch = 0
+    fi n >= base
+    base -= 8
+    delocal int rem = 0
+    delocal int qu = 0
+    delocal int base = 0
+
+procedure __mn_puto(int n, stack __mn_hist, stack __mn_scratch)
+    call __mn_puto_uint(n, __mn_hist, __mn_scratch)
+
 // Pool puntatori Mnemo — generato, N=8 celle (__mn_mem0..__mn_mem7).
 // `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.
 // `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push

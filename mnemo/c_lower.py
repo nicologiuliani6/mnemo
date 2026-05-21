@@ -76,6 +76,8 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_putd_uint",
         "__mn_putx",
         "__mn_putx_uint",
+        "__mn_puto",
+        "__mn_puto_uint",
     }
 )
 
@@ -3455,11 +3457,16 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         out.extend(ins)
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
-                else:
-                    raise MnemoCompileError(
-                        "printf %o: argomento runtime non supportato "
-                        "(usa una costante o calcola fuori printf)"
+                elif isinstance(op, Var):
+                    out.extend(
+                        _io_opt_uncall_wrap(
+                            ctx,
+                            ICall("__mn_puto", [op.name] + _kairos_stack_actuals(ctx)),
+                        )
                     )
+                    tm_acc.extend(tm)
+                else:
+                    raise MnemoCompileError("printf %o: espressione non valida")
         elif k == "p":
             ex = exprs[arg_i]
             arg_i += 1
@@ -7221,6 +7228,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
                         "divmod.kairos",
                         "putd.kairos",
                         "putx.kairos",
+                        "puto.kairos",
                     }
                 )
         if isinstance(node, c.Assignment):
@@ -7286,6 +7294,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
         "bits.kairos",
         "putd.kairos",
         "putx.kairos",
+        "puto.kairos",
         "ptr_pool.kairos",
     ]
     return [name for name in order if name in needed]
@@ -7338,6 +7347,7 @@ def infer_lib_files_from_calls(
         "bits.kairos",
         "putd.kairos",
         "putx.kairos",
+        "puto.kairos",
         "ptr_pool.kairos",
     ]
     head = [n for n in order if n in needed]

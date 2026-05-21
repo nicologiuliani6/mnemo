@@ -79,7 +79,6 @@ Tempo stimato: 6-10h + design review.
 
 - **printf `%s` con argomento runtime** (non letterale né `char *x = "lit"`): non supportato. Le stringhe come parametri funzione/variabili dinamiche non hanno binding al payload bytes nella VM.
 - **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (no reinterpretazione 2-complement → `2^32 + val`). Su `unsigned` non-negativi funziona.
-- **printf `%o` runtime**: argomento variabile non supportato (manca `__mn_puto`/`puto.kairos` analoga a `putd_uint`).
 - **printf width/flags su argomento runtime**: ignorati silenziosamente (il padding va computato carattere-per-carattere dopo aver conosciuto la magnitudine, complicato).
 
 ---
