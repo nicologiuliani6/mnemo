@@ -3028,13 +3028,19 @@ _CONST_INT_TYPES = frozenset(
     {
         "int",
         "long",
+        "long int",
         "unsigned int",
         "unsigned",
         "long long",
+        "long long int",
         "unsigned long",
+        "unsigned long int",
         "unsigned long long",
+        "unsigned long long int",
         "short",
+        "short int",
         "unsigned short",
+        "unsigned short int",
     }
 )
 
@@ -3042,7 +3048,11 @@ _CONST_INT_TYPES = frozenset(
 def _const_int(node: c.Constant) -> int:
     if node.type not in _CONST_INT_TYPES:
         raise MnemoCompileError(f"letterale non int supportato: type={node.type!r}")
-    return int(node.value.rstrip("uUlL"), 0)
+    s = node.value.rstrip("uUlL")
+    # C-style octal `0755` → Python `0o755` (Python 3 dropped the leading-0 form).
+    if len(s) >= 2 and s[0] == "0" and s[1] not in "xXbB.":
+        s = "0o" + s[1:]
+    return int(s, 0)
 
 
 def _literal_char_value(node: c.Constant) -> int:
@@ -7466,7 +7476,10 @@ def _int_constant_value(node: c.Node) -> int | None:
                     esc = {"n": 10, "t": 9, "r": 13, "0": 0, "\\": 92, "'": 39}
                     return esc.get(v[1])
                 return None
-            return int(node.value, 0)
+            s = node.value.rstrip("uUlL")
+            if len(s) >= 2 and s[0] == "0" and s[1] not in "xXbB.":
+                s = "0o" + s[1:]
+            return int(s, 0)
         except (ValueError, AttributeError):
             return None
     if isinstance(node, c.UnaryOp) and node.op in ("-", "+"):
