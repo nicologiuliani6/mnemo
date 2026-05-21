@@ -11,3 +11,29 @@ procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scrat
         until i == b
     fi b != 0
     delocal int i = b
+
+// Prodotto signed: dst += a * b dove b può essere negativo.
+// Reversibile: guard `b < z` non si modifica nel body (b e z immutabili).
+procedure __mn_mul_signed_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int abs_b = 0
+    if b < z then
+        abs_b -= b
+    else
+        abs_b += b
+    fi b < z
+    call __mn_mul_into(dst, a, abs_b, __mn_hist, __mn_scratch)
+    if b < z then
+        local int t = 0
+        t -= dst
+        dst += t
+        dst <=> t
+        delocal int t = 0
+    fi b < z
+    if b < z then
+        abs_b += b
+    else
+        abs_b -= b
+    fi b < z
+    delocal int abs_b = 0
+    delocal int z = 0

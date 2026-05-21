@@ -21,6 +21,32 @@ procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scrat
     fi b != 0
     delocal int i = b
 
+// Prodotto signed: dst += a * b dove b può essere negativo.
+// Reversibile: guard `b < z` non si modifica nel body (b e z immutabili).
+procedure __mn_mul_signed_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int abs_b = 0
+    if b < z then
+        abs_b -= b
+    else
+        abs_b += b
+    fi b < z
+    call __mn_mul_into(dst, a, abs_b, __mn_hist, __mn_scratch)
+    if b < z then
+        local int t = 0
+        t -= dst
+        dst += t
+        dst <=> t
+        delocal int t = 0
+    fi b < z
+    if b < z then
+        abs_b += b
+    else
+        abs_b -= b
+    fi b < z
+    delocal int abs_b = 0
+    delocal int z = 0
+
 // Divisione e resto: a, b interi con a >= 0 e b > 0; q = 0 e r = 0 all'ingresso.
 // Uscita: q = a/b, r = a%b, a = 0. Il dividendo viene spostato in r via __mn_move_int (stack locale).
 // `from q == 0`: FROM vero solo quando q=0 (pre-loop); falso a q=1,2,... (stati intermedi).
@@ -37,6 +63,72 @@ procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack 
     fi saved_r >= b
     push(saved_r, __mn_hist)
     delocal int saved_r = 0
+
+// Divisione/resto signed C99 (truncamento verso zero, segno resto = segno
+// dividendo). q = 0, r = 0 all'ingresso; a, b interi qualsiasi (b != 0
+// richiesto). Reversibile: guard di segno (a<z / b<z) immutabili nel body.
+procedure __mn_divmod_signed(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int abs_a = 0
+    if a < z then
+        abs_a -= a
+    else
+        abs_a += a
+    fi a < z
+    local int abs_b = 0
+    if b < z then
+        abs_b -= b
+    else
+        abs_b += b
+    fi b < z
+    local int qu = 0
+    local int ru = 0
+    call __mn_divmod_nonneg(abs_a, abs_b, qu, ru, __mn_hist, __mn_scratch)
+    if a < z then
+        if b < z then
+            q += qu
+        else
+            q -= qu
+        fi b < z
+        r -= ru
+    else
+        if b < z then
+            q -= qu
+        else
+            q += qu
+        fi b < z
+        r += ru
+    fi a < z
+    uncall __mn_divmod_nonneg(abs_a, abs_b, qu, ru, __mn_hist, __mn_scratch)
+    delocal int ru = 0
+    delocal int qu = 0
+    if b < z then
+        abs_b += b
+    else
+        abs_b -= b
+    fi b < z
+    delocal int abs_b = 0
+    if a < z then
+        abs_a += a
+    else
+        abs_a -= a
+    fi a < z
+    delocal int abs_a = 0
+    delocal int z = 0
+
+// Resto signed: estrae solo r da __mn_divmod_signed, scarta q via uncall
+// dopo aver salvato r. Reversibilità preservata: uncall ripristina q=0,
+// r=0, a/b inalterati.
+procedure __mn_mod_signed(int a, int b, int r, stack __mn_hist, stack __mn_scratch)
+    local int q = 0
+    call __mn_divmod_signed(a, b, q, r, __mn_hist, __mn_scratch)
+    local int r_save = 0
+    r_save += r
+    uncall __mn_divmod_signed(a, b, q, r, __mn_hist, __mn_scratch)
+    r += r_save
+    push(r_save, __mn_hist)
+    delocal int r_save = 0
+    delocal int q = 0
 
 // Stampa intero con segno (show byte, char). Dipendenze: helpers.kairos, divmod.kairos.
 // REVERSIBILE: usa `uncall __mn_divmod_nonneg` per ripristinare n e azzerare qu/rem.
@@ -390,7 +482,7 @@ procedure main()
         __mn_e0 += (2 + 3)
         __mn_e1 += 10
         __mn_e1 -= 6
-        call __mn_mul_into(__mn_e2, __mn_e0, __mn_e1, __mn_hist, __mn_scratch)
+        call __mn_mul_signed_into(__mn_e2, __mn_e0, __mn_e1, __mn_hist, __mn_scratch)
         push(__mn_e1, __mn_scratch)
         push(__mn_e0, __mn_scratch)
         push(__mn_mem1, __mn_hist)

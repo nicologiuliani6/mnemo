@@ -14,3 +14,69 @@ procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack 
     fi saved_r >= b
     push(saved_r, __mn_hist)
     delocal int saved_r = 0
+
+// Divisione/resto signed C99 (truncamento verso zero, segno resto = segno
+// dividendo). q = 0, r = 0 all'ingresso; a, b interi qualsiasi (b != 0
+// richiesto). Reversibile: guard di segno (a<z / b<z) immutabili nel body.
+procedure __mn_divmod_signed(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int abs_a = 0
+    if a < z then
+        abs_a -= a
+    else
+        abs_a += a
+    fi a < z
+    local int abs_b = 0
+    if b < z then
+        abs_b -= b
+    else
+        abs_b += b
+    fi b < z
+    local int qu = 0
+    local int ru = 0
+    call __mn_divmod_nonneg(abs_a, abs_b, qu, ru, __mn_hist, __mn_scratch)
+    if a < z then
+        if b < z then
+            q += qu
+        else
+            q -= qu
+        fi b < z
+        r -= ru
+    else
+        if b < z then
+            q -= qu
+        else
+            q += qu
+        fi b < z
+        r += ru
+    fi a < z
+    uncall __mn_divmod_nonneg(abs_a, abs_b, qu, ru, __mn_hist, __mn_scratch)
+    delocal int ru = 0
+    delocal int qu = 0
+    if b < z then
+        abs_b += b
+    else
+        abs_b -= b
+    fi b < z
+    delocal int abs_b = 0
+    if a < z then
+        abs_a += a
+    else
+        abs_a -= a
+    fi a < z
+    delocal int abs_a = 0
+    delocal int z = 0
+
+// Resto signed: estrae solo r da __mn_divmod_signed, scarta q via uncall
+// dopo aver salvato r. Reversibilità preservata: uncall ripristina q=0,
+// r=0, a/b inalterati.
+procedure __mn_mod_signed(int a, int b, int r, stack __mn_hist, stack __mn_scratch)
+    local int q = 0
+    call __mn_divmod_signed(a, b, q, r, __mn_hist, __mn_scratch)
+    local int r_save = 0
+    r_save += r
+    uncall __mn_divmod_signed(a, b, q, r, __mn_hist, __mn_scratch)
+    r += r_save
+    push(r_save, __mn_hist)
+    delocal int r_save = 0
+    delocal int q = 0

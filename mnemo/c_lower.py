@@ -76,6 +76,9 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_putd_uint",
         "__mn_putd_plus",
         "__mn_putd_space",
+        "__mn_mul_signed_into",
+        "__mn_divmod_signed",
+        "__mn_mod_signed",
         "__mn_putx",
         "__mn_putx_uint",
         "__mn_puto",
@@ -4678,8 +4681,9 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return ins, Var(t), tm1 + tm2 + [t]
         if expr.op == "*":
             # `__mn_mul_into` cicla `b` volte; per `b<0` cicla all'infinito.
-            # Se `b` è costante negativa nota a compile-time, riscrivi come
-            # `-(a * abs(b))` con abs(b) come Constant positiva.
+            # Se `b` è costante negativa, riscrivi come `-(a * abs(b))`.
+            # Se `b` è runtime di segno ignoto, usa `__mn_mul_signed_into`
+            # che gestisce internamente il segno con guard reversibile.
             rhs_const = _int_constant_value(expr.right)
             if rhs_const is not None and rhs_const < 0:
                 pos_const = c.Constant("int", str(-rhs_const), expr.coord)
@@ -4689,9 +4693,14 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             pa, a_name, ca = _eval_to_arg_var(expr.left, ctx)
             pb, b_name, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
+            # Fast path: rhs const non negativa → __mn_mul_into diretto.
+            callee = (
+                "__mn_mul_into" if rhs_const is not None and rhs_const >= 0
+                else "__mn_mul_signed_into"
+            )
             pre = pa + pb + [
                 ICall(
-                    "__mn_mul_into",
+                    callee,
                     [t, a_name, b_name] + _kairos_stack_actuals(ctx),
                 )
             ]
@@ -4702,6 +4711,8 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         if expr.op == "/":
             # `__mn_divmod_nonneg` assume divisor >= 0; con costante negativa
             # nota a compile-time riscrivo `a / -k` come `-(a / k)`.
+            # Per dividendo o divisore runtime di segno ignoto uso
+            # `__mn_divmod_signed` (C99 trunc-toward-zero).
             rhs_const = _int_constant_value(expr.right)
             if rhs_const is not None and rhs_const < 0:
                 pos_const = c.Constant("int", str(-rhs_const), expr.coord)
@@ -4710,9 +4721,29 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 return _eval_expr(synth_neg, ctx)
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
-            t_a = ctx.fresh_temp()
+            lhs_const = _int_constant_value(expr.left)
+            use_signed = (
+                (lhs_const is None or lhs_const < 0)
+                or (rhs_const is None and lhs_const is not None and lhs_const >= 0)
+            )
             t_q = ctx.fresh_temp()
             t_r = ctx.fresh_temp()
+            if use_signed:
+                pre = (
+                    pa
+                    + pb
+                    + [
+                        ICall(
+                            "__mn_divmod_signed",
+                            [va, vb, t_q, t_r] + _kairos_stack_actuals(ctx),
+                        )
+                    ]
+                )
+                post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_r])]
+                ctx.use_hist = True
+                ctx.use_scratch = True
+                return pre + post, Var(t_q), [t_q]
+            t_a = ctx.fresh_temp()
             pre = (
                 pa
                 + pb
@@ -4731,6 +4762,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         if expr.op == "%":
             # `__mn_mod_nonneg` assume divisor >= 0; in C99 il segno del
             # risultato segue il dividendo, quindi `a % -k == a % k`.
+            # Per dividendo runtime negativo serve `__mn_mod_signed`.
             rhs_const = _int_constant_value(expr.right)
             if rhs_const is not None and rhs_const < 0:
                 pos_const = c.Constant("int", str(-rhs_const), expr.coord)
@@ -4738,8 +4770,27 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 return _eval_expr(synth_mod, ctx)
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
-            t_a = ctx.fresh_temp()
+            lhs_const = _int_constant_value(expr.left)
+            use_signed = lhs_const is None or lhs_const < 0
             t_r = ctx.fresh_temp()
+            if use_signed:
+                # Usa divmod_signed: produciamo anche t_q come scratch.
+                t_q = ctx.fresh_temp()
+                pre = (
+                    pa
+                    + pb
+                    + [
+                        ICall(
+                            "__mn_divmod_signed",
+                            [va, vb, t_q, t_r] + _kairos_stack_actuals(ctx),
+                        )
+                    ]
+                )
+                post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_q])]
+                ctx.use_hist = True
+                ctx.use_scratch = True
+                return pre + post, Var(t_r), [t_r]
+            t_a = ctx.fresh_temp()
             pre = (
                 pa
                 + pb
@@ -7714,6 +7765,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
             elif node.op == "%=":
                 needed.add("helpers.kairos")
                 needed.add("mod.kairos")
+                needed.add("divmod.kairos")
         if isinstance(node, c.BinaryOp):
             if node.op == "*":
                 needed.add("mul.kairos")
@@ -7723,6 +7775,7 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
             elif node.op == "%":
                 needed.add("helpers.kairos")
                 needed.add("mod.kairos")
+                needed.add("divmod.kairos")
             elif node.op in ("&", "|", "<<", ">>"):
                 needed.add("helpers.kairos")
                 needed.add("mul.kairos")
