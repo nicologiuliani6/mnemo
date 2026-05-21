@@ -71,7 +71,6 @@ Tempo stimato: 6-10h + design review.
 
 - **Memory aliasing arbitrario**: caller-callee aliasing tra mem cells non sempre supportato.
 - **Side effects con risultato non-restored**: `x = f(x)` dove `f` ha side-effect richiede uncall implicit (non ancora wired).
-- **Assignment-as-expression**: `int a = (x = 5);` non compila (mnemo: "espressione AST non supportata: Assignment"). C lo permette ma serve un valore di ritorno dall'assignment, complicato in reversibile.
 
 ### printf
 

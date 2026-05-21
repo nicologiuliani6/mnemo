@@ -4700,6 +4700,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             "CompoundLiteral non hoisted (contesto non supportato). "
             "Workaround: dichiara prima un Decl locale (`int tmp[N] = {...};`)."
         )
+    if isinstance(expr, c.Assignment):
+        # Assignment-as-expression: `int x = (a = 5);` o `if ((c = f()) > 0)`.
+        # Esegui l'assignment come stmt (side effect), poi leggi `lvalue` come valore.
+        stmt_ins = _lower_stmt(expr, ctx)
+        val_ins, val_op, val_temps = _eval_expr(expr.lvalue, ctx)
+        return stmt_ins + val_ins, val_op, val_temps
     raise MnemoCompileError(f"espressione AST non supportata: {type(expr).__name__}")
 
 
@@ -7006,6 +7012,17 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         return _lower_assign(_phys(ctx, logical), rhs_init, ctx)
 
     if isinstance(node, c.Assignment):
+        # Chained assignment `a = b = c = 7;`: AST è
+        # Assignment(lv=a, rv=Assignment(lv=b, rv=Assignment(lv=c, rv=7))).
+        # Riscrivo come sequenza: lower(inner) + Assignment(a, inner.lvalue).
+        # In assenza di side-effect non standard, equivalente all'eval C.
+        if node.op == "=" and isinstance(node.rvalue, c.Assignment):
+            inner = node.rvalue
+            out_ch: list[Instr] = []
+            out_ch.extend(_lower_stmt(inner, ctx))
+            outer = c.Assignment("=", node.lvalue, inner.lvalue, node.coord)
+            out_ch.extend(_lower_stmt(outer, ctx))
+            return out_ch
         if (
             isinstance(node.lvalue, c.ID)
             and node.op == "="
