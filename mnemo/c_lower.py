@@ -3052,7 +3052,16 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             if buf:
                 out.append(("lit", "".join(buf)))
                 buf = []
-            spec = fmt[i + 1]
+            # Length modifiers (no-op nel word-VM): `l`, `ll`, `h`, `hh`,
+            # `z`, `j`, `t`. Salta prima di leggere la conversion specifier.
+            j = i + 1
+            while j < len(fmt) and fmt[j] in ("l", "h", "z", "j", "t"):
+                j += 1
+            if j >= len(fmt):
+                raise MnemoCompileError(
+                    "printf: specificatore di conversione mancante dopo `%`"
+                )
+            spec = fmt[j]
             if spec == "%":
                 buf.append("%")
             elif spec == "c":
@@ -3072,7 +3081,7 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
                     f"printf: conversione non supportata %{spec!r} "
                     f"(supportati %%c %%d %%i %%u %%x %%p %%s %%%% e testo)"
                 )
-            i += 2
+            i = j + 1
         else:
             buf.append(fmt[i])
             i += 1
