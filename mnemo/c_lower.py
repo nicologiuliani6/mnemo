@@ -1106,8 +1106,18 @@ def _try_parse_array_decl(
     Per la prima dimensione (outermost) inferisce la dim dall'init quando assente:
     - `int a[] = {1,2,3}` → 3
     - `char s[] = "abc"`  → 4 (incl. NUL)
+    Supporta anche typedef-of-array: `typedef int vec3[3]; vec3 v;` →
+    risolve `vec3` ad ArrayDecl int[3] e usa il declname dal TypeDecl esterno.
     """
     cur = node.type
+    declname_from_typedef: str | None = None
+    if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.IdentifierType):
+        names = cur.type.names
+        if len(names) == 1 and names[0] in ctx.typedef_map:
+            leaf = _follow_typedef_chain(list(names), ctx.typedef_map, set())
+            if isinstance(leaf, c.ArrayDecl):
+                declname_from_typedef = cur.declname
+                cur = leaf
     dims: list[int] = []
     first = True
     while isinstance(cur, c.ArrayDecl):
@@ -1134,7 +1144,12 @@ def _try_parse_array_decl(
             "array: elemento supportato solo se scalare Mnemo o puntatore "
             "(int/unsigned/bool/…, int*, void*)"
         )
-    name = _decl_basename_from_innermost(cur)
+    # Per typedef-array, il declname della variabile è all'esterno (nel TypeDecl
+    # iniziale), non nell'innermost (che riporta il nome del typedef).
+    if declname_from_typedef is not None:
+        name = declname_from_typedef
+    else:
+        name = _decl_basename_from_innermost(cur)
     if name is None:
         return None
     tot = int(math.prod(dims))
