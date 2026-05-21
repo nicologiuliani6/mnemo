@@ -2496,8 +2496,47 @@ def _enum_scalar_decl_name(node: c.Decl) -> str | None:
 
 def _int_ptr_var_decl_name(node: c.Decl, td: dict[str, c.Node]) -> str | None:
     """Puntatore a scalare (`int*`, `char*`, `unsigned*`, anche con più `*`).
-    Anche pointer-to-array di scalare: `int (*p)[N]` lowered come `int*`."""
+    Anche pointer-to-array di scalare: `int (*p)[N]` lowered come `int*`.
+    Risolve typedef-of-pointer: `typedef int *IntPtr; IntPtr p;`."""
     cur = node.type
+    # `IntPtr p = ...`: TypeDecl(declname='p', type=IdentifierType(['IntPtr']))
+    # dove IntPtr è un typedef di `PtrDecl(...)`.
+    if (
+        isinstance(cur, c.TypeDecl)
+        and isinstance(cur.type, c.IdentifierType)
+        and cur.declname is not None
+        and td
+        and len(cur.type.names) == 1
+        and cur.type.names[0] in td
+    ):
+        try:
+            leaf = _follow_typedef_chain(list(cur.type.names), td, set())
+        except MnemoCompileError:
+            leaf = None
+        if isinstance(leaf, c.PtrDecl):
+            # Eredita il declname dal site di dichiarazione.
+            declname = str(cur.declname)
+            # Naviga al TypeDecl scalare in fondo per riusare il check sotto.
+            inner_synth: c.Node = leaf.type
+            while isinstance(inner_synth, c.PtrDecl):
+                inner_synth = inner_synth.type
+            if (
+                isinstance(inner_synth, c.TypeDecl)
+                and isinstance(inner_synth.type, c.IdentifierType)
+            ):
+                try:
+                    ex = _expand_typedef_names(list(inner_synth.type.names), td)
+                except MnemoCompileError:
+                    ex = []
+                if tuple(ex) in (
+                    ("int",), ("unsigned", "int"), ("unsigned",),
+                    ("char",), ("unsigned", "char"), ("void",),
+                    ("short",), ("short", "int"),
+                    ("long",), ("long", "int"),
+                    ("unsigned", "short"), ("unsigned", "long"),
+                    ("_Bool",), ("bool",),
+                ):
+                    return declname
     if not isinstance(cur, c.PtrDecl):
         return None
     inner = cur.type
