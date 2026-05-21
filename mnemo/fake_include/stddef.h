@@ -12,4 +12,11 @@ typedef int wchar_t;
 #define NULL ((void *)0)
 #endif
 
+/* `offsetof(T, M)`: Mnemo C-subset → field-index * _SIZEOF_SCALAR.
+   gcc espande il proprio offsetof in __builtin_offsetof; usiamo lo stesso
+   token così c_parse.py può riscriverlo in `__mn_offsetof_str("T","M")`. */
+#ifndef offsetof
+#define offsetof(T, M) __builtin_offsetof(T, M)
+#endif
+
 #endif

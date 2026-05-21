@@ -3241,6 +3241,68 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
     return out
 
 
+def _resolve_offsetof_args(expr: c.FuncCall, ctx: _Ctx) -> int:
+    """Resolve `__mn_offsetof_str("T-spec", "member-path")` → field-index * _SIZEOF_SCALAR.
+
+    `T-spec` ∈ {"struct Name", "union Name", "TypedefName"}. `member-path`
+    uses dotted notation (`a.b.c`); Mnemo flatten name uses `__`.
+    Mnemo VM è word-VM: ogni scalare = _SIZEOF_SCALAR (4); alignment 4.
+    Per union ogni campo ha offset 0.
+    """
+    args = expr.args.exprs if expr.args is not None else []
+    if len(args) != 2:
+        raise MnemoCompileError("__mn_offsetof_str: serve (type, member)")
+    a0, a1 = args[0], args[1]
+    if not (
+        isinstance(a0, c.Constant) and a0.type == "string"
+        and isinstance(a1, c.Constant) and a1.type == "string"
+    ):
+        raise MnemoCompileError("__mn_offsetof_str: args devono essere stringhe")
+    type_spec = a0.value.strip('"')
+    member = a1.value.strip('"')
+    spec = type_spec.strip()
+    fields: list[tuple[str, c.Node]] | None
+    is_union = False
+    if spec.startswith("struct "):
+        tag = spec[len("struct "):].strip()
+        fields = ctx.struct_specs.get(tag)
+        if fields is None:
+            raise MnemoCompileError(f"offsetof: struct {tag!r} non trovata")
+    elif spec.startswith("union "):
+        tag = spec[len("union "):].strip()
+        fields = ctx.union_specs.get(tag)
+        if fields is None:
+            raise MnemoCompileError(f"offsetof: union {tag!r} non trovata")
+        is_union = True
+    else:
+        if spec not in ctx.typedef_map:
+            raise MnemoCompileError(f"offsetof: tipo {spec!r} non trovato")
+        leaf = _follow_typedef_chain([spec], ctx.typedef_map, set())
+        if isinstance(leaf, c.Union):
+            tag = leaf.name if leaf.name else spec
+            fields = ctx.union_specs.get(tag)
+            if fields is None:
+                raise MnemoCompileError(f"offsetof: union {tag!r} non risolta")
+            is_union = True
+        elif isinstance(leaf, c.Struct):
+            tag = leaf.name if leaf.name else spec
+            fields = ctx.struct_specs.get(tag)
+            if fields is None:
+                raise MnemoCompileError(f"offsetof: struct {tag!r} non risolta")
+        else:
+            raise MnemoCompileError(f"offsetof: {spec!r} non è struct/union")
+    if is_union:
+        return 0
+    flat = member.replace(".", "__")
+    assert fields is not None
+    for idx, (fn, _ft) in enumerate(fields):
+        if fn == flat:
+            return idx * _SIZEOF_SCALAR
+    raise MnemoCompileError(
+        f"offsetof: campo {member!r} non trovato in {spec!r}"
+    )
+
+
 def _sizeof_struct_tag(tag: str, ctx: _Ctx) -> int:
     fields = ctx.struct_specs.get(tag)
     if not fields:
@@ -4001,6 +4063,8 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return _eval_expr(_fold_exprlist_as_comma_chain(expr), ctx)
 
     if isinstance(expr, c.FuncCall):
+        if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
+            return [], Imm(_resolve_offsetof_args(expr, ctx)), []
         expr, name = _resolve_indirect_callee(expr, ctx)
         if name == "malloc":
             if name not in ctx.extern_procs:
