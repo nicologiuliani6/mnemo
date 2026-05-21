@@ -67,7 +67,7 @@ Tempo stimato: 6-10h + design review.
 - **`continue` dentro `if` dentro `while`/`for`**: rompe IF/FI reversibile se l'if-then muta la guardia. Mnemo emette "[VM] IF/FI non reversibile".
 - **Stato muta-guardia in loop** (state machines): `switch(state) { case 0: state=1; break; ...}` dentro while: la guardia non è più vera all'uscita del case.
 - **`_Generic`** (C11). Compile-time, fattibile via AST pre-pass.
-- **Aritmetica negativa runtime**: `a * b` / `a / b` / `a % b` con `b<0` runtime cicla infinito (`__mn_mul_into` / `__mn_divmod_into` assumono b>=0). Serve `mul_signed.kairos` / `divmod_signed.kairos`. Caso `b` costante negativa nota a compile-time è gestito (riscrittura `-(a * |b|)`).
+- **Aritmetica negativa runtime**: `a * b` / `a / b` / `a % b` con `b<0` runtime cicla infinito (`__mn_mul_into` / `__mn_divmod_into` assumono b>=0). Serve `mul_signed.kairos` / `divmod_signed.kairos`. Caso `b` costante negativa nota a compile-time è gestito (riscrittura `-(a * |b|)`, `-(a / |b|)`, `a % |b|`).
 
 ### Semantica reversibile
 

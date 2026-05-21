@@ -4423,6 +4423,14 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 ctx.use_scratch = True
             return pre + post, Var(t), [t]
         if expr.op == "/":
+            # `__mn_divmod_nonneg` assume divisor >= 0; con costante negativa
+            # nota a compile-time riscrivo `a / -k` come `-(a / k)`.
+            rhs_const = _int_constant_value(expr.right)
+            if rhs_const is not None and rhs_const < 0:
+                pos_const = c.Constant("int", str(-rhs_const), expr.coord)
+                synth_div = c.BinaryOp("/", expr.left, pos_const, expr.coord)
+                synth_neg = c.UnaryOp("-", synth_div, expr.coord)
+                return _eval_expr(synth_neg, ctx)
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t_a = ctx.fresh_temp()
@@ -4444,6 +4452,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             ctx.use_scratch = True
             return pre + post, Var(t_q), [t_q]
         if expr.op == "%":
+            # `__mn_mod_nonneg` assume divisor >= 0; in C99 il segno del
+            # risultato segue il dividendo, quindi `a % -k == a % k`.
+            rhs_const = _int_constant_value(expr.right)
+            if rhs_const is not None and rhs_const < 0:
+                pos_const = c.Constant("int", str(-rhs_const), expr.coord)
+                synth_mod = c.BinaryOp("%", expr.left, pos_const, expr.coord)
+                return _eval_expr(synth_mod, ctx)
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t_a = ctx.fresh_temp()
