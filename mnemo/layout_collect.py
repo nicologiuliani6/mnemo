@@ -1146,10 +1146,28 @@ def compute_program_mem_layout(
                     file_par1.add(loc)
             continue
 
-        if L._try_parse_array_decl(ext, fs_ctx) is not None:
-            raise MnemoCompileError(
-                "variabile a livello file: solo scalari `int`/typedef supportati (niente array)"
+        ap = L._try_parse_array_decl(ext, fs_ctx)
+        if ap is not None:
+            name, dims, esz = ap
+            tot = int(math.prod(dims))
+            if name in fs_ctx.int_locals:
+                raise MnemoCompileError(f"ridichiarazione file-scope: {name}")
+            fs_ctx.array_info[name] = L._ArrayInfo(
+                dims=dims, total=tot, elem_size=esz
             )
+            for i in range(tot):
+                cell = L._array_elem_local(name, i)
+                if cell in fs_ctx.int_locals:
+                    raise MnemoCompileError(f"ridichiarazione: {cell}")
+                fs_ctx.int_locals.add(cell)
+                if ("__file__", cell) in slot_of:
+                    raise MnemoCompileError(
+                        f"variabile file-scope duplicata: {cell}"
+                    )
+                alloc("__file__", cell)
+                if cell.startswith("__mn_p1_"):
+                    file_par1.add(cell)
+            continue
         tdm = td
         name = L._scalar_decl_name(ext, tdm)
         if name is None:

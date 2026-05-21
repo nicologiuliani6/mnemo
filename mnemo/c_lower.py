@@ -6931,13 +6931,24 @@ def _register_file_scope_struct_union_tags(
     ctx: _Ctx, file_ast: c.FileAST
 ) -> None:
     """
-    In main le dichiarazioni file-scope popolano struct_tag_of_var / union_tag_of_var;
-    nelle procedure utente va ripetuto, altrimenti `mps.client_done` non risolve `mps`.
+    In main le dichiarazioni file-scope popolano struct_tag_of_var / union_tag_of_var
+    e array_info (per array a file-scope); nelle procedure utente va ripetuto,
+    altrimenti `mps.client_done` non risolve `mps`.
     """
     for ext in file_ast.ext:
         if not isinstance(ext, c.Decl):
             continue
         if isinstance(ext.type, c.FuncDecl):
+            continue
+        if isinstance(ext.type, c.ArrayDecl):
+            ap = _try_parse_array_decl(ext, ctx)
+            if ap is not None:
+                name, dims, esz = ap
+                tot = int(math.prod(dims))
+                ctx.array_info[name] = _ArrayInfo(
+                    dims=dims, total=tot, elem_size=esz
+                )
+                ctx.var_types[name] = ext.type
             continue
         if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
             continue
@@ -7681,10 +7692,32 @@ def lower_file_to_program(
     # con K != 0. Le celle sono già zero per default, quindi `mem += K` setta
     # il valore iniziale. Per static locals (semantica gcc): l'init avviene
     # una sola volta, alla partenza del programma — equivalente a init main.
+    # Lo stesso vale per array a file-scope `int arr[N] = {…};`.
     for ext in ast.ext:
         if not isinstance(ext, c.Decl) or ext.init is None:
             continue
         if isinstance(ext.type, c.FuncDecl):
+            continue
+        # Array a file-scope con InitList: emit IAddEq cell-by-cell.
+        if isinstance(ext.type, c.ArrayDecl):
+            ap = _try_parse_array_decl(ext, ctx)
+            if ap is None or not isinstance(ext.init, c.InitList):
+                continue
+            arr_name, dims, _esz = ap
+            tot = int(math.prod(dims))
+            if len(dims) == 1:
+                dense = _array_init_dense_1d(ext.init, tot)
+            else:
+                dense = _array_init_dense_nd(ext.init, list(dims))
+            for j, el in enumerate(dense):
+                if el is None:
+                    continue
+                v = _int_constant_value(el)
+                if v is None or v == 0:
+                    continue
+                cell_name = _array_elem_local(arr_name, j)
+                pn = _phys(ctx, cell_name)
+                instrs.append(IAddEq(pn, Imm(v)))
             continue
         # Solo scalar int / typedef-of-int con init Constant non-zero supportato qui.
         nm = _scalar_int_decl_name_for_init(ext, file_td)
