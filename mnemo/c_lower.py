@@ -6124,9 +6124,17 @@ def _lower_if(node: c.If, ctx: _Ctx) -> list[Instr]:
 
 def _switch_case_label_str(it: c.Case, ctx: _Ctx) -> str:
     if isinstance(it.expr, c.Constant):
+        if it.expr.type == "char":
+            return str(_literal_char_value(it.expr))
         return str(_const_int(it.expr))
     if isinstance(it.expr, c.ID) and it.expr.name in ctx.enum_constants:
         return str(ctx.enum_constants[it.expr.name])
+    if isinstance(it.expr, c.UnaryOp) and it.expr.op == "-":
+        inner = it.expr.expr
+        if isinstance(inner, c.Constant):
+            if inner.type == "char":
+                return str(-_literal_char_value(inner))
+            return str(-_const_int(inner))
     raise MnemoCompileError("switch: case richiede costante intera o enumeratore")
 
 
