@@ -6830,6 +6830,13 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 ctx.char_ptr_string_base[logical] = ctx.char_ptr_string_base[src_log]
             if src_log in ctx.char_ptr_string_value:
                 ctx.char_ptr_string_value[logical] = ctx.char_ptr_string_value[src_log]
+            # `char *p = a;` con `a` char[]: bind p → a per `printf("%s", p)`.
+            if (
+                src_log not in ctx.char_ptr_string_base
+                and src_log in ctx.array_info
+                and ctx.array_info[src_log].elem_size == 1
+            ):
+                ctx.char_ptr_string_base[logical] = src_log
         return _lower_assign(_phys(ctx, logical), rhs_init, ctx)
 
     if isinstance(node, c.Assignment):
