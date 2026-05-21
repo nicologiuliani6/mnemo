@@ -6430,6 +6430,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             ):
                 s = _literal_c_string(node.init)
                 b = s.encode("utf-8")
+                # Cache value (compile-time strlen/strcmp; warning: NUL middle
+                # write a runtime invalida questa approssimazione).
+                ctx.char_ptr_string_value[logical] = s
                 out2: list[Instr] = []
                 # Mnemo non scrive il NUL trailing perché celle inizializzano a 0.
                 for j, byte in enumerate(b):
