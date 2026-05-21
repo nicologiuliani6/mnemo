@@ -3165,6 +3165,8 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
                 out.append(("u",))
             elif spec == "x":
                 out.append(("x",))
+            elif spec == "o":
+                out.append(("o",))
             elif spec == "p":
                 out.append(("p",))
             elif spec == "s":
@@ -3227,6 +3229,9 @@ def _io_opt_uncall_wrap(ctx: "_Ctx", call_ins: "ICall") -> list[Instr]:
 def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
     def _format_hex_u32(v: int) -> str:
         return format(v & 0xFFFFFFFF, "x")
+
+    def _format_oct_u32(v: int) -> str:
+        return format(v & 0xFFFFFFFF, "o")
 
     if not isinstance(node.name, c.ID):
         raise MnemoCompileError("printf: callee non valido")
@@ -3329,6 +3334,29 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError("printf %x: espressione non valida")
+        elif k == "o":
+            ex = exprs[arg_i]
+            arg_i += 1
+            if isinstance(ex, c.Constant):
+                val = _literal_int_widen(ex)
+                for ch in _format_oct_u32(val):
+                    ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
+                    out.extend(ins)
+                    tm_acc.extend(tt)
+            else:
+                ei, op, tm = _eval_expr(ex, ctx)
+                out.extend(ei)
+                if isinstance(op, Imm):
+                    for ch in _format_oct_u32(op.value):
+                        ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
+                        out.extend(ins)
+                        tm_acc.extend(tt)
+                    tm_acc.extend(tm)
+                else:
+                    raise MnemoCompileError(
+                        "printf %o: argomento runtime non supportato "
+                        "(usa una costante o calcola fuori printf)"
+                    )
         elif k == "p":
             ex = exprs[arg_i]
             arg_i += 1
