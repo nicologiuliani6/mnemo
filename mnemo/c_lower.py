@@ -1199,6 +1199,10 @@ def _eval_const_int_expr(node: c.Node, ctx: object | None = None) -> int | None:
         return _eval_const_int_expr(
             node.iftrue if cv != 0 else node.iffalse, ctx
         )
+    if isinstance(node, c.ID) and ctx is not None:
+        ec = getattr(ctx, "enum_constants", None)
+        if ec is not None and node.name in ec:
+            return ec[node.name]
     return None
 
 
