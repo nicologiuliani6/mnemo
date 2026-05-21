@@ -25,7 +25,6 @@ Tempo stimato: 6-10h + design review.
 
 ### Puntatori
 
-- **Pointer-to-array** come tipo composito (es. `int (*pa)[10]`).
 - Function pointer runtime: solo compile-time-resolved.
 
 ### Array

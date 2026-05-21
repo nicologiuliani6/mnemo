@@ -2410,13 +2410,28 @@ def _enum_scalar_decl_name(node: c.Decl) -> str | None:
 
 
 def _int_ptr_var_decl_name(node: c.Decl, td: dict[str, c.Node]) -> str | None:
-    """Puntatore a scalare (`int*`, `char*`, `unsigned*`, anche con più `*`)."""
+    """Puntatore a scalare (`int*`, `char*`, `unsigned*`, anche con più `*`).
+    Anche pointer-to-array di scalare: `int (*p)[N]` lowered come `int*`."""
     cur = node.type
     if not isinstance(cur, c.PtrDecl):
         return None
     inner = cur.type
     while isinstance(inner, c.PtrDecl):
         inner = inner.type
+    # `int (*p)[N]`: scendi attraverso ArrayDecl per arrivare al TypeDecl scalare.
+    declname_from_array = None
+    if isinstance(inner, c.ArrayDecl):
+        # PtrDecl(ArrayDecl): il declname è sul PtrDecl interno o sul TypeDecl
+        # in fondo. pycparser annida ArrayDecl(TypeDecl); estraiamo il nome
+        # navigando fino al TypeDecl finale.
+        a = inner
+        while isinstance(a, c.ArrayDecl):
+            a = a.type
+        if isinstance(a, c.TypeDecl) and a.declname is not None:
+            declname_from_array = str(a.declname)
+            inner = a
+        else:
+            return None
     if not isinstance(inner, c.TypeDecl):
         return None
     if not isinstance(inner.type, c.IdentifierType):
@@ -3735,9 +3750,38 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
-        base, subs = _flatten_array_ref_chain(expr)
+        # `(*p)[i]`: ArrayRef.name è UnaryOp("*", ID(p)). Equivale a `p[i]`
+        # → rewrite a `*(p + i)` (puntatore-indicizzazione).
+        nm = expr.name
+        if (
+            isinstance(nm, c.UnaryOp) and nm.op == "*"
+            and isinstance(nm.expr, c.ID)
+        ):
+            pid = nm.expr
+            new_expr = c.UnaryOp(
+                "*",
+                c.BinaryOp("+", pid, expr.subscript, getattr(expr, "coord", None)),
+                getattr(expr, "coord", None),
+            )
+            return _eval_expr(new_expr, ctx)
+        try:
+            base, subs = _flatten_array_ref_chain(expr)
+        except MnemoCompileError:
+            raise
         base_log = _scope_resolve(ctx, base)
         if base_log not in ctx.array_info:
+            # Fallback `p[i]` su puntatore: rewrite a `*(p + i)`.
+            if (
+                base_log in ctx.int_locals
+                and isinstance(expr.name, c.ID)
+            ):
+                new_expr = c.UnaryOp(
+                    "*",
+                    c.BinaryOp("+", expr.name, expr.subscript,
+                               getattr(expr, "coord", None)),
+                    getattr(expr, "coord", None),
+                )
+                return _eval_expr(new_expr, ctx)
             raise MnemoCompileError(
                 f"{base!r} non è un array dichiarato (es. int {base}[N] o int {base}[R][C])"
             )
@@ -3847,6 +3891,15 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             inner = expr.expr
             if isinstance(inner, c.ID):
                 n = _scope_resolve(ctx, inner.name)
+                if n in ctx.array_info:
+                    # `&a` su array: indirizzo dell'elemento 0.
+                    cell0 = _array_elem_local(n, 0)
+                    if cell0 not in ctx.slot_index:
+                        raise MnemoCompileError(
+                            f"&{inner.name}: array sconosciuto (base non in slot_index)"
+                        )
+                    ctx.addr_taken_logicals.add(cell0)
+                    return [], Imm(ctx.slot_index[cell0]), []
                 if n in ctx.slot_index:
                     ctx.addr_taken_logicals.add(n)
                     return [], Imm(ctx.slot_index[n]), []
@@ -6405,6 +6458,34 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 f"struct: assegnamento con {node.op!r} non supportato"
             )
         if isinstance(node.lvalue, c.ArrayRef):
+            lv = node.lvalue
+            # `(*p)[i] = X` → `*(p + i) = X`
+            if (
+                isinstance(lv.name, c.UnaryOp) and lv.name.op == "*"
+                and isinstance(lv.name.expr, c.ID)
+            ):
+                pid = lv.name.expr
+                new_lv = c.UnaryOp(
+                    "*",
+                    c.BinaryOp("+", pid, lv.subscript, lv.coord),
+                    lv.coord,
+                )
+                new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
+                return _lower_stmt(new_assign, ctx)
+            # `p[i] = X` su puntatore (non array): rewrite a `*(p + i) = X`.
+            if isinstance(lv.name, c.ID):
+                base_log = _scope_resolve(ctx, lv.name.name)
+                if (
+                    base_log not in ctx.array_info
+                    and base_log in ctx.int_locals
+                ):
+                    new_lv = c.UnaryOp(
+                        "*",
+                        c.BinaryOp("+", lv.name, lv.subscript, lv.coord),
+                        lv.coord,
+                    )
+                    new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
+                    return _lower_stmt(new_assign, ctx)
             base, subs = _flatten_array_ref_chain(node.lvalue)
             if node.op == "=":
                 return _lower_array_subscript_assign(base, subs, node.rvalue, ctx)
