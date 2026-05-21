@@ -6702,6 +6702,36 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             )
                             out_init.extend(_lower_stmt(sub_init, ctx))
                         return out_init
+                # `struct V a = b;` con b altra struct stesso tag: espandi
+                # in `a.f = b.f` per ogni campo. Copre anche compound literal
+                # hoisted (`(struct V){...}` → `__mn_cl<N>` ID-ref).
+                if isinstance(node.init, c.ID):
+                    src_log = _scope_resolve(ctx, node.init.name)
+                    if (
+                        ctx.struct_tag_of_var.get(src_log) == st_tag
+                        and st_tag in ctx.struct_specs
+                    ):
+                        out_sc: list[Instr] = []
+                        for fn_i, fty_i in ctx.struct_specs[st_tag]:
+                            if _type_node_is_pthread_mutex(fty_i, ctx.typedef_map):
+                                continue
+                            lhs_ref = c.StructRef(
+                                c.ID(logical, node.coord),
+                                ".",
+                                c.ID(fn_i, node.coord),
+                                node.coord,
+                            )
+                            rhs_ref = c.StructRef(
+                                c.ID(node.init.name, node.coord),
+                                ".",
+                                c.ID(fn_i, node.coord),
+                                node.coord,
+                            )
+                            sub_sc = c.Assignment(
+                                "=", lhs_ref, rhs_ref, node.coord
+                            )
+                            out_sc.extend(_lower_stmt(sub_sc, ctx))
+                        return out_sc
                 if not isinstance(node.init, c.InitList):
                     raise MnemoCompileError("init struct: serve `{ ... }`")
                 has_named_s = any(
