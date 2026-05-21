@@ -3899,6 +3899,14 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 getattr(expr, "coord", None),
             )
             return _eval_expr(new_expr, ctx)
+        # `s.ptr_field[i]` o `p->ptr_field[i]`: base StructRef → `*(base + i)`.
+        if isinstance(nm, c.StructRef):
+            new_expr = c.UnaryOp(
+                "*",
+                c.BinaryOp("+", nm, expr.subscript, getattr(expr, "coord", None)),
+                getattr(expr, "coord", None),
+            )
+            return _eval_expr(new_expr, ctx)
         try:
             base, subs = _flatten_array_ref_chain(expr)
         except MnemoCompileError:
@@ -6716,6 +6724,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 new_lv = c.UnaryOp(
                     "*",
                     c.BinaryOp("+", pid, lv.subscript, lv.coord),
+                    lv.coord,
+                )
+                new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
+                return _lower_stmt(new_assign, ctx)
+            # `s.ptr_field[i] = X` o `p->ptr_field[i] = X` → `*(s.ptr_field + i) = X`.
+            if isinstance(lv.name, c.StructRef):
+                new_lv = c.UnaryOp(
+                    "*",
+                    c.BinaryOp("+", lv.name, lv.subscript, lv.coord),
                     lv.coord,
                 )
                 new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
