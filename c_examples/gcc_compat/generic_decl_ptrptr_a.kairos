@@ -157,7 +157,7 @@ procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
 procedure __mn_putx(int n, stack __mn_hist, stack __mn_scratch)
     call __mn_putx_uint(n, __mn_hist, __mn_scratch)
 
-// Pool puntatori Mnemo — generato, N=8 celle (__mn_mem0..__mn_mem7).
+// Pool puntatori Mnemo — generato, N=9 celle (__mn_mem0..__mn_mem8).
 // `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.
 // `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push
 // e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).
@@ -171,7 +171,7 @@ procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scr
         push(t, __mn_hist)
     delocal int t = 0
 
-procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, stack __mn_hist, stack __mn_scratch)
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += val
@@ -204,8 +204,12 @@ procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int _
         push(__mn_mem7, __mn_hist)
         __mn_mem7 += val
     fi slot == 7
+    if slot == 8 then
+        push(__mn_mem8, __mn_hist)
+        __mn_mem8 += val
+    fi slot == 8
 
-procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int out, stack __mn_hist, stack __mn_scratch)
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int out, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         local int t = 0
             t += __mn_mem0
@@ -270,8 +274,16 @@ procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
             push(t, __mn_hist)
         delocal int t = 0
     fi slot == 7
+    if slot == 8 then
+        local int t = 0
+            t += __mn_mem8
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot == 8
 
-procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int ctr, stack __mn_hist, stack __mn_scratch)
+procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int __mn_mem7, int __mn_mem8, int ctr, stack __mn_hist, stack __mn_scratch)
     local int ctr0 = 0
         ctr0 += ctr
         if slot == 0 then
@@ -298,6 +310,9 @@ procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
         if slot == 7 then
             push(__mn_mem7, __mn_hist)
         fi slot == 7
+        if slot == 8 then
+            push(__mn_mem8, __mn_hist)
+        fi slot == 8
         if slot == 0 then
             if ctr0 == 1 then
                 push(ctr, __mn_hist)
@@ -346,6 +361,12 @@ procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
                 ctr -= 1
             fi ctr0 == 8
         fi slot == 7
+        if slot == 8 then
+            if ctr0 == 9 then
+                push(ctr, __mn_hist)
+                ctr -= 1
+            fi ctr0 == 9
+        fi slot == 8
         push(ctr0, __mn_hist)
     delocal int ctr0 = 0
 
@@ -360,6 +381,7 @@ procedure main()
     local int __mn_mem5 = 0
     local int __mn_mem6 = 0
     local int __mn_mem7 = 0
+    local int __mn_mem8 = 0
     local int __mn_exit = 0
     local int __mn_pool_ctr = 0
     local int __mn_e0 = 0
@@ -367,29 +389,29 @@ procedure main()
     local int __mn_e2 = 0
     local int __mn_e3 = 0
         // generato da Mnemo da C
-        __mn_pool_ctr += 4
-        push(__mn_mem0, __mn_hist)
-        __mn_mem0 += 13
+        __mn_pool_ctr += 5
         push(__mn_mem1, __mn_hist)
-        __mn_mem1 += 0
+        __mn_mem1 += 13
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += 1
-        push(__mn_e1, __mn_hist)
-        __mn_e1 += __mn_mem2
-        call __mn_pool_load(__mn_e1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_e0, __mn_hist, __mn_scratch)
-        call __mn_pool_load(__mn_e0, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_e2, __mn_hist, __mn_scratch)
         push(__mn_mem3, __mn_hist)
-        __mn_mem3 += __mn_e2
+        __mn_mem3 += 2
+        push(__mn_e1, __mn_hist)
+        __mn_e1 += __mn_mem3
+        call __mn_pool_load(__mn_e1, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_e0, __mn_hist, __mn_scratch)
+        call __mn_pool_load(__mn_e0, __mn_mem0, __mn_mem1, __mn_mem2, __mn_mem3, __mn_mem4, __mn_mem5, __mn_mem6, __mn_mem7, __mn_mem8, __mn_e2, __mn_hist, __mn_scratch)
+        push(__mn_mem4, __mn_hist)
+        __mn_mem4 += __mn_e2
         push(__mn_e2, __mn_scratch)
         push(__mn_e0, __mn_scratch)
         push(__mn_e1, __mn_scratch)
-        call __mn_putd(__mn_mem3, __mn_hist, __mn_scratch)
+        call __mn_putd(__mn_mem4, __mn_hist, __mn_scratch)
         __mn_e3 += 10
         show(__mn_e3, char)
         __mn_e3 -= 10
         push(__mn_e3, __mn_scratch)
         push(__mn_exit, __mn_hist)
-        __mn_exit += __mn_mem3
+        __mn_exit += __mn_mem4
         show(__mn_exit)
         // return
     push(__mn_e3, __mn_hist)
@@ -404,6 +426,8 @@ procedure main()
     delocal int __mn_pool_ctr = 0
     push(__mn_exit, __mn_hist)
     delocal int __mn_exit = 0
+    push(__mn_mem8, __mn_hist)
+    delocal int __mn_mem8 = 0
     push(__mn_mem7, __mn_hist)
     delocal int __mn_mem7 = 0
     push(__mn_mem6, __mn_hist)

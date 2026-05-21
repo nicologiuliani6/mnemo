@@ -857,7 +857,10 @@ def compute_program_mem_layout(
 
     td, specs, unions, enums = L.collect_file_typedefs_structs_unions_enums(ast)
     slot_of: dict[tuple[str, str], int] = {}
-    cursor = 0
+    # Slot 0 riservato come "sentinel NULL": `int *p = NULL` ≡ p = 0, e
+    # `&v` di una variabile reale non collide mai con NULL. Senza la
+    # riserva, la prima variabile finiva su slot 0 → `if (p) {...}` falso.
+    cursor = 1
     ret_words: dict[str, int] = {}
 
     def alloc(fn: str, logical: str) -> None:
