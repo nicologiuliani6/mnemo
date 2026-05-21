@@ -1052,12 +1052,29 @@ def _try_parse_array_decl(
 ) -> tuple[str, tuple[int, ...], int] | None:
     """
     Ritorna `(nome, dims, sizeof_elemento)` per dichiarazioni array, altrimenti `None`.
+    Per la prima dimensione (outermost) inferisce la dim dall'init quando assente:
+    - `int a[] = {1,2,3}` → 3
+    - `char s[] = "abc"`  → 4 (incl. NUL)
     """
     cur = node.type
     dims: list[int] = []
+    first = True
     while isinstance(cur, c.ArrayDecl):
-        dims.append(_array_dim_const(cur.dim))
+        if cur.dim is None and first and node.init is not None:
+            init = node.init
+            if isinstance(init, c.InitList):
+                dims.append(len(init.exprs or []))
+            elif (
+                isinstance(init, c.Constant) and init.type == "string"
+            ):
+                s = _literal_c_string(init)
+                dims.append(len(s.encode("utf-8")) + 1)
+            else:
+                dims.append(_array_dim_const(cur.dim))
+        else:
+            dims.append(_array_dim_const(cur.dim))
         cur = cur.type
+        first = False
     if not dims:
         return None
     esz = _sizeof_array_element_type(cur, ctx)
@@ -5348,7 +5365,7 @@ def _eval_to_var(
 
 def _kairos_atom(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], str, list[str]]:
     if isinstance(expr, c.Constant):
-        v = _const_int(expr)
+        v = _literal_int_widen(expr)
         if v < 0:
             t = ctx.fresh_temp()
             return [ISubEq(t, Imm(-v))], t, [t]
@@ -5356,7 +5373,7 @@ def _kairos_atom(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], str, list[str]]:
     if isinstance(expr, c.UnaryOp) and expr.op == "-" and isinstance(
         expr.expr, c.Constant
     ):
-        v = -_const_int(expr.expr)
+        v = -_literal_int_widen(expr.expr)
         if v < 0:
             t = ctx.fresh_temp()
             return [ISubEq(t, Imm(-v))], t, [t]
@@ -5395,7 +5412,7 @@ def _lower_predicate_simple(
             return [], ("0", "==", "0"), []
         raise MnemoCompileError(f"condizione: variabile non dichiarata {expr.name!r}")
     if isinstance(expr, c.Constant):
-        v = _const_int(expr)
+        v = _literal_int_widen(expr)
         if v == 0:
             return [], ("0", "==", "1"), []
         return [], ("0", "==", "0"), []
@@ -6308,6 +6325,30 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         )
                     )
                 return out
+            # `char s[] = "literal";` o `char s[N] = "lit";`: scrive byte-per-byte
+            # con NUL implicito, allineato col layout già allocato.
+            if (
+                isinstance(node.init, c.Constant)
+                and node.init.type == "string"
+                and len(dims) == 1
+            ):
+                s = _literal_c_string(node.init)
+                b = s.encode("utf-8")
+                out2: list[Instr] = []
+                # Mnemo non scrive il NUL trailing perché celle inizializzano a 0.
+                for j, byte in enumerate(b):
+                    if j >= tot:
+                        break
+                    if byte == 0:
+                        continue
+                    out2.extend(
+                        _lower_assign(
+                            _phys(ctx, _array_elem_local(logical, j)),
+                            c.Constant("int", str(int(byte))),
+                            ctx,
+                        )
+                    )
+                return out2
             raise MnemoCompileError(
                 "array: inizializzatore `{ … }` oppure nessuno (non un singolo valore)"
             )
@@ -7721,6 +7762,23 @@ def lower_file_to_program(
         if not isinstance(ext, c.Decl) or ext.init is None:
             continue
         if isinstance(ext.type, c.FuncDecl):
+            continue
+        # Union a file-scope con InitList: scrive sulla cella `varname` (union
+        # = single cell con field overlap). Solo Constant int.
+        ut = _union_tag_for_decl_type(ext.type, ctx)
+        if ut is not None and isinstance(ext.init, c.InitList):
+            if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
+                continue
+            varname = str(ext.type.declname)
+            exprs = ext.init.exprs
+            if not exprs:
+                continue
+            init_expr = exprs[0]
+            if isinstance(init_expr, c.NamedInitializer):
+                init_expr = init_expr.expr
+            v = _int_constant_value(init_expr)
+            if v is not None and v != 0:
+                instrs.append(IAddEq(_phys(ctx, varname), Imm(v)))
             continue
         # Struct a file-scope con InitList: emit IAddEq sui campi.
         st_tag = _struct_tag_for_decl_type(ext.type, ctx)
