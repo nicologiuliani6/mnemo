@@ -1031,8 +1031,15 @@ def compute_program_mem_layout(
             walk_stmt(node.stmt, fn, ctx)
             return
         if isinstance(node, c.For):
-            walk_for_init(node.init, fn, ctx)
-            walk_stmt(node.stmt, fn, ctx)
+            needs_scope = isinstance(node.init, (c.Decl, c.DeclList))
+            if needs_scope:
+                L._scope_enter(ctx)
+            try:
+                walk_for_init(node.init, fn, ctx)
+                walk_stmt(node.stmt, fn, ctx)
+            finally:
+                if needs_scope:
+                    L._scope_exit(ctx)
             return
         if isinstance(node, c.Switch):
             if not isinstance(node.stmt, c.Compound):

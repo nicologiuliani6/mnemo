@@ -5816,6 +5816,21 @@ def _lower_for_init(init: c.Node | None, ctx: _Ctx) -> list[Instr]:
 
 
 def _lower_for(node: c.For, ctx: _Ctx) -> list[Instr]:
+    # C99 `for (int i = …; …; …)`: `i` ha scope ristretto al for. Senza wrap
+    # il declarator entra nel frame esterno e due `for(int i=…)` in sequenza
+    # collidono in `_scope_declare`. Wrap solo se l'init dichiara un nome
+    # nuovo (evita di disturbare scope outer per `for(;cond;next)`).
+    needs_init_scope = isinstance(node.init, (c.Decl, c.DeclList))
+    if needs_init_scope:
+        _scope_enter(ctx)
+    try:
+        return _lower_for_body(node, ctx)
+    finally:
+        if needs_init_scope:
+            _scope_exit(ctx)
+
+
+def _lower_for_body(node: c.For, ctx: _Ctx) -> list[Instr]:
     pre = _lower_for_init(node.init, ctx)
     cond = node.cond if node.cond is not None else c.Constant("int", "1")
     noop_ct = _loop_body_continue_is_noop(node.stmt)
