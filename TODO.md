@@ -21,17 +21,27 @@ Stato delle indagini precedenti:
   esterno → `strchr` early-exit → `fi_label_line=0` → inversione del ramo ELSE
   saltava → XOREQ su locals non riallocati. Adesso scansioni non-mutanti +
   restore '\n' prima di recursive scan.
-- **Open**: anche con fix sopra applicato, opt-uncall self-rec ha un bug
-  semantico distinto. Inversione di `helper@N` body fa `pop __mn_e0 __mn_scratch`
-  come primo step ma scratch è vuoto. Forward ha pushato e0/e4/e1 (3 elementi).
-  Da indagare se inversione di un'altra parte del body precede e svuota lo stack,
-  o se la nested uncall in helper(N-1) pop più di quanto pushato.
+- **Root cause del secondo bug**: il VM in `invert_op_to_line` JMPF_ELSE handler
+  (vm_invert.h:1075-1124) usa `vm->frames[fi_reset].recursion_depth` per
+  "replay" l'inversione del ramo ELSE N volte (depth=N) + THEN una volta. È il
+  meccanismo che permette di invertire un singolo `uncall fibonacci` ricorsivo
+  al top livello: la VM rigioca tutti i livelli interni.
+  Ma con `--opt-uncall-user-calls` self-rec si emette `call helper(...) +
+  snap + uncall helper(...)` ANCHE INTERNAMENTE in helper body. L'uncall
+  interno aspettava di invertire UNA SOLA chiamata (quella appena fatta), ma
+  la VM lo tratta come uncall "outer" e replay ELSE N volte → pop su scratch
+  più volte di quanto pushato → `POP stack vuoto`. **Incompatibilità di design
+  fra opt-uncall pattern emit e recursion_depth replay del VM**.
 
 Fix VM/lower richiesto per rimuovere il guard:
-- Tracciare con prints `stack_size(__mn_scratch)` ad ogni op_push/op_pop durante
-  forward+inverse di fib(2) opt-uncall self-rec, vedere quale op svuota stack.
-- Considerare se opt-uncall pattern emit Mnemo è semanticamente compatibile con
-  self-rec (call→snap→uncall→swap dentro lo stesso body callee).
+- **Strada A (VM)**: distinguere "outer uncall" (da chiamante non-helper) da
+  "inner opt-uncall uncall" (da helper su sé stesso). L'inner deve invertire
+  un solo livello, l'outer N livelli. Possibile flag su frame
+  `recursion_depth_at_call` da snapshot e confronto.
+- **Strada B (Mnemo)**: per self-rec, non emettere il pattern call+uncall ma
+  un'inversione manuale (XOR delle celle toccate + scratch push). Più simile
+  al non-opt path.
+- **Strada C**: vietare opt-uncall su self-rec (status attuale).
 
 Tempo stimato: 6-10h + design review.
 
