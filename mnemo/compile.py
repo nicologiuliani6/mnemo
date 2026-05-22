@@ -40,6 +40,105 @@ from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
 
+def _transform_early_return_if_then_return(ast: c.FileAST) -> None:
+    """Rewrite `if (c) return E1; ...; return E2;` → single-return.
+
+    Pattern target: body con primo stmt `if (c) return E1;` (else-less),
+    seguito da zero o più statement non-return, e ultimo stmt `return E2;`.
+
+    Trasforma:
+        int gcd(int a, int b) {
+            if (b == 0) return a;
+            return gcd(b, a % b);
+        }
+    in:
+        int gcd(int a, int b) {
+            int __mn_rv3 = 0;
+            if (b == 0) __mn_rv3 = a;
+            else { __mn_rv3 = gcd(b, a % b); }
+            return __mn_rv3;
+        }
+    """
+    rv_name = "__mn_rv3"
+
+    def is_if_with_return_then(s: c.Node) -> bool:
+        if not isinstance(s, c.If):
+            return False
+        if s.iffalse is not None:
+            return False
+        t = s.iftrue
+        if isinstance(t, c.Compound):
+            items = t.block_items or []
+            if len(items) == 1 and isinstance(items[0], c.Return) and items[0].expr is not None:
+                return True
+            return False
+        if isinstance(t, c.Return) and t.expr is not None:
+            return True
+        return False
+
+    def _extract_then_return_expr(s: c.If) -> c.Node:
+        t = s.iftrue
+        if isinstance(t, c.Compound):
+            return (t.block_items or [])[0].expr
+        return t.expr
+
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if ext.body is None or not isinstance(ext.body, c.Compound):
+            continue
+        items = ext.body.block_items or []
+        if len(items) < 2:
+            continue
+        first = items[0]
+        last = items[-1]
+        if not is_if_with_return_then(first):
+            continue
+        if not (isinstance(last, c.Return) and last.expr is not None):
+            continue
+        # Verifica che gli statement intermedi non contengano return.
+        mid = items[1:-1]
+        has_inner_return = False
+        for s in mid:
+            for sub in _iter_c_nodes(s):
+                if isinstance(sub, c.Return):
+                    has_inner_return = True
+                    break
+            if has_inner_return:
+                break
+        if has_inner_return:
+            continue
+        # Costruisci la nuova struttura.
+        early_expr = _extract_then_return_expr(first)
+        rv_decl = c.Decl(
+            name=rv_name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.TypeDecl(
+                declname=rv_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=c.Constant(type="int", value="0"),
+            bitsize=None,
+        )
+        early_assign = c.Assignment(
+            op="=", lvalue=c.ID(name=rv_name), rvalue=early_expr,
+        )
+        late_assign = c.Assignment(
+            op="=", lvalue=c.ID(name=rv_name), rvalue=last.expr,
+        )
+        else_block_items: list[c.Node] = list(mid) + [late_assign]
+        new_if = c.If(
+            cond=first.cond,
+            iftrue=early_assign,
+            iffalse=c.Compound(block_items=else_block_items),
+        )
+        ext.body.block_items = [
+            rv_decl,
+            new_if,
+            c.Return(expr=c.ID(name=rv_name)),
+        ]
+
+
 def _transform_if_chain_returns(ast: c.FileAST) -> None:
     """Rewrite `return V;` in if/else-if/else chain body.
 
@@ -389,6 +488,8 @@ def compile_c_to_kairos(
     _transform_switch_returns(ast)
     # `int f(...) { if (c1) return E1; else if (c2) return E2; ... }` → single-return.
     _transform_if_chain_returns(ast)
+    # `int f(...) { if (c) return E1; ...; return E2; }` → single-return.
+    _transform_early_return_if_then_return(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
