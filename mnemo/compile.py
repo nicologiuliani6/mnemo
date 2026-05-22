@@ -40,6 +40,96 @@ from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
 
+def _transform_switch_returns(ast: c.FileAST) -> None:
+    """Rewrite `return V;` dentro `case`/`default` di un body switch-only.
+
+    Pattern target — funzioni il cui body è solo `switch(X) { case A: return V1; ... }`:
+    le `return` non-finali di Mnemo sono no-op (VM reversibile no early-exit).
+
+    Trasforma:
+        int f(int x) {
+            switch (x) {
+                case 0: return 100;
+                case 1: return 200;
+                default: return 999;
+            }
+        }
+    in:
+        int f(int x) {
+            int __mn_rv = 0;
+            switch (x) {
+                case 0: __mn_rv = 100; break;
+                case 1: __mn_rv = 200; break;
+                default: __mn_rv = 999; break;
+            }
+            return __mn_rv;
+        }
+    """
+    rv_name = "__mn_rv"
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if ext.body is None or not isinstance(ext.body, c.Compound):
+            continue
+        items = ext.body.block_items or []
+        if len(items) != 1 or not isinstance(items[0], c.Switch):
+            continue
+        sw = items[0]
+        if not isinstance(sw.stmt, c.Compound):
+            continue
+        case_items = sw.stmt.block_items or []
+        # Verifica che ogni `case X:` finisca con `return E;` (no fall-through).
+        # Pattern accettato: il payload di case è esattamente `[return E]` o `[stmt; return E]`.
+        all_cases_have_return = True
+        for it in case_items:
+            if not isinstance(it, (c.Case, c.Default)):
+                all_cases_have_return = False
+                break
+            payload = it.stmts or []
+            if not payload:
+                all_cases_have_return = False
+                break
+            last = payload[-1]
+            if not isinstance(last, c.Return) or last.expr is None:
+                all_cases_have_return = False
+                break
+        if not all_cases_have_return:
+            continue
+        # Trasforma in-place.
+        new_block_items: list[c.Node] = []
+        # local int __mn_rv = 0;
+        rv_decl = c.Decl(
+            name=rv_name,
+            quals=[],
+            align=[],
+            storage=[],
+            funcspec=[],
+            type=c.TypeDecl(
+                declname=rv_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=c.Constant(type="int", value="0"),
+            bitsize=None,
+        )
+        new_block_items.append(rv_decl)
+        # Rewrite ogni case: ultimo `return E` → `__mn_rv = E; break;`.
+        for it in case_items:
+            payload = it.stmts or []
+            ret_stmt = payload[-1]
+            assert isinstance(ret_stmt, c.Return)
+            assign = c.Assignment(
+                op="=",
+                lvalue=c.ID(name=rv_name),
+                rvalue=ret_stmt.expr,
+            )
+            brk = c.Break()
+            it.stmts = list(payload[:-1]) + [assign, brk]
+        new_block_items.append(sw)
+        # return __mn_rv;
+        new_block_items.append(c.Return(expr=c.ID(name=rv_name)))
+        ext.body.block_items = new_block_items
+
+
 def _iter_c_nodes(node: c.Node | None) -> list[c.Node]:
     """Attraversamento depth-first (pycparser `children()`)."""
     if node is None:
@@ -209,6 +299,8 @@ def compile_c_to_kairos(
     _hoist_compound_literals_in_ast(ast)
     # `static int n = …;` → file-scope Decl rinominato. Persiste tra chiamate.
     _hoist_static_locals(ast)
+    # `int f(...) { switch(...) { case A: return V; ... } }` → single-return.
+    _transform_switch_returns(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
