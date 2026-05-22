@@ -77,8 +77,11 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_putd_plus",
         "__mn_putd_space",
         "__mn_putd_width",
+        "__mn_putd_width_left",
+        "__mn_putd_width_zero",
         "__mn_dcount_unsigned",
         "__mn_emit_spaces",
+        "__mn_emit_zeros",
         "__mn_mul_signed_into",
         "__mn_divmod_signed",
         "__mn_mod_signed",
@@ -3576,16 +3579,20 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         and width > 0
                         and "+" not in flags
                         and " " not in flags
-                        and "-" not in flags
-                        and "0" not in flags
                     ):
+                        if "-" in flags:
+                            callee_w = "__mn_putd_width_left"
+                        elif "0" in flags:
+                            callee_w = "__mn_putd_width_zero"
+                        else:
+                            callee_w = "__mn_putd_width"
                         t_w = ctx.fresh_temp()
                         out.append(IConst(t_w, width))
                         out.extend(
                             _io_opt_uncall_wrap(
                                 ctx,
                                 ICall(
-                                    "__mn_putd_width",
+                                    callee_w,
                                     [op.name, t_w] + _kairos_stack_actuals(ctx),
                                 ),
                             )

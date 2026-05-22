@@ -120,6 +120,127 @@ procedure __mn_emit_spaces(int count, stack __mn_hist, stack __mn_scratch)
     fi count > z
     delocal int z = 0
 
+// Emette `count` zeri ASCII (codice 48). count immutato.
+procedure __mn_emit_zeros(int count, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    if count > z then
+        local int rem = 0
+        rem += count
+        from rem == count loop
+            local int zc = 0
+            zc += 48
+            show(zc, char)
+            zc -= 48
+            delocal int zc = 0
+            rem -= 1
+        until rem == 0
+        delocal int rem = 0
+    fi count > z
+    delocal int z = 0
+
+// `%-Nd` runtime: emette `__mn_putd(n)` poi `(N - digits_of(n)) - (1 se n<0)`
+// spazi a destra. Stesso schema di __mn_putd_width ma ordine show invertito.
+procedure __mn_putd_width_left(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int sign_extra = 0
+    if n < z then
+        sign_extra += 1
+    fi n < z
+    local int abs_n = 0
+    if n < z then
+        abs_n -= n
+    else
+        abs_n += n
+    fi n < z
+    local int d = 0
+    call __mn_dcount_unsigned(abs_n, d, __mn_hist, __mn_scratch)
+    local int total = 0
+    total += d
+    total += sign_extra
+    local int pad = 0
+    pad += width
+    pad -= total
+    call __mn_putd(n, __mn_hist, __mn_scratch)
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_spaces(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    pad += total
+    pad -= width
+    delocal int pad = 0
+    total -= sign_extra
+    total -= d
+    delocal int total = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+    if n < z then
+        abs_n += n
+    else
+        abs_n -= n
+    fi n < z
+    delocal int abs_n = 0
+    if n < z then
+        sign_extra -= 1
+    fi n < z
+    delocal int sign_extra = 0
+    delocal int z = 0
+
+// `%0Nd` runtime: se n<0 emette `-`, poi `(N - 1 - digits)` zeri, poi
+// __mn_putd_uint(abs_n). Se n>=0 emette `(N - digits)` zeri poi __mn_putd_uint(n).
+procedure __mn_putd_width_zero(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int sign_extra = 0
+    if n < z then
+        sign_extra += 1
+    fi n < z
+    local int abs_n = 0
+    if n < z then
+        abs_n -= n
+    else
+        abs_n += n
+    fi n < z
+    local int d = 0
+    call __mn_dcount_unsigned(abs_n, d, __mn_hist, __mn_scratch)
+    local int total = 0
+    total += d
+    total += sign_extra
+    local int pad = 0
+    pad += width
+    pad -= total
+    if n < z then
+        local int hy = 0
+        hy += 45
+        show(hy, char)
+        hy -= 45
+        delocal int hy = 0
+    fi n < z
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_zeros(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    call __mn_putd_uint(abs_n, __mn_hist, __mn_scratch)
+    pad += total
+    pad -= width
+    delocal int pad = 0
+    total -= sign_extra
+    total -= d
+    delocal int total = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+    if n < z then
+        abs_n += n
+    else
+        abs_n -= n
+    fi n < z
+    delocal int abs_n = 0
+    if n < z then
+        sign_extra -= 1
+    fi n < z
+    delocal int sign_extra = 0
+    delocal int z = 0
+
 // `%Nd` runtime: emette `(N - digits_of(n)) - (1 se n<0)` spazi a sinistra,
 // poi `__mn_putd(n)`. N può essere <= digits → nessun padding.
 procedure __mn_putd_width(int n, int width, stack __mn_hist, stack __mn_scratch)
