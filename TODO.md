@@ -4,14 +4,34 @@
 
 ### [P3] opt-uncall self-recursion (fibonacci → fibonacci) — DEFERRED
 
-Self-recursive callee con `--opt-uncall-user-calls`: forward CALL + uncall caller-side ok, ma inverse-walk profondo (inv>=15) su clone DELOCALato lascia `vars[24]` NULL → panic `XOREQ __mn_e<N> NULL frame=fibonacci@w<tid>_N`.
+Self-recursive callee con `--opt-uncall-user-calls`: rimuovendo il guard `self_rec`,
+fib.c crasha durante uncall ricorsivo con `POP: stack vuoto! frame=fibonacci@<...>
+dest=__mn_eN stack=__mn_scratch inv=N`. Il primo pop nell'inversione del corpo
+ricorsivo trova `__mn_scratch` vuoto, anche se forward ha pushato N elementi.
 
-Guard `self_rec` re-installato in c_lower.py (`apply_uncall_opt`/`apply_void_uncall_opt` entrambi con `and not self_rec`). fib.c con `--opt-uncall-user-calls` torna 89 corretto.
+Guard `self_rec` resta installato in c_lower.py (`apply_uncall_opt`/
+`apply_void_uncall_opt` entrambi con `and not self_rec`). fib.c con
+`--opt-uncall-user-calls` torna 89 corretto.
 
-Fix VM richiesto per rimuovere il guard:
-- Capire perché fi=22 entra in pass inverse senza prima ri-eseguire LOCAL `__mn_e<N>`. Probabilmente `exec_branch_inverse` chiamato da UNCALL nesting opera su sub-range del body (skip proc-level LOCAL/DELOCAL).
-- `tmp_alloc` INT slot mancanti per `fi != fi_reset` già implementato (vm_invert.h:1218-1226) ma non scatta per il caso.
-- Considerare se opt-uncall pattern emit Mnemo è semanticamente compatibile con self-rec o servirebbe emit alternativo (es. inline manuale del callee body).
+Stato delle indagini precedenti:
+- **FIXED nel VM (commit kairos `fix(vm): make collect_ifs/collect_loops scan
+  non-mutating + restore '\n' before recursive scans`)**: race condition su
+  `*nl='\0'`/`*nl='\n'` nel buffer condiviso. `collect_ifs` veniva chiamata
+  ricorsivamente da CALL/UNCALL con un `'\0'` ancora attivo sul buffer del loop
+  esterno → `strchr` early-exit → `fi_label_line=0` → inversione del ramo ELSE
+  saltava → XOREQ su locals non riallocati. Adesso scansioni non-mutanti +
+  restore '\n' prima di recursive scan.
+- **Open**: anche con fix sopra applicato, opt-uncall self-rec ha un bug
+  semantico distinto. Inversione di `helper@N` body fa `pop __mn_e0 __mn_scratch`
+  come primo step ma scratch è vuoto. Forward ha pushato e0/e4/e1 (3 elementi).
+  Da indagare se inversione di un'altra parte del body precede e svuota lo stack,
+  o se la nested uncall in helper(N-1) pop più di quanto pushato.
+
+Fix VM/lower richiesto per rimuovere il guard:
+- Tracciare con prints `stack_size(__mn_scratch)` ad ogni op_push/op_pop durante
+  forward+inverse di fib(2) opt-uncall self-rec, vedere quale op svuota stack.
+- Considerare se opt-uncall pattern emit Mnemo è semanticamente compatibile con
+  self-rec (call→snap→uncall→swap dentro lo stesso body callee).
 
 Tempo stimato: 6-10h + design review.
 
