@@ -66,7 +66,6 @@ Tempo stimato: 6-10h + design review.
 - **`return` dentro `switch`/`if`**: la VM reversibile non ha early-exit. `case X: return V;` non propaga V al caller (return diventa no-op se non è l'ultima istruzione). Workaround: `int r; switch{...r=V; break;...} return r;`.
 - **`continue` dentro `if` dentro `while`/`for`**: rompe IF/FI reversibile se l'if-then muta la guardia. Mnemo emette "[VM] IF/FI non reversibile".
 - **Stato muta-guardia in loop** (state machines): `switch(state) { case 0: state=1; break; ...}` dentro while: la guardia non è più vera all'uscita del case.
-- **`_Generic`** (C11). Compile-time, fattibile via AST pre-pass.
 
 ### Semantica reversibile
 
