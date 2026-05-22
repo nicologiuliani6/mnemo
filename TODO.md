@@ -93,7 +93,6 @@ Tempo stimato: 6-10h + design review.
 ### Control flow / misc
 
 - **Direct self-recursion da main** (`int fib(int n){return fib(n-1)+fib(n-2);}` chiamata da main senza parallel2 wrap). Vedi opt-uncall self-rec sopra.
-- **Recursive arg-passing bug** (`sum_to(n) = n + sum_to(n-1)`, `gcd(a, a%b)`, `countdown(n-1) + n`): l'evaluation di `arg = expr(n)` mutua lo slot di `n` (caller's param) PRIMA del compute post-call. Risultato: il valore originale `n` è perso, espressioni `n + f(...)` calcolano `(n-1) + f(...)`. Fix: copy params su temp slot prima del call setup, OR riordino IR per eval expr post-call usando valore pre-mutazione. Non risolto da `_transform_early_return_*` pass.
 - **`return` dentro `if`/`switch`**: pre-pass `_transform_switch_returns` e `_transform_if_chain_returns` gestiscono funzioni con body switch-only o if/else-if/else-chain-only. Restano TODO: return mid-body (es. early-exit dopo statements), return in loop body.
 - **`continue` dentro `if` dentro `while`/`for`**: rompe IF/FI reversibile se l'if-then muta la guardia. Mnemo emette "[VM] IF/FI non reversibile".
 - **Stato muta-guardia in loop** (state machines): `switch(state) { case 0: state=1; break; ...}` dentro while: la guardia non è più vera all'uscita del case.

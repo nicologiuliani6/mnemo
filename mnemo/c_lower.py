@@ -4736,11 +4736,12 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             # Due chiamate `f(...)+g(...)` condividono le celle __mn_mem*: la prima call
             # altera i parametri (es. `n` in mem0); senza ripristino, la seconda usa valori
             # sbagliati (es. `fib(n-1)+fib(n-2)` → il secondo argomento legge `n` già corrotto).
-            if (
-                isinstance(expr.left, c.FuncCall)
-                and isinstance(expr.right, c.FuncCall)
-                and ctx.param_storage_order
-            ):
+            # Stesso problema con singola call su un lato: `n + sum_to(n-1)` → call muta `n`,
+            # successivo `t += n` legge n-1 invece di n. Soluzione: snap params prima della
+            # call, restore subito dopo (BinOp con almeno un lato FuncCall).
+            left_is_call = isinstance(expr.left, c.FuncCall)
+            right_is_call = isinstance(expr.right, c.FuncCall)
+            if (left_is_call or right_is_call) and ctx.param_storage_order:
                 ctx.use_hist = True
                 pre_sn: list[Instr] = []
                 snap_pairs: list[tuple[str, str]] = []
@@ -4750,19 +4751,39 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                     tmp = ctx.fresh_temp()
                     snap_pairs.append((pname, tmp))
                     pre_sn.extend(_lower_assign(tmp, c.ID(pname), ctx))
+
+                def _build_restore() -> list[Instr]:
+                    out: list[Instr] = []
+                    for pname, tmp in snap_pairs:
+                        phy = _phys(ctx, pname)
+                        out.extend(
+                            [IHistPush(ctx.hist, phy), IAddEq(phy, Var(tmp))]
+                        )
+                    return out
+
                 i1, o1, tm1 = _eval_expr(expr.left, ctx)
-                restore: list[Instr] = []
-                for pname, tmp in snap_pairs:
-                    phy = _phys(ctx, pname)
-                    restore.extend(
-                        [IHistPush(ctx.hist, phy), IAddEq(phy, Var(tmp))]
-                    )
+                restore_after_left: list[Instr] = (
+                    _build_restore() if left_is_call else []
+                )
                 i2, o2, tm2 = _eval_expr(expr.right, ctx)
+                # Se almeno una delle due call ha mutato i params, ripristina prima
+                # del final sum. o1/o2 possono essere reference dirette a mem cell
+                # del param (es. `n + f(n-1)` → o1 = Var("__mn_mem<n>") che dopo la
+                # call vale n-1, non n).
+                restore_after_right: list[Instr] = (
+                    _build_restore() if right_is_call else []
+                )
                 t = ctx.fresh_temp()
                 if expr.op == "+":
-                    mid = i1 + restore + i2 + [IAddEq(t, o1), IAddEq(t, o2)]
+                    mid = (
+                        i1 + restore_after_left + i2 + restore_after_right
+                        + [IAddEq(t, o1), IAddEq(t, o2)]
+                    )
                 else:
-                    mid = i1 + restore + i2 + [IAddEq(t, o1), ISubEq(t, o2)]
+                    mid = (
+                        i1 + restore_after_left + i2 + restore_after_right
+                        + [IAddEq(t, o1), ISubEq(t, o2)]
+                    )
                 ins = pre_sn + mid
                 snap_tmps = [tmp for _p, tmp in snap_pairs]
                 all_tm = tm1 + tm2 + snap_tmps + [t]
@@ -5687,10 +5708,28 @@ def _lower_funccall_with_ret(
                 )
             pre_uc: list[Instr] = []
             pre_uc.extend(lead_arg)
+            # Setup args via temp intermedi: evita mutua dipendenza fra arg setup.
+            # Es. `gcd(b, a%b)`: setup arg1 `b` su mem1 (= slot di `a` caller) muta
+            # mem1 PRIMA che setup arg2 `a%b` legga `a` (= mem1 originale). Senza
+            # questo, arg2 vede `b` invece di `a` → risultato sbagliato.
+            # Variante: se arg è già un Constant int (no ID refs), assegna diretto
+            # alla mem cell per evitare temp inutili.
+            arg_setup_temps: list[tuple[str, str]] = []
             for ex, log_key in zip(exprs, slot_logs):
                 idx = layout.slot_of[(name, log_key)]
                 dst = f"__mn_mem{idx}"
-                pre_uc.extend(_lower_assign(dst, ex, ctx))
+                if isinstance(ex, c.Constant):
+                    pre_uc.extend(_lower_assign(dst, ex, ctx))
+                else:
+                    t_arg = ctx.fresh_temp()
+                    pre_uc.extend(_lower_assign(t_arg, ex, ctx))
+                    arg_setup_temps.append((dst, t_arg))
+            # Move ogni temp → mem cell destinazione. Push dst su hist (azzera) +
+            # dst += temp. Dopo: dst = temp value. Temp resta con valore (consumato
+            # come scratch al cleanup di fine call_uc / fine procedura).
+            for dst, t_arg in arg_setup_temps:
+                pre_uc.append(IHistPush(ctx.hist, dst))
+                pre_uc.append(IAddEq(dst, Var(t_arg)))
             _ct_callee = ctx.callee_mem_touches.get(name)
             if _ct_callee is None:
                 mem_args = [f"__mn_mem{i}" for i in range(layout.total_cells)]
