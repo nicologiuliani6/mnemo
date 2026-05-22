@@ -76,6 +76,9 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_putd_uint",
         "__mn_putd_plus",
         "__mn_putd_space",
+        "__mn_putd_width",
+        "__mn_dcount_unsigned",
+        "__mn_emit_spaces",
         "__mn_mul_signed_into",
         "__mn_divmod_signed",
         "__mn_mod_signed",
@@ -3567,21 +3570,44 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     # `%u` runtime: usa `__mn_putd_uint` (interpreta val come
                     # unsigned 32-bit). `%d` runtime: `__mn_putd` (signed).
                     # Flag `+`/` ` runtime su `%d`: usa procs dedicate.
-                    if k == "u":
-                        callee = "__mn_putd_uint"
-                    elif "+" in flags:
-                        callee = "__mn_putd_plus"
-                    elif " " in flags:
-                        callee = "__mn_putd_space"
-                    else:
-                        callee = "__mn_putd"
-                    out.extend(
-                        _io_opt_uncall_wrap(
-                            ctx,
-                            ICall(callee, [op.name] + _kairos_stack_actuals(ctx)),
+                    # Width runtime su `%d` (senza flag `+`/` `): __mn_putd_width.
+                    if (
+                        k == "d"
+                        and width > 0
+                        and "+" not in flags
+                        and " " not in flags
+                        and "-" not in flags
+                        and "0" not in flags
+                    ):
+                        t_w = ctx.fresh_temp()
+                        out.append(IConst(t_w, width))
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall(
+                                    "__mn_putd_width",
+                                    [op.name, t_w] + _kairos_stack_actuals(ctx),
+                                ),
+                            )
                         )
-                    )
-                    tm_acc.extend(tm)
+                        out.append(ISubEq(t_w, Imm(width)))
+                        tm_acc.extend(tm)
+                    else:
+                        if k == "u":
+                            callee = "__mn_putd_uint"
+                        elif "+" in flags:
+                            callee = "__mn_putd_plus"
+                        elif " " in flags:
+                            callee = "__mn_putd_space"
+                        else:
+                            callee = "__mn_putd"
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall(callee, [op.name] + _kairos_stack_actuals(ctx)),
+                            )
+                        )
+                        tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError(f"printf %{k}: espressione non valida")
         elif k == "x":

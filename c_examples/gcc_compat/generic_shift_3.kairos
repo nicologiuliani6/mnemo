@@ -431,6 +431,92 @@ procedure __mn_putd_space(int n, stack __mn_hist, stack __mn_scratch)
     delocal int z = 0
     call __mn_putd(n, __mn_hist, __mn_scratch)
 
+// Conta le cifre decimali di un n >= 0 (inclusivo: n=0 conta 1).
+// d += digits(n). Reversibile: n e ten immutati nel body.
+procedure __mn_dcount_unsigned(int n, int d, stack __mn_hist, stack __mn_scratch)
+    local int ten = 0
+    ten += 10
+    local int q = 0
+    local int r = 0
+    if n >= ten then
+        call __mn_divmod_nonneg(n, ten, q, r, __mn_hist, __mn_scratch)
+        call __mn_dcount_unsigned(q, d, __mn_hist, __mn_scratch)
+        d += 1
+        uncall __mn_divmod_nonneg(n, ten, q, r, __mn_hist, __mn_scratch)
+    else
+        d += 1
+    fi n >= ten
+    ten -= 10
+    delocal int r = 0
+    delocal int q = 0
+    delocal int ten = 0
+
+// Emette `count` spazi (codice 32). count immutato (loop counter su local rem).
+procedure __mn_emit_spaces(int count, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    if count > z then
+        local int rem = 0
+        rem += count
+        from rem == count loop
+            local int sp = 0
+            sp += 32
+            show(sp, char)
+            sp -= 32
+            delocal int sp = 0
+            rem -= 1
+        until rem == 0
+        delocal int rem = 0
+    fi count > z
+    delocal int z = 0
+
+// `%Nd` runtime: emette `(N - digits_of(n)) - (1 se n<0)` spazi a sinistra,
+// poi `__mn_putd(n)`. N può essere <= digits → nessun padding.
+procedure __mn_putd_width(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int z = 0
+    local int sign_extra = 0
+    if n < z then
+        sign_extra += 1
+    fi n < z
+    local int abs_n = 0
+    if n < z then
+        abs_n -= n
+    else
+        abs_n += n
+    fi n < z
+    local int d = 0
+    call __mn_dcount_unsigned(abs_n, d, __mn_hist, __mn_scratch)
+    local int total = 0
+    total += d
+    total += sign_extra
+    local int pad = 0
+    pad += width
+    pad -= total
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_spaces(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    call __mn_putd(n, __mn_hist, __mn_scratch)
+    pad += total
+    pad -= width
+    delocal int pad = 0
+    total -= sign_extra
+    total -= d
+    delocal int total = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+    if n < z then
+        abs_n += n
+    else
+        abs_n -= n
+    fi n < z
+    delocal int abs_n = 0
+    if n < z then
+        sign_extra -= 1
+    fi n < z
+    delocal int sign_extra = 0
+    delocal int z = 0
+
 // Stampa intero non negativo in esadecimale minuscolo.
 // Dipendenze: helpers.kairos, divmod.kairos.
 // REVERSIBILE via `uncall __mn_divmod_nonneg` (vedi __mn_putd_uint).
