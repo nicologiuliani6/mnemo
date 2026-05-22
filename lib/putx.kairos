@@ -58,3 +58,80 @@ procedure __mn_putx_uint(int n, stack __mn_hist, stack __mn_scratch)
 
 procedure __mn_putx(int n, stack __mn_hist, stack __mn_scratch)
     call __mn_putx_uint(n, __mn_hist, __mn_scratch)
+
+// Conta le cifre esadecimali di un n >= 0 (n=0 conta 1).
+// d += hex_digits(n). Reversibile via uncall divmod_nonneg.
+procedure __mn_hcount_unsigned(int n, int d, stack __mn_hist, stack __mn_scratch)
+    local int base = 0
+    base += 16
+    local int q = 0
+    local int r = 0
+    if n >= base then
+        call __mn_divmod_nonneg(n, base, q, r, __mn_hist, __mn_scratch)
+        call __mn_hcount_unsigned(q, d, __mn_hist, __mn_scratch)
+        d += 1
+        uncall __mn_divmod_nonneg(n, base, q, r, __mn_hist, __mn_scratch)
+    else
+        d += 1
+    fi n >= base
+    base -= 16
+    delocal int r = 0
+    delocal int q = 0
+    delocal int base = 0
+
+// `%Nx` runtime: emette (N - hex_digits(n)) spazi a sinistra, poi __mn_putx.
+procedure __mn_putx_width(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int d = 0
+    call __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
+    local int pad = 0
+    pad += width
+    pad -= d
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_spaces(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    call __mn_putx(n, __mn_hist, __mn_scratch)
+    pad += d
+    pad -= width
+    delocal int pad = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+
+// `%-Nx` runtime: __mn_putx poi (N - hex_digits) spazi a destra.
+procedure __mn_putx_width_left(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int d = 0
+    call __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
+    local int pad = 0
+    pad += width
+    pad -= d
+    call __mn_putx(n, __mn_hist, __mn_scratch)
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_spaces(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    pad += d
+    pad -= width
+    delocal int pad = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+
+// `%0Nx` runtime: emette (N - hex_digits) zeri ASCII, poi __mn_putx.
+procedure __mn_putx_width_zero(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int d = 0
+    call __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
+    local int pad = 0
+    pad += width
+    pad -= d
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_zeros(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    call __mn_putx(n, __mn_hist, __mn_scratch)
+    pad += d
+    pad -= width
+    delocal int pad = 0
+    push(d, __mn_hist)
+    delocal int d = 0

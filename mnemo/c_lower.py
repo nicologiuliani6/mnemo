@@ -87,6 +87,10 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_mod_signed",
         "__mn_putx",
         "__mn_putx_uint",
+        "__mn_putx_width",
+        "__mn_putx_width_left",
+        "__mn_putx_width_zero",
+        "__mn_hcount_unsigned",
         "__mn_puto",
         "__mn_puto_uint",
     }
@@ -3640,13 +3644,38 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.extend(
-                        _io_opt_uncall_wrap(
-                            ctx,
-                            ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                    if (
+                        width > 0
+                        and "+" not in flags
+                        and " " not in flags
+                    ):
+                        if "-" in flags:
+                            callee_x = "__mn_putx_width_left"
+                        elif "0" in flags:
+                            callee_x = "__mn_putx_width_zero"
+                        else:
+                            callee_x = "__mn_putx_width"
+                        t_w = ctx.fresh_temp()
+                        out.append(IConst(t_w, width))
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall(
+                                    callee_x,
+                                    [op.name, t_w] + _kairos_stack_actuals(ctx),
+                                ),
+                            )
                         )
-                    )
-                    tm_acc.extend(tm)
+                        out.append(ISubEq(t_w, Imm(width)))
+                        tm_acc.extend(tm)
+                    else:
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                            )
+                        )
+                        tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError("printf %x: espressione non valida")
         elif k == "o":
