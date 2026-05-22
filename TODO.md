@@ -63,7 +63,7 @@ Tempo stimato: 6-10h + design review.
 ### Control flow / misc
 
 - **Direct self-recursion da main** (`int fib(int n){return fib(n-1)+fib(n-2);}` chiamata da main senza parallel2 wrap). Vedi opt-uncall self-rec sopra. Anche `gcd(a,b)` ricorsiva ritorna risultato sbagliato — recursion + return-inside-if non si compone bene.
-- **`return` dentro `if`**: la VM reversibile non ha early-exit. `if (cond) return V;` non propaga V se non è l'ultima istruzione. (`return` dentro `switch` ora gestito da pre-pass `_transform_switch_returns` se la funzione ha body switch-only.)
+- **`return` dentro `if`/`switch`**: pre-pass `_transform_switch_returns` e `_transform_if_chain_returns` gestiscono funzioni con body switch-only o if/else-if/else-chain-only. Restano TODO: return mid-body (es. early-exit dopo statements), return in loop body.
 - **`continue` dentro `if` dentro `while`/`for`**: rompe IF/FI reversibile se l'if-then muta la guardia. Mnemo emette "[VM] IF/FI non reversibile".
 - **Stato muta-guardia in loop** (state machines): `switch(state) { case 0: state=1; break; ...}` dentro while: la guardia non è più vera all'uscita del case.
 

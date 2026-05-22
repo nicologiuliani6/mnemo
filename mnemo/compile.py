@@ -40,6 +40,92 @@ from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
 
+def _transform_if_chain_returns(ast: c.FileAST) -> None:
+    """Rewrite `return V;` in if/else-if/else chain body.
+
+    Pattern target: body `{ if (c1) return E1; else if (c2) return E2; ... else return En; }`
+    Riscrive in: `int __mn_rv = 0; if (c1) __mn_rv = E1; else if (c2) __mn_rv = E2; ... else __mn_rv = En; return __mn_rv;`
+    """
+    rv_name = "__mn_rv2"
+
+    def is_return_chain(node: c.Node) -> bool:
+        if isinstance(node, c.Return) and node.expr is not None:
+            return True
+        if isinstance(node, c.If):
+            t = node.iftrue
+            f = node.iffalse
+            if not _stmt_is_return_or_chain(t):
+                return False
+            if f is None:
+                return False
+            if not _stmt_is_return_or_chain(f):
+                return False
+            return True
+        return False
+
+    def _stmt_is_return_or_chain(node: c.Node | None) -> bool:
+        if node is None:
+            return False
+        if isinstance(node, c.Compound):
+            items = node.block_items or []
+            if len(items) != 1:
+                return False
+            return is_return_chain(items[0])
+        return is_return_chain(node)
+
+    def rewrite_chain(node: c.Node) -> c.Node | None:
+        if isinstance(node, c.Return) and node.expr is not None:
+            return c.Assignment(op="=", lvalue=c.ID(name=rv_name), rvalue=node.expr)
+        if isinstance(node, c.If):
+            t = _wrap_or_extract(node.iftrue)
+            f = _wrap_or_extract(node.iffalse)
+            new_t = rewrite_chain(t)
+            new_f = rewrite_chain(f)
+            return c.If(cond=node.cond, iftrue=new_t, iffalse=new_f)
+        return None
+
+    def _wrap_or_extract(node: c.Node | None) -> c.Node | None:
+        if node is None:
+            return None
+        if isinstance(node, c.Compound):
+            items = node.block_items or []
+            if len(items) == 1:
+                return items[0]
+        return node
+
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if ext.body is None or not isinstance(ext.body, c.Compound):
+            continue
+        items = ext.body.block_items or []
+        if len(items) != 1:
+            continue
+        head = items[0]
+        if not isinstance(head, c.If):
+            continue
+        if not is_return_chain(head):
+            continue
+        rv_decl = c.Decl(
+            name=rv_name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.TypeDecl(
+                declname=rv_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=c.Constant(type="int", value="0"),
+            bitsize=None,
+        )
+        new_if = rewrite_chain(head)
+        if new_if is None:
+            continue
+        ext.body.block_items = [
+            rv_decl,
+            new_if,
+            c.Return(expr=c.ID(name=rv_name)),
+        ]
+
+
 def _transform_switch_returns(ast: c.FileAST) -> None:
     """Rewrite `return V;` dentro `case`/`default` di un body switch-only.
 
@@ -301,6 +387,8 @@ def compile_c_to_kairos(
     _hoist_static_locals(ast)
     # `int f(...) { switch(...) { case A: return V; ... } }` → single-return.
     _transform_switch_returns(ast)
+    # `int f(...) { if (c1) return E1; else if (c2) return E2; ... }` → single-return.
+    _transform_if_chain_returns(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
