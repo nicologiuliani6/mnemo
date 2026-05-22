@@ -93,6 +93,10 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_hcount_unsigned",
         "__mn_puto",
         "__mn_puto_uint",
+        "__mn_puto_width",
+        "__mn_puto_width_left",
+        "__mn_puto_width_zero",
+        "__mn_ocount_unsigned",
     }
 )
 
@@ -3701,13 +3705,38 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.extend(
-                        _io_opt_uncall_wrap(
-                            ctx,
-                            ICall("__mn_puto", [op.name] + _kairos_stack_actuals(ctx)),
+                    if (
+                        width > 0
+                        and "+" not in flags
+                        and " " not in flags
+                    ):
+                        if "-" in flags:
+                            callee_o = "__mn_puto_width_left"
+                        elif "0" in flags:
+                            callee_o = "__mn_puto_width_zero"
+                        else:
+                            callee_o = "__mn_puto_width"
+                        t_w = ctx.fresh_temp()
+                        out.append(IConst(t_w, width))
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall(
+                                    callee_o,
+                                    [op.name, t_w] + _kairos_stack_actuals(ctx),
+                                ),
+                            )
                         )
-                    )
-                    tm_acc.extend(tm)
+                        out.append(ISubEq(t_w, Imm(width)))
+                        tm_acc.extend(tm)
+                    else:
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall("__mn_puto", [op.name] + _kairos_stack_actuals(ctx)),
+                            )
+                        )
+                        tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError("printf %o: espressione non valida")
         elif k == "p":
