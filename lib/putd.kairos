@@ -241,6 +241,61 @@ procedure __mn_putd_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     delocal int sign_extra = 0
     delocal int z = 0
 
+// `%Nu` runtime: emette (N - digits) spazi a sinistra, poi __mn_putd_uint(n).
+procedure __mn_putd_uint_width(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int d = 0
+    call __mn_dcount_unsigned(n, d, __mn_hist, __mn_scratch)
+    local int pad = 0
+    pad += width
+    pad -= d
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_spaces(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    call __mn_putd_uint(n, __mn_hist, __mn_scratch)
+    pad += d
+    pad -= width
+    delocal int pad = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+
+procedure __mn_putd_uint_width_left(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int d = 0
+    call __mn_dcount_unsigned(n, d, __mn_hist, __mn_scratch)
+    local int pad = 0
+    pad += width
+    pad -= d
+    call __mn_putd_uint(n, __mn_hist, __mn_scratch)
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_spaces(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    pad += d
+    pad -= width
+    delocal int pad = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+
+procedure __mn_putd_uint_width_zero(int n, int width, stack __mn_hist, stack __mn_scratch)
+    local int d = 0
+    call __mn_dcount_unsigned(n, d, __mn_hist, __mn_scratch)
+    local int pad = 0
+    pad += width
+    pad -= d
+    local int zp = 0
+    if pad > zp then
+        call __mn_emit_zeros(pad, __mn_hist, __mn_scratch)
+    fi pad > zp
+    delocal int zp = 0
+    call __mn_putd_uint(n, __mn_hist, __mn_scratch)
+    pad += d
+    pad -= width
+    delocal int pad = 0
+    push(d, __mn_hist)
+    delocal int d = 0
+
 // `%Nd` runtime: emette `(N - digits_of(n)) - (1 se n<0)` spazi a sinistra,
 // poi `__mn_putd(n)`. N può essere <= digits → nessun padding.
 procedure __mn_putd_width(int n, int width, stack __mn_hist, stack __mn_scratch)

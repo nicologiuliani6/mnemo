@@ -74,6 +74,9 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_pool_free",
         "__mn_putd",
         "__mn_putd_uint",
+        "__mn_putd_uint_width",
+        "__mn_putd_uint_width_left",
+        "__mn_putd_uint_width_zero",
         "__mn_putd_plus",
         "__mn_putd_space",
         "__mn_putd_width",
@@ -3583,17 +3586,25 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     # Flag `+`/` ` runtime su `%d`: usa procs dedicate.
                     # Width runtime su `%d` (senza flag `+`/` `): __mn_putd_width.
                     if (
-                        k == "d"
-                        and width > 0
+                        width > 0
                         and "+" not in flags
                         and " " not in flags
+                        and k in ("d", "u")
                     ):
-                        if "-" in flags:
-                            callee_w = "__mn_putd_width_left"
-                        elif "0" in flags:
-                            callee_w = "__mn_putd_width_zero"
+                        if k == "u":
+                            if "-" in flags:
+                                callee_w = "__mn_putd_uint_width_left"
+                            elif "0" in flags:
+                                callee_w = "__mn_putd_uint_width_zero"
+                            else:
+                                callee_w = "__mn_putd_uint_width"
                         else:
-                            callee_w = "__mn_putd_width"
+                            if "-" in flags:
+                                callee_w = "__mn_putd_width_left"
+                            elif "0" in flags:
+                                callee_w = "__mn_putd_width_zero"
+                            else:
+                                callee_w = "__mn_putd_width"
                         t_w = ctx.fresh_temp()
                         out.append(IConst(t_w, width))
                         out.extend(
