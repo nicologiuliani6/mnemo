@@ -40,6 +40,143 @@ from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
 
+def _transform_general_early_returns(ast: c.FileAST) -> None:
+    """Rewrite `stmt1; ...; if (c) return E1; ...; return E2;` → single-return.
+
+    Generalizzazione di `_transform_early_return_if_then_return` che ammette
+    qualsiasi numero di statement non-return PRIMA dell'`if (c) return E;`.
+    Trasformazione:
+
+        s1; ...; sk; if (c) return E1; t1; ...; tm; return E2;
+
+    diventa (con `__mn_g_k` snapshot stabile di `c`, `__mn_rv4_k` slot return):
+
+        s1; ...; sk;
+        int __mn_g_k = (c);
+        int __mn_rv4_k = 0;
+        if (__mn_g_k) __mn_rv4_k = E1;
+        else { t1; ...; tm; __mn_rv4_k = E2; }
+        return __mn_rv4_k;
+
+    Snapshot necessario perché il ramo else può mutare le variabili usate in
+    `c`, rompendo la condizione `fi` reversibile della VM Kairos.
+    Si applica ricorsivamente sul ramo else con suffisso fresco per gestire
+    cascade. Restrizione: niente early-return dentro loop/switch (TODO).
+    """
+    counter = [0]
+
+    def _fresh(prefix: str) -> str:
+        counter[0] += 1
+        return f"{prefix}_{counter[0]}"
+
+    def is_if_with_return_then_else_less(s: c.Node) -> bool:
+        if not isinstance(s, c.If):
+            return False
+        if s.iffalse is not None:
+            return False
+        t = s.iftrue
+        if isinstance(t, c.Compound):
+            its = t.block_items or []
+            if len(its) == 1 and isinstance(its[0], c.Return) and its[0].expr is not None:
+                return True
+            return False
+        return isinstance(t, c.Return) and t.expr is not None
+
+    def extract_then_return_expr(s: c.If) -> c.Node:
+        t = s.iftrue
+        if isinstance(t, c.Compound):
+            return (t.block_items or [])[0].expr
+        return t.expr
+
+    def has_any_return(node: c.Node) -> bool:
+        for sub in _iter_c_nodes(node):
+            if isinstance(sub, c.Return):
+                return True
+        return False
+
+    def rewrite_items(items: list[c.Node]) -> list[c.Node] | None:
+        if not items:
+            return None
+        last = items[-1]
+        if not (isinstance(last, c.Return) and last.expr is not None):
+            return None
+        early_idx = -1
+        for k, st in enumerate(items[:-1]):
+            if is_if_with_return_then_else_less(st):
+                early_idx = k
+                break
+        if early_idx < 0:
+            return None
+        pre = items[:early_idx]
+        for s in pre:
+            if has_any_return(s):
+                return None
+        if_node = items[early_idx]
+        post_mid = items[early_idx + 1:-1]
+        for s in post_mid:
+            if has_any_return(s):
+                return None
+        rv_name = _fresh("__mn_rv4")
+        g_name = _fresh("__mn_g")
+        early_expr = extract_then_return_expr(if_node)
+        early_assign = c.Assignment(
+            op="=", lvalue=c.ID(name=rv_name), rvalue=early_expr,
+        )
+        late_assign = c.Assignment(
+            op="=", lvalue=c.ID(name=rv_name), rvalue=last.expr,
+        )
+        sub = rewrite_items(list(post_mid) + [c.Return(expr=last.expr)])
+        if sub is not None:
+            # Sub-rewrite gestisce il proprio rv_name/return; inietta
+            # __mn_rv4_k = sub.return.expr al posto della return finale.
+            sub_ret = sub[-1]
+            assert isinstance(sub_ret, c.Return)
+            inner_items = list(sub[:-1]) + [
+                c.Assignment(op="=", lvalue=c.ID(name=rv_name), rvalue=sub_ret.expr),
+            ]
+            else_items = inner_items
+        else:
+            else_items = list(post_mid) + [late_assign]
+        new_if = c.If(
+            cond=c.ID(name=g_name),
+            iftrue=early_assign,
+            iffalse=c.Compound(block_items=else_items),
+        )
+        g_decl = c.Decl(
+            name=g_name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.TypeDecl(
+                declname=g_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=if_node.cond,
+            bitsize=None,
+        )
+        rv_decl = c.Decl(
+            name=rv_name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.TypeDecl(
+                declname=rv_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=c.Constant(type="int", value="0"),
+            bitsize=None,
+        )
+        return list(pre) + [g_decl, rv_decl, new_if, c.Return(expr=c.ID(name=rv_name))]
+
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if ext.body is None or not isinstance(ext.body, c.Compound):
+            continue
+        items = ext.body.block_items or []
+        if len(items) < 2:
+            continue
+        new_items = rewrite_items(list(items))
+        if new_items is not None:
+            ext.body.block_items = new_items
+
+
 def _transform_early_return_if_then_return(ast: c.FileAST) -> None:
     """Rewrite `if (c) return E1; ...; return E2;` → single-return.
 
@@ -498,6 +635,9 @@ def compile_c_to_kairos(
     _transform_if_chain_returns(ast)
     # `int f(...) { if (c) return E1; ...; return E2; }` → single-return.
     _transform_early_return_if_then_return(ast)
+    # Generalizzazione: ammette qualsiasi numero di stmt prima del primo
+    # `if(c) return E`. Cascade trattata ricorsivamente sul ramo else.
+    _transform_general_early_returns(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
