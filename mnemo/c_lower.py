@@ -7824,9 +7824,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if not spec or mangled not in [fn for fn, _ in spec]:
                 raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
             cell = _struct_field_local(base_log, mangled)
-            # Bit-field: trunca rvalue a (1<<N)-1 bit. Solo se rhs è
-            # costante a compile-time: il caso runtime richiederebbe `&`
-            # via bits.kairos che è O(2^N) e blocca su valori non banali.
+            # Bit-field: trunca rvalue a (1<<N)-1 bit. Const-fold se possibile,
+            # altrimenti emette `(rvalue) & MASK` con MASK costante: lowering
+            # passa via `__mn_and_into` (31 iter bitwise, non O(2^N)).
             bw = ctx.struct_field_bits.get((tag, mangled))
             rv_used = node.rvalue
             if bw is not None and 1 <= bw < 32:
@@ -7835,6 +7835,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     mask = (1 << bw) - 1
                     rv_used = c.Constant(
                         "int", str(rv_const & mask), node.coord
+                    )
+                else:
+                    mask = (1 << bw) - 1
+                    rv_used = c.BinaryOp(
+                        "&",
+                        node.rvalue,
+                        c.Constant("int", str(mask), node.coord),
+                        node.coord,
                     )
             if node.op == "=":
                 return _lower_assign(_phys(ctx, cell), rv_used, ctx)
@@ -8374,6 +8382,44 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
 
     for ext in ast.ext:
         visit(ext)
+
+    # Bit-field con rvalue runtime → riscritto a `(rvalue) & MASK` da
+    # `_lower_stmt`. Il rewrite avviene DOPO infer_auto_lib_files, quindi
+    # il visitor non lo vede. Conserviamo conservativamente: se esiste
+    # qualunque struct con almeno un bit-field, includi bits.kairos
+    # (+ catena helpers/mul/divmod). Coperto anche dall'eventuale `&`
+    # esplicito nel sorgente, ma quello arriverebbe solo se l'utente
+    # avesse già scritto la maschera a mano.
+    def _has_any_bitfield(n: object) -> bool:
+        if isinstance(n, c.Struct) and n.decls:
+            for d in n.decls:
+                if isinstance(d, c.Decl) and d.bitsize is not None:
+                    return True
+        if not hasattr(n, "children"):
+            return False
+        for _nm, ch in n.children():
+            if ch is None:
+                continue
+            if isinstance(ch, list):
+                for it in ch:
+                    if _has_any_bitfield(it):
+                        return True
+            else:
+                if _has_any_bitfield(ch):
+                    return True
+        return False
+
+    for ext in ast.ext:
+        if _has_any_bitfield(ext):
+            needed.update(
+                {
+                    "helpers.kairos",
+                    "mul.kairos",
+                    "divmod.kairos",
+                    "bits.kairos",
+                }
+            )
+            break
 
     if _file_ast_needs_ptr_pool(ast):
         needed.add("ptr_pool.kairos")

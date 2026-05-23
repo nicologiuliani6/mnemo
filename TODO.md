@@ -67,10 +67,6 @@ Tempo stimato: 6-10h + design review.
 
 ### Struct / union
 
-- **Bit-fields runtime**: truncamento `unsigned x : N;` ora attivo
-  per `f.x = E` con E costante a compile-time. Caso runtime
-  (`f.x = v`) non trunca: `&` mask via bits.kairos è O(2^N) e
-  blocca la VM. Workaround: const-folding esplicito lato C.
 - **Flexible array members** (struct con `int a[];` finale).
 
 ### Stdlib
