@@ -14,20 +14,27 @@ volte ogni branch (ELSE vs THEN) è stato preso forward. Per fib(N), THEN
 branch viene preso 1 volta (base case) e ELSE N-1 volte. Replay ELSE depth=N
 sovraconta → pop oltre i push reali.
 
-Tentato Strada A (VM flag self_rec single-replay): NON funziona perché:
-1. Il problema affligge anche call non-self-rec da main verso callee recursive.
-2. Single replay (depth=1) non corregge: frame.recursion_depth resta
-   conteggio errato per non-self-rec callers.
+Tentato Strada A (VM flag self_rec single-replay): NON funziona — single
+replay non corregge per non-self-rec callers; il flag non distingue
+chiamate inner vs outer rispetto al frame state effettivo.
 
-Guard esteso in c_lower.py: `apply_uncall_opt`/`apply_void_uncall_opt` ora
-bloccano sia `self_rec` sia `callee_recursive`
-(via `_func_is_recursive_user`). Trade-off: opt-uncall skip per qualsiasi
-call site la cui callee si auto-chiama. fib(8), gcd, divmod_signed coperti
-dal fallback non-opt.
+Tentato Strada B (VM per-branch entry counts then_count/else_count su
+Frame, incrementati a op_jmpf, replay basato sui count invece di
+recursion_depth, propagato anche al base frame): NON funziona — i count
+forniscono cardinalità ma non l'ORDINE delle branch-take per iterazione,
+e replay flat N volte ELSE non riproduce la struttura tree-of-calls.
+POP empty persiste su fib@49.
 
-Fix definitivo richiede: VM tracks per-branch entry counts (THEN/ELSE) per
-frame depth, oppure Mnemo emit manual XOR inversion per call site con callee
-recursive (skipping uncall pattern). Stima 6-10h + design review.
+Guard `apply_uncall_opt`/`apply_void_uncall_opt` blocca sia `self_rec`
+sia `callee_recursive` (via `_func_is_recursive_user`). Trade-off:
+opt-uncall skip per qualsiasi call site la cui callee si auto-chiama
+(fib, gcd, divmod_signed → fallback non-opt funziona).
+
+Fix definitivo richiede una EXECUTION TRACE per-frame-clone (sequenza di
+branch-take per ogni JMPF_ELSE incontrato forward) che inversione possa
+riprodurre esattamente. O alternativa: rewrite della semantica
+opt-uncall in Mnemo per emettere snapshot manuale di hist (no `uncall
+callee` pattern). Stima 8-12h + design review.
 
 ---
 
