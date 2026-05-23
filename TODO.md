@@ -2,48 +2,32 @@
 
 ## OPEN
 
-### [P3] opt-uncall self-recursion (fibonacci → fibonacci) — DEFERRED
+### [P3] opt-uncall su callee recursive — DEFERRED (guard esteso)
 
-Self-recursive callee con `--opt-uncall-user-calls`: rimuovendo il guard `self_rec`,
-fib.c crasha durante uncall ricorsivo con `POP: stack vuoto! frame=fibonacci@<...>
-dest=__mn_eN stack=__mn_scratch inv=N`. Il primo pop nell'inversione del corpo
-ricorsivo trova `__mn_scratch` vuoto, anche se forward ha pushato N elementi.
+`--opt-uncall-user-calls` su call site la cui callee è recursiva (diretta o
+indiretta) crasha durante uncall con `POP: stack vuoto! frame=fib@N`.
 
-Guard `self_rec` resta installato in c_lower.py (`apply_uncall_opt`/
-`apply_void_uncall_opt` entrambi con `and not self_rec`). fib.c con
-`--opt-uncall-user-calls` torna 89 corretto.
+Root cause: VM `invert_op_to_line` JMPF_ELSE handler (vm_invert.h:1080-1101)
+usa `vm->frames[fi_reset].recursion_depth` come "replay count" del ramo ELSE.
+Il count rappresenta la profondità totale del frame in nesting, NON quante
+volte ogni branch (ELSE vs THEN) è stato preso forward. Per fib(N), THEN
+branch viene preso 1 volta (base case) e ELSE N-1 volte. Replay ELSE depth=N
+sovraconta → pop oltre i push reali.
 
-Stato delle indagini precedenti:
-- **FIXED nel VM (commit kairos `fix(vm): make collect_ifs/collect_loops scan
-  non-mutating + restore '\n' before recursive scans`)**: race condition su
-  `*nl='\0'`/`*nl='\n'` nel buffer condiviso. `collect_ifs` veniva chiamata
-  ricorsivamente da CALL/UNCALL con un `'\0'` ancora attivo sul buffer del loop
-  esterno → `strchr` early-exit → `fi_label_line=0` → inversione del ramo ELSE
-  saltava → XOREQ su locals non riallocati. Adesso scansioni non-mutanti +
-  restore '\n' prima di recursive scan.
-- **Root cause del secondo bug**: il VM in `invert_op_to_line` JMPF_ELSE handler
-  (vm_invert.h:1075-1124) usa `vm->frames[fi_reset].recursion_depth` per
-  "replay" l'inversione del ramo ELSE N volte (depth=N) + THEN una volta. È il
-  meccanismo che permette di invertire un singolo `uncall fibonacci` ricorsivo
-  al top livello: la VM rigioca tutti i livelli interni.
-  Ma con `--opt-uncall-user-calls` self-rec si emette `call helper(...) +
-  snap + uncall helper(...)` ANCHE INTERNAMENTE in helper body. L'uncall
-  interno aspettava di invertire UNA SOLA chiamata (quella appena fatta), ma
-  la VM lo tratta come uncall "outer" e replay ELSE N volte → pop su scratch
-  più volte di quanto pushato → `POP stack vuoto`. **Incompatibilità di design
-  fra opt-uncall pattern emit e recursion_depth replay del VM**.
+Tentato Strada A (VM flag self_rec single-replay): NON funziona perché:
+1. Il problema affligge anche call non-self-rec da main verso callee recursive.
+2. Single replay (depth=1) non corregge: frame.recursion_depth resta
+   conteggio errato per non-self-rec callers.
 
-Fix VM/lower richiesto per rimuovere il guard:
-- **Strada A (VM)**: distinguere "outer uncall" (da chiamante non-helper) da
-  "inner opt-uncall uncall" (da helper su sé stesso). L'inner deve invertire
-  un solo livello, l'outer N livelli. Possibile flag su frame
-  `recursion_depth_at_call` da snapshot e confronto.
-- **Strada B (Mnemo)**: per self-rec, non emettere il pattern call+uncall ma
-  un'inversione manuale (XOR delle celle toccate + scratch push). Più simile
-  al non-opt path.
-- **Strada C**: vietare opt-uncall su self-rec (status attuale).
+Guard esteso in c_lower.py: `apply_uncall_opt`/`apply_void_uncall_opt` ora
+bloccano sia `self_rec` sia `callee_recursive`
+(via `_func_is_recursive_user`). Trade-off: opt-uncall skip per qualsiasi
+call site la cui callee si auto-chiama. fib(8), gcd, divmod_signed coperti
+dal fallback non-opt.
 
-Tempo stimato: 6-10h + design review.
+Fix definitivo richiede: VM tracks per-branch entry counts (THEN/ELSE) per
+frame depth, oppure Mnemo emit manual XOR inversion per call site con callee
+recursive (skipping uncall pattern). Stima 6-10h + design review.
 
 ---
 
