@@ -18,7 +18,7 @@
 
 ### printf
 
-- **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (non `2^32 + val`). VM int64 ora supporta cell > INT_MAX (commit kairos `feat(vm): cell value e channel buf da int → int64_t`). Mnemo emit `if cell < 0 then cell += 2^32` resta bloccato finché `__mn_divmod_nonneg` (sottrazione ripetuta, O(n)) non ha algoritmo sub-lineare — per n=2^32 servirebbero ~4G iterazioni. Fix futuro: divmod binario reversibile (loop fisso 32 iter).
+- **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (non `2^32 + val`). VM int64 ora supporta cell > INT_MAX (commit kairos `feat(vm): cell value e channel buf da int → int64_t`). Mnemo emit `if cell < 0 then cell += 2^32` resta bloccato finché halving non è O(1) primitivo VM. Tentativo divmod_fast O(32^2) shift-and-subtract fallito perché `__mn_shl_into`/`__mn_mul_into`/`__mn_bit_k_signed` usano halving via sottrazione ripetuta — tutto a cascata O(n). Fix richiede nuovo opcode VM `HALVE_RECORD x q parity` (forward: q=x/2, parity=x%2; inverse: x=2q+parity). Stima 2-3h + impatto wide VM change.
 - **printf width runtime**: `%Nd`/`%-Nd`/`%0Nd` via `__mn_putd_width{,_left,_zero}`, `%Nu`/`%-Nu`/`%0Nu` via `__mn_putd_uint_width{,_left,_zero}`, `%Nx`/`%-Nx`/`%0Nx` via `__mn_putx_width{,_left,_zero}`, `%No`/`%-No`/`%0No` via `__mn_puto_width{,_left,_zero}`, `%Np`/`%-Np`/`%0Np` via `__mn_putx_width{,_left,_zero}` (riusato sull'hex body, prefisso `0x` non padded). Flag `+`/` ` runtime su `%d` via `__mn_putd_plus` / `__mn_putd_space`.
 
 ---
