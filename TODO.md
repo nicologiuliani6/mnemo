@@ -49,10 +49,6 @@ Tempo stimato: 6-10h + design review.
 
 ## C-subset features ancora da implementare
 
-### Funzioni
-
-- **Variadic user functions** (`int f(int n, ...)`). `<stdarg.h>` non implementato.
-
 ### Stdlib
 
 - **`<string.h>`** runtime: `strlen` / `strcmp` compile-time su literal/`char *p

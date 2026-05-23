@@ -1174,6 +1174,10 @@ ARR_MAX = 1024
 # ha alloc heap variable-size; il flex member viene cappato a questa costante.
 FLEX_ARR_CAP_DEFAULT = 16
 
+# Numero max args variadici accettati per fn `(...)`. Le celle `__mn_va0..N-1`
+# sono passate sempre dal caller, riempite di 0 quando non usate.
+MNEMO_VA_MAX = 8
+
 
 def _array_elem_local(base: str, linear: int) -> str:
     return f"__mn_arr_{base}_{linear}"
@@ -3121,6 +3125,11 @@ def _func_param_storage_names(fd: c.FuncDecl, td: dict[str, c.Node], ctx: _Ctx) 
         return []
     out: list[str] = []
     for p in fd.args.params:
+        if isinstance(p, c.EllipsisParam):
+            # `...`: append MNEMO_VA_MAX cell `__mn_va0..N-1` come param storage.
+            for i in range(MNEMO_VA_MAX):
+                out.append(f"__mn_va{i}")
+            continue
         if isinstance(p, c.Typename):
             ty = p.type
             if isinstance(ty, c.TypeDecl) and isinstance(ty.type, c.IdentifierType):
@@ -3181,6 +3190,11 @@ def _func_param_slot_groups(
         return []
     out: list[list[str]] = []
     for p in fd.args.params:
+        if isinstance(p, c.EllipsisParam):
+            # Ogni cell variadic è un gruppo da 1 (scalare).
+            for i in range(MNEMO_VA_MAX):
+                out.append([f"__mn_va{i}"])
+            continue
         if isinstance(p, c.Typename):
             ty = p.type
             if isinstance(ty, c.TypeDecl) and isinstance(ty.type, c.IdentifierType):
@@ -5515,6 +5529,43 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return _eval_expr(_fold_exprlist_as_comma_chain(expr), ctx)
 
     if isinstance(expr, c.FuncCall):
+        # `__mn_va_arg(ap++)` intrinsic Mnemo: legge cell `__mn_va<idx>`.
+        # idx costante → diretto; runtime → disj chain su 0..MNEMO_VA_MAX-1.
+        if (
+            isinstance(expr.name, c.ID)
+            and expr.name.name == "__mn_va_arg"
+            and expr.args is not None
+            and len(expr.args.exprs) == 1
+        ):
+            idx_expr = expr.args.exprs[0]
+            pre_ix, op_ix, tm_ix = _eval_expr(idx_expr, ctx)
+            ctx.use_hist = True
+            if isinstance(op_ix, Imm):
+                ix_const = op_ix.value
+                if ix_const < 0 or ix_const >= MNEMO_VA_MAX:
+                    raise MnemoCompileError(
+                        f"__mn_va_arg: indice {ix_const} fuori range "
+                        f"(0..{MNEMO_VA_MAX - 1})"
+                    )
+                src = _phys(ctx, f"__mn_va{ix_const}")
+                t_v = ctx.fresh_temp()
+                ins_v: list[Instr] = list(pre_ix) + [
+                    IHistPush(ctx.hist, t_v),
+                    IAddEq(t_v, Var(src)),
+                ]
+                return ins_v, Var(t_v), tm_ix + [t_v]
+            ix_name = op_ix.name
+            t_v = ctx.fresh_temp()
+            bodies_va: list[list[Instr]] = []
+            for k in range(MNEMO_VA_MAX):
+                bodies_va.append(
+                    [
+                        IHistPush(ctx.hist, t_v),
+                        IAddEq(t_v, Var(_phys(ctx, f"__mn_va{k}"))),
+                    ]
+                )
+            chain_va = _disj_eq_chain(ix_name, list(range(MNEMO_VA_MAX)), bodies_va)
+            return pre_ix + chain_va, Var(t_v), tm_ix + [t_v]
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
         if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp"):
@@ -6298,6 +6349,20 @@ def _lower_funccall_with_ret(
             rw_c = layout.ret_words.get(name, 0)
             slot_logs = param_logs + _ret_slot_names(rw_c)
             coord = getattr(node, "coord", None)
+            # Variadic: pad/trim args variadici a MNEMO_VA_MAX (`__mn_va0..N-1`).
+            if _func_decl_has_variadic(callee_fd):
+                fixed_n = len(param_logs) - MNEMO_VA_MAX
+                if fixed_n < 0:
+                    raise MnemoCompileError(
+                        f"{name}: variadic con meno di MNEMO_VA_MAX slot va"
+                    )
+                if len(exprs) > fixed_n + MNEMO_VA_MAX:
+                    raise MnemoCompileError(
+                        f"{name}: troppi args variadici "
+                        f"({len(exprs) - fixed_n}), max {MNEMO_VA_MAX}"
+                    )
+                while len(exprs) < fixed_n + MNEMO_VA_MAX:
+                    exprs.append(c.Constant("int", "0"))
             if len(exprs) == len(param_logs) and rw_c >= 1:
                 for _ in _ret_slot_names(rw_c):
                     exprs.append(c.Constant("int", "0"))
@@ -9011,10 +9076,7 @@ def _lower_user_function(
     fd = fdef.decl.type
     if not isinstance(fd, c.FuncDecl):
         raise MnemoCompileError("definizione funzione malformata")
-    if _func_decl_has_variadic(fd):
-        raise MnemoCompileError(
-            f"{name}: definizioni con argomenti variadici (`...`) non supportate"
-        )
+    # Variadic OK: i cell `__mn_va0..N-1` (MNEMO_VA_MAX) sono passati dal caller.
     body = fdef.body
     if body is None or not isinstance(body, c.Compound):
         raise MnemoCompileError("corpo funzione non è un blocco { ... }")
