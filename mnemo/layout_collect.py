@@ -934,6 +934,26 @@ def compute_program_mem_layout(
                 alloc(fn, loc)
             return
 
+        sap = L._try_parse_struct_array_decl(node, ctx)
+        if sap is not None:
+            sa_name, sa_dims, sa_tag = sap
+            sa_tot = 1
+            for _d in sa_dims:
+                sa_tot *= int(_d)
+            logical = L._scope_declare(ctx, sa_name)
+            sa_fields = ctx.struct_specs.get(sa_tag)
+            if not sa_fields:
+                raise MnemoCompileError(f"struct {sa_tag}: definizione mancante")
+            ctx.struct_array_info[logical] = (sa_tag, tuple(int(d) for d in sa_dims), sa_tot)
+            for i in range(sa_tot):
+                for fname, fty in sa_fields:
+                    if L._type_node_is_pthread_mutex(fty, ctx.typedef_map):
+                        continue
+                    cell_sa = f"{logical}__{i}__{fname}"
+                    ctx.int_locals.add(cell_sa)
+                    alloc(fn, cell_sa)
+            return
+
         ap = L._try_parse_array_decl(node, ctx)
         if ap is not None:
             name, dims, esz = ap

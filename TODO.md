@@ -76,12 +76,6 @@ Tempo stimato: 6-10h + design review.
   (`f.x = v`) non trunca: `&` mask via bits.kairos è O(2^N) e
   blocca la VM. Workaround: const-folding esplicito lato C.
 - **Flexible array members** (struct con `int a[];` finale).
-- **Array come campo struct** (`struct Box { int data[4]; }`): le
-  scritture `b.data[i] = X` non landano perché Mnemo alloca un
-  singolo slot per il campo invece di N. Richiede modifica
-  `_flatten_struct_fields` + `array_info` per i campi array.
-- **Array di struct** (`struct P arr[10]`): non supportato (errore
-  "array: elemento supportato solo se scalare").
 
 ### Stdlib
 

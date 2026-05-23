@@ -455,6 +455,31 @@ def _flatten_struct_fields(
             continue
         fname = str(d.name)
         cur = _strip_typedecl(d.type)
+        # Array di scalari come campo struct (es. `int data[4]`): espandi in
+        # N entries `fname__0..fname__N-1` ognuna col tipo scalare elemento.
+        # Permette accesso `s.data[i]` indicizzato (constant o runtime via
+        # disj-chain) sui flat slot.
+        if isinstance(cur, c.ArrayDecl):
+            dims: list[int] = []
+            elem: c.Node = cur
+            while isinstance(elem, c.ArrayDecl):
+                if not isinstance(elem.dim, c.Constant):
+                    raise MnemoCompileError(
+                        f"struct field '{fname}': array con dimensione non-costante"
+                    )
+                try:
+                    dims.append(int(elem.dim.value))
+                except ValueError:
+                    raise MnemoCompileError(
+                        f"struct field '{fname}': dimensione array non int"
+                    )
+                elem = elem.type
+            total = 1
+            for n in dims:
+                total *= n
+            for i in range(total):
+                out.append((prefix + fname + "__" + str(i), elem))
+            continue
         if isinstance(cur, c.Struct) and cur.decls:
             out.extend(
                 _flatten_struct_fields(
@@ -737,6 +762,11 @@ class _Ctx:
     struct_field_bits: dict[tuple[str, str], int] = field(default_factory=dict)
     """Variabile C → tag struct per `sizeof(v)` e accessi campo."""
     struct_tag_of_var: dict[str, str] = field(default_factory=dict)
+    """Array di struct: nome variabile → (struct_tag, dims, total). Permette
+    accesso `arr[i].field` via flat slot `arr__<i>__<field>`."""
+    struct_array_info: dict[str, tuple[str, tuple[int, ...], int]] = field(
+        default_factory=dict
+    )
     """Parametri dichiarati come `int a[]` / `int a[N]` (decay a puntatore)."""
     array_param_names: set[str] = field(default_factory=set)
     union_specs: dict[str, list[tuple[str, c.Node]]] = field(default_factory=dict)
@@ -1280,6 +1310,42 @@ def _sizeof_array_element_type(cur: c.Node, ctx: _Ctx) -> int | None:
     if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.Enum):
         return _SIZEOF_SCALAR
     return None
+
+
+def _try_parse_struct_array_decl(
+    node: c.Decl, ctx: _Ctx
+) -> tuple[str, tuple[int, ...], str] | None:
+    """Rileva `struct T arr[N1][N2]…` o `T arr[N]…` con T typedef di struct.
+    Ritorna (nome, dims, struct_tag) o None.
+    """
+    cur: c.Node = node.type
+    declname: str | None = None
+    if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.IdentifierType):
+        names = cur.type.names
+        if len(names) == 1 and names[0] in ctx.typedef_map:
+            leaf = _follow_typedef_chain(list(names), ctx.typedef_map, set())
+            if isinstance(leaf, c.ArrayDecl):
+                declname = cur.declname
+                cur = leaf
+    dims: list[int] = []
+    while isinstance(cur, c.ArrayDecl):
+        if cur.dim is None:
+            return None
+        try:
+            dims.append(_array_dim_const(cur.dim, ctx))
+        except MnemoCompileError:
+            return None
+        cur = cur.type
+    if not dims:
+        return None
+    tag = _struct_tag_for_decl_type(cur, ctx)
+    if tag is None:
+        return None
+    if declname is None:
+        declname = _decl_basename_from_innermost(cur)
+    if declname is None:
+        return None
+    return declname, tuple(dims), tag
 
 
 def _try_parse_array_decl(
@@ -4376,6 +4442,63 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         raise MnemoCompileError(f"identificatore non dichiarato: {expr.name!r}")
 
     if isinstance(expr, c.StructRef):
+        # `arr[i].field` con `arr` array di struct (struct_array_info[logical]).
+        # Costante i → slot diretto `arr__i__field`. Runtime i → disj-chain.
+        if (
+            expr.type == "."
+            and isinstance(expr.name, c.ArrayRef)
+            and isinstance(expr.name.name, c.ID)
+            and isinstance(expr.field, c.ID)
+        ):
+            arr_id = expr.name.name.name
+            arr_log = _scope_resolve(ctx, arr_id)
+            sa_meta = ctx.struct_array_info.get(arr_log)
+            if sa_meta is not None:
+                sa_tag, sa_dims, sa_tot = sa_meta
+                field = expr.field.name
+                spec = ctx.struct_specs.get(sa_tag, [])
+                flat_fnames = [fn for fn, _ in spec]
+                if field not in flat_fnames:
+                    raise MnemoCompileError(
+                        f"struct {sa_tag}: campo {field!r} assente"
+                    )
+                if isinstance(expr.name.subscript, c.Constant):
+                    i_const = int(expr.name.subscript.value)
+                    if i_const < 0 or i_const >= sa_tot:
+                        raise MnemoCompileError(
+                            f"{arr_id}[{i_const}]: indice fuori range (0..{sa_tot - 1})"
+                        )
+                    cell = f"{arr_log}__{i_const}__{field}"
+                    if cell not in ctx.int_locals:
+                        raise MnemoCompileError(
+                            f"campo struct array mancante: {cell!r}"
+                        )
+                    return [], Var(_phys(ctx, cell)), []
+                pre_ix, op_ix, tm_ix = _eval_expr(expr.name.subscript, ctx)
+                if isinstance(op_ix, Imm):
+                    tix = ctx.fresh_temp()
+                    pre_ix = pre_ix + [IConst(tix, op_ix.value)]
+                    ix_name = tix
+                    tm_ix = tm_ix + [tix]
+                else:
+                    ix_name = op_ix.name
+                t_dest = ctx.fresh_temp()
+                ctx.use_hist = True
+                bodies = []
+                for kk in range(sa_tot):
+                    cell_kk = f"{arr_log}__{kk}__{field}"
+                    if cell_kk not in ctx.int_locals:
+                        raise MnemoCompileError(
+                            f"campo struct array mancante: {cell_kk!r}"
+                        )
+                    bodies.append(
+                        [
+                            IHistPush(ctx.hist, t_dest),
+                            IAddEq(t_dest, Var(_phys(ctx, cell_kk))),
+                        ]
+                    )
+                chain = _disj_eq_chain(ix_name, list(range(sa_tot)), bodies)
+                return pre_ix + chain, Var(t_dest), tm_ix + [t_dest]
         if expr.type == "->":
             if not isinstance(expr.name, c.ID) or not isinstance(expr.field, c.ID):
                 raise MnemoCompileError("`->`: sintassi non supportata")
@@ -4450,6 +4573,78 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 getattr(expr, "coord", None),
             )
             return _eval_expr(new_expr, ctx)
+        # `s.array_field[i]` con array_field campo struct array (espanso a slot
+        # flat via _flatten_struct_fields → `s__field__0..N-1`). Risolvi a slot
+        # diretto per i costante; runtime → disj-chain.
+        if (
+            isinstance(nm, c.StructRef)
+            and nm.type == "."
+            and isinstance(nm.name, c.ID)
+            and isinstance(nm.field, c.ID)
+        ):
+            base_id = nm.name.name
+            field = nm.field.name
+            base_log = _scope_resolve(ctx, base_id)
+            tag = ctx.struct_tag_of_var.get(base_log)
+            if tag is not None:
+                spec = ctx.struct_specs.get(tag, [])
+                fnames = [fn for fn, _ in spec]
+                # field is array-flattened if `field__0` is in spec
+                first_flat = field + "__0"
+                if first_flat in fnames:
+                    total = 0
+                    for fn in fnames:
+                        if fn.startswith(field + "__"):
+                            try:
+                                idx = int(fn[len(field) + 2:])
+                            except ValueError:
+                                continue
+                            if idx + 1 > total:
+                                total = idx + 1
+                    coord = getattr(expr, "coord", None)
+                    if isinstance(expr.subscript, c.Constant):
+                        i_const = int(expr.subscript.value)
+                        if i_const < 0 or i_const >= total:
+                            raise MnemoCompileError(
+                                f"struct {tag}.{field}[{i_const}]: indice fuori range (0..{total - 1})"
+                            )
+                        cell = _struct_field_local(
+                            base_log, field + "__" + str(i_const)
+                        )
+                        if cell not in ctx.int_locals:
+                            raise MnemoCompileError(
+                                f"campo struct array mancante: {cell!r}"
+                            )
+                        return [], Var(_phys(ctx, cell)), []
+                    pre_l, op_ix, tm_l = _eval_expr(expr.subscript, ctx)
+                    if isinstance(op_ix, Imm):
+                        tix = ctx.fresh_temp()
+                        pre_l = pre_l + [IConst(tix, op_ix.value)]
+                        ix = tix
+                        tm_l = tm_l + [tix]
+                    else:
+                        ix = op_ix.name
+                    t_dest = ctx.fresh_temp()
+                    ctx.use_hist = True
+                    bodies = [
+                        [
+                            IHistPush(ctx.hist, t_dest),
+                            IAddEq(
+                                t_dest,
+                                Var(
+                                    _phys(
+                                        ctx,
+                                        _struct_field_local(
+                                            base_log, field + "__" + str(kk)
+                                        ),
+                                    )
+                                ),
+                            ),
+                        ]
+                        for kk in range(total)
+                    ]
+                    chain = _disj_eq_chain(ix, list(range(total)), bodies)
+                    return pre_l + chain, Var(t_dest), tm_l + [t_dest]
         # `s.ptr_field[i]` o `p->ptr_field[i]`: base StructRef → `*(base + i)`.
         if isinstance(nm, c.StructRef):
             new_expr = c.UnaryOp(
@@ -7153,6 +7348,33 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 return out_s
             return []
 
+        sap = _try_parse_struct_array_decl(node, ctx)
+        if sap is not None:
+            sa_name, sa_dims, sa_tag = sap
+            sa_tot = 1
+            for _d in sa_dims:
+                sa_tot *= int(_d)
+            logical = _scope_declare(ctx, sa_name)
+            sa_fields = ctx.struct_specs.get(sa_tag)
+            if not sa_fields:
+                raise MnemoCompileError(f"struct {sa_tag}: definizione mancante")
+            ctx.struct_array_info[logical] = (sa_tag, tuple(int(d) for d in sa_dims), sa_tot)
+            ctx.var_types[logical] = node.type
+            for i in range(sa_tot):
+                for fname, fty in sa_fields:
+                    if _type_node_is_pthread_mutex(fty, ctx.typedef_map):
+                        continue
+                    cell_sa = f"{logical}__{i}__{fname}"
+                    ctx.int_locals.add(cell_sa)
+                    ctx.var_types[cell_sa] = fty
+                    if ctx.mem_layout is None:
+                        ctx.decl_order.append(cell_sa)
+            if node.init is None:
+                return []
+            raise MnemoCompileError(
+                "array di struct: inizializzatore non supportato"
+            )
+
         ap = _try_parse_array_decl(node, ctx)
         if ap is not None:
             name, dims, esz = ap
@@ -7446,6 +7668,88 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         ]
                         return _lower_funccall_with_ret(norm_sc, ctx, sinks)
         if isinstance(node.lvalue, c.StructRef):
+            # `arr[i].field = X` con arr array di struct.
+            lvs = node.lvalue
+            if (
+                lvs.type == "."
+                and isinstance(lvs.name, c.ArrayRef)
+                and isinstance(lvs.name.name, c.ID)
+                and isinstance(lvs.field, c.ID)
+            ):
+                arr_id_w = lvs.name.name.name
+                arr_log_w = _scope_resolve(ctx, arr_id_w)
+                sa_meta_w = ctx.struct_array_info.get(arr_log_w)
+                if sa_meta_w is not None:
+                    sa_tag_w, _sa_dims_w, sa_tot_w = sa_meta_w
+                    field_w = lvs.field.name
+                    spec_w = ctx.struct_specs.get(sa_tag_w, [])
+                    flat_names_w = [fn for fn, _ in spec_w]
+                    if field_w not in flat_names_w:
+                        raise MnemoCompileError(
+                            f"struct {sa_tag_w}: campo {field_w!r} assente"
+                        )
+                    coord_w = node.coord
+                    if isinstance(lvs.name.subscript, c.Constant):
+                        i_const_w = int(lvs.name.subscript.value)
+                        if i_const_w < 0 or i_const_w >= sa_tot_w:
+                            raise MnemoCompileError(
+                                f"{arr_id_w}[{i_const_w}]: indice fuori range"
+                            )
+                        cell_w = f"{arr_log_w}__{i_const_w}__{field_w}"
+                        target_phys_w = _phys(ctx, cell_w)
+                        if node.op == "=":
+                            return _lower_assign(target_phys_w, node.rvalue, ctx)
+                        if node.op in _COMPOUND_ASSIGN_OPS:
+                            rhs_w = c.BinaryOp(
+                                _COMPOUND_ASSIGN_OPS[node.op],
+                                c.ID(cell_w, coord_w),
+                                node.rvalue,
+                                coord_w,
+                            )
+                            return _lower_assign(target_phys_w, rhs_w, ctx)
+                        raise MnemoCompileError(
+                            f"arr[i].f: op {node.op!r} non supportato"
+                        )
+                    ix_pre_w, ix_op_w, ix_tm_w = _eval_expr(lvs.name.subscript, ctx)
+                    if isinstance(ix_op_w, Imm):
+                        tix_w = ctx.fresh_temp()
+                        ix_pre_w = ix_pre_w + [IConst(tix_w, ix_op_w.value)]
+                        ix_name_w = tix_w
+                        ix_tm_w = ix_tm_w + [tix_w]
+                    else:
+                        ix_name_w = ix_op_w.name
+                    out_w: list[Instr] = list(ix_pre_w)
+                    for kk_w in range(sa_tot_w):
+                        cell_kk_w = f"{arr_log_w}__{kk_w}__{field_w}"
+                        target_phys_kk = _phys(ctx, cell_kk_w)
+                        if node.op == "=":
+                            body_w = _lower_assign(target_phys_kk, node.rvalue, ctx)
+                        elif node.op in _COMPOUND_ASSIGN_OPS:
+                            rhs_kk = c.BinaryOp(
+                                _COMPOUND_ASSIGN_OPS[node.op],
+                                c.ID(cell_kk_w, coord_w),
+                                node.rvalue,
+                                coord_w,
+                            )
+                            body_w = _lower_assign(target_phys_kk, rhs_kk, ctx)
+                        else:
+                            raise MnemoCompileError(
+                                f"arr[i].f: op {node.op!r} non supportato"
+                            )
+                        guard_w = c.BinaryOp(
+                            "==",
+                            c.ID(ix_name_w, coord_w),
+                            c.Constant("int", str(kk_w), coord_w),
+                            coord_w,
+                        )
+                        out_w.extend(
+                            _lower_if_from_expr(guard_w, body_w, [], ctx)
+                        )
+                    for t_w in ix_tm_w:
+                        out_w.append(IHistPush(ctx.scratch, t_w))
+                    if ix_tm_w:
+                        ctx.use_scratch = True
+                    return out_w
             if node.lvalue.type == "->":
                 if node.op == "=":
                     return _lower_struct_arrow_assign(node.lvalue, node.rvalue, ctx)
@@ -7531,6 +7835,105 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 )
                 new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
                 return _lower_stmt(new_assign, ctx)
+            # `s.array_field[i] = X` con array_field campo struct array
+            # (espanso a slot flat `s__field__0..N-1`): assegnamento diretto su
+            # slot per i costante; runtime → if-chain su valore di i.
+            if (
+                isinstance(lv.name, c.StructRef)
+                and lv.name.type == "."
+                and isinstance(lv.name.name, c.ID)
+                and isinstance(lv.name.field, c.ID)
+            ):
+                base_id = lv.name.name.name
+                field = lv.name.field.name
+                base_log = _scope_resolve(ctx, base_id)
+                tag = ctx.struct_tag_of_var.get(base_log)
+                if tag is not None:
+                    spec = ctx.struct_specs.get(tag, [])
+                    fnames_set = {fn for fn, _ in spec}
+                    first_flat = field + "__0"
+                    if first_flat in fnames_set:
+                        total_arr = 0
+                        for fn in fnames_set:
+                            if fn.startswith(field + "__"):
+                                try:
+                                    idx_n = int(fn[len(field) + 2:])
+                                except ValueError:
+                                    continue
+                                if idx_n + 1 > total_arr:
+                                    total_arr = idx_n + 1
+                        if isinstance(lv.subscript, c.Constant):
+                            i_const = int(lv.subscript.value)
+                            if i_const < 0 or i_const >= total_arr:
+                                raise MnemoCompileError(
+                                    f"struct {tag}.{field}[{i_const}]: indice fuori range"
+                                )
+                            target_local = _struct_field_local(
+                                base_log, field + "__" + str(i_const)
+                            )
+                            target_phys = _phys(ctx, target_local)
+                            if node.op == "=":
+                                return _lower_assign(target_phys, node.rvalue, ctx)
+                            if node.op in _COMPOUND_ASSIGN_OPS:
+                                coord = node.coord
+                                rhs = c.BinaryOp(
+                                    _COMPOUND_ASSIGN_OPS[node.op],
+                                    c.ID(target_local, coord),
+                                    node.rvalue,
+                                    coord,
+                                )
+                                return _lower_assign(target_phys, rhs, ctx)
+                            raise MnemoCompileError(
+                                f"struct.array[…]: assegnamento con {node.op!r} non supportato"
+                            )
+                        # Runtime index: if-chain su i.
+                        coord = node.coord
+                        ix_pre, ix_op, ix_tm = _eval_expr(lv.subscript, ctx)
+                        if isinstance(ix_op, Imm):
+                            tix = ctx.fresh_temp()
+                            ix_pre = ix_pre + [IConst(tix, ix_op.value)]
+                            ix_name = tix
+                            ix_tm = ix_tm + [tix]
+                        else:
+                            ix_name = ix_op.name
+                        out_assign: list[Instr] = list(ix_pre)
+                        for kk in range(total_arr):
+                            target_local = _struct_field_local(
+                                base_log, field + "__" + str(kk)
+                            )
+                            target_phys = _phys(ctx, target_local)
+                            if node.op == "=":
+                                body = _lower_assign(target_phys, node.rvalue, ctx)
+                            elif node.op in _COMPOUND_ASSIGN_OPS:
+                                rhs = c.BinaryOp(
+                                    _COMPOUND_ASSIGN_OPS[node.op],
+                                    c.ID(target_local, coord),
+                                    node.rvalue,
+                                    coord,
+                                )
+                                body = _lower_assign(target_phys, rhs, ctx)
+                            else:
+                                raise MnemoCompileError(
+                                    f"struct.array[…]: op {node.op!r} non supportato"
+                                )
+                            guard = c.BinaryOp(
+                                "==",
+                                c.ID(ix_name, coord),
+                                c.Constant("int", str(kk), coord),
+                                coord,
+                            )
+                            ifst = c.If(guard, c.Compound(body, coord) if False else None, None, coord)
+                            # Use Mnemo's lower for if with body — easier via direct IIfKairos pattern:
+                            out_assign.extend(
+                                _lower_if_from_expr(
+                                    guard, body, [], ctx
+                                )
+                            )
+                        for t in ix_tm:
+                            out_assign.append(IHistPush(ctx.scratch, t))
+                        if ix_tm:
+                            ctx.use_scratch = True
+                        return out_assign
             # `s.ptr_field[i] = X` o `p->ptr_field[i] = X` → `*(s.ptr_field + i) = X`.
             if isinstance(lv.name, c.StructRef):
                 new_lv = c.UnaryOp(
