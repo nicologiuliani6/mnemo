@@ -65,7 +65,7 @@ Tempo stimato: 6-10h + design review.
 
 ### printf
 
-- **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (non `2^32 + val`). Richiede 64-bit int in VM Kairos (attualmente `int` 32-bit host). Fix VM: cambiare `int *value` in `int64_t *value` in `vm_types.h` e propagare.
+- **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (non `2^32 + val`). VM int64 ora supporta cell > INT_MAX (commit kairos `feat(vm): cell value e channel buf da int → int64_t`). Mnemo emit `if cell < 0 then cell += 2^32` resta bloccato finché `__mn_divmod_nonneg` (sottrazione ripetuta, O(n)) non ha algoritmo sub-lineare — per n=2^32 servirebbero ~4G iterazioni. Fix futuro: divmod binario reversibile (loop fisso 32 iter).
 - **printf width runtime**: `%Nd`/`%-Nd`/`%0Nd` via `__mn_putd_width{,_left,_zero}`, `%Nu`/`%-Nu`/`%0Nu` via `__mn_putd_uint_width{,_left,_zero}`, `%Nx`/`%-Nx`/`%0Nx` via `__mn_putx_width{,_left,_zero}`, `%No`/`%-No`/`%0No` via `__mn_puto_width{,_left,_zero}`, `%Np`/`%-Np`/`%0Np` via `__mn_putx_width{,_left,_zero}` (riusato sull'hex body, prefisso `0x` non padded). Flag `+`/` ` runtime su `%d` via `__mn_putd_plus` / `__mn_putd_space`.
 
 ---
