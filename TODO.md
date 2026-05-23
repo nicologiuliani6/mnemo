@@ -71,10 +71,13 @@ Tempo stimato: 6-10h + design review.
 
 ### Stdlib
 
-- **`<string.h>`** runtime (`strcpy`, `strncpy`, `memmove`, ...): non
-  implementati. `strlen` / `strcmp` compile-time su literal/`char *p
-  = "lit";`. `memcpy(dst, src, N)` / `memset(dst, v, N)` espansi
-  a compile-time se dst (e src) sono array Mnemo e N costante.
+- **`<string.h>`** runtime: `strlen` / `strcmp` compile-time su literal/`char *p
+  = "lit";`. `memcpy(dst, src, N)` / `memset(dst, v, N)` espansi a compile-time
+  se dst (e src) sono array Mnemo e N costante. Ora anche `strcpy(dst, src)`,
+  `strncpy(dst, src, N)` e `memmove(dst, src, N)` compile-time-expanded con dst
+  array Mnemo (src letterale o char[]). Caso completamente runtime (dst dinamico,
+  N runtime) richiede loop variable-length non rappresentabile reversibilmente
+  con bound staticamente noto.
 
 ### Control flow / misc
 

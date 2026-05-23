@@ -4036,6 +4036,174 @@ def _try_lower_memcpy_memset(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
     return None
 
 
+def _try_lower_string_h_runtime(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
+    """strcpy / strncpy / memmove compile-time-expanded.
+
+    - `strcpy(dst, src)`: dst è array char Mnemo, src è stringa letterale o
+      `char *p = "lit";` o `char s[] = "lit";`. Copia len(src) byte + NUL,
+      bounded da total(dst). Errore se overflow.
+    - `strncpy(dst, src, N)`: come strcpy ma copia min(len(src), N) byte,
+      NUL-pad fino a N. N costante. Non garantisce terminazione (semantica
+      C standard).
+    - `memmove(dst, src, N)`: come memcpy. Caso aliasing dst==src è no-op;
+      altri casi (overlap parziale) trattati come memcpy se le aree non si
+      sovrappongono in modo dimostrabile.
+
+    Restituisce None se non applicabile.
+    """
+    name = call.name.name
+    args = call.args.exprs if call.args is not None else []
+    if name == "strcpy":
+        if len(args) != 2:
+            return None
+        dst_arg = args[0]
+        if not isinstance(dst_arg, c.ID):
+            return None
+        dst_log = _scope_resolve(ctx, dst_arg.name)
+        dst_info = ctx.array_info.get(dst_log)
+        if dst_info is None or dst_info.elem_size != 1:
+            return None
+        sv = _string_literal_value_of(args[1], ctx)
+        if sv is None:
+            # char[] sorgente: usa array_info
+            if not isinstance(args[1], c.ID):
+                return None
+            src_log = _scope_resolve(ctx, args[1].name)
+            src_info = ctx.array_info.get(src_log)
+            if src_info is None or src_info.elem_size != 1:
+                return None
+            if src_info.total > dst_info.total:
+                raise MnemoCompileError(
+                    f"strcpy: src array (total={src_info.total}) supera "
+                    f"dst array (total={dst_info.total})"
+                )
+            out: list[Instr] = []
+            for i in range(src_info.total):
+                src_slot = _array_elem_local(src_log, i)
+                dst_slot = _array_elem_local(dst_log, i)
+                out.extend(
+                    _lower_assign(
+                        _phys(ctx, dst_slot),
+                        c.ID(_phys(ctx, src_slot), call.coord),
+                        ctx,
+                    )
+                )
+            return out
+        bs = sv.encode("utf-8")
+        if len(bs) + 1 > dst_info.total:
+            raise MnemoCompileError(
+                f"strcpy: src len={len(bs)}+1 supera dst total={dst_info.total}"
+            )
+        out2: list[Instr] = []
+        for i, byte in enumerate(bs):
+            cell_slot = _array_elem_local(dst_log, i)
+            out2.extend(
+                _lower_assign(
+                    _phys(ctx, cell_slot),
+                    c.Constant("int", str(int(byte)), call.coord),
+                    ctx,
+                )
+            )
+        # Mnemo non scrive il NUL: le celle iniziano a 0; ma se dst era
+        # già usato, deve essere azzerato. Per coerenza scriviamo 0 esplicito.
+        if len(bs) < dst_info.total:
+            cell_slot = _array_elem_local(dst_log, len(bs))
+            out2.extend(
+                _lower_assign(
+                    _phys(ctx, cell_slot),
+                    c.Constant("int", "0", call.coord),
+                    ctx,
+                )
+            )
+        return out2
+    if name == "strncpy":
+        if len(args) != 3:
+            return None
+        dst_arg = args[0]
+        if not isinstance(dst_arg, c.ID):
+            return None
+        dst_log = _scope_resolve(ctx, dst_arg.name)
+        dst_info = ctx.array_info.get(dst_log)
+        if dst_info is None or dst_info.elem_size != 1:
+            return None
+        n_val = _eval_const_int_expr(args[2], ctx)
+        if n_val is None or n_val < 0:
+            return None
+        if n_val > dst_info.total:
+            raise MnemoCompileError(
+                f"strncpy: N={n_val} supera dst total={dst_info.total}"
+            )
+        sv = _string_literal_value_of(args[1], ctx)
+        if sv is not None:
+            bs = sv.encode("utf-8")
+            out3: list[Instr] = []
+            for i in range(n_val):
+                v = bs[i] if i < len(bs) else 0
+                cell_slot = _array_elem_local(dst_log, i)
+                out3.extend(
+                    _lower_assign(
+                        _phys(ctx, cell_slot),
+                        c.Constant("int", str(int(v)), call.coord),
+                        ctx,
+                    )
+                )
+            return out3
+        if isinstance(args[1], c.ID):
+            src_log = _scope_resolve(ctx, args[1].name)
+            src_info = ctx.array_info.get(src_log)
+            if src_info is None or src_info.elem_size != 1:
+                return None
+            out4: list[Instr] = []
+            for i in range(n_val):
+                if i < src_info.total:
+                    src_slot = _array_elem_local(src_log, i)
+                    dst_slot = _array_elem_local(dst_log, i)
+                    out4.extend(
+                        _lower_assign(
+                            _phys(ctx, dst_slot),
+                            c.ID(_phys(ctx, src_slot), call.coord),
+                            ctx,
+                        )
+                    )
+                else:
+                    cell_slot = _array_elem_local(dst_log, i)
+                    out4.extend(
+                        _lower_assign(
+                            _phys(ctx, cell_slot),
+                            c.Constant("int", "0", call.coord),
+                            ctx,
+                        )
+                    )
+            return out4
+        return None
+    if name == "memmove":
+        if len(args) != 3:
+            return None
+        # Riusa memcpy quando dst != src o quando sono lo stesso array
+        # (no-op semantico) o quando le aree non si sovrappongono.
+        # Caso non-aliasing tipico: memmove(dst, src, N) con dst e src
+        # variabili diverse. Espandi come memcpy.
+        dst_arg = args[0]
+        src_arg = args[1]
+        if (
+            isinstance(dst_arg, c.ID)
+            and isinstance(src_arg, c.ID)
+            and _scope_resolve(ctx, dst_arg.name) == _scope_resolve(ctx, src_arg.name)
+        ):
+            # No-op semantico (memmove dell'array su sé stesso).
+            return []
+        # Delega a memcpy.
+        return _try_lower_memcpy_memset(
+            c.FuncCall(
+                c.ID("memcpy", call.coord),
+                c.ExprList([dst_arg, src_arg, args[2]], call.coord),
+                call.coord,
+            ),
+            ctx,
+        )
+    return None
+
+
 def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
     """`strlen(\"…\")` / `strlen(p)` (p inizializzato da literal) → len.
     `strcmp(a, b)` su due literal → sign(memcmp). None se runtime."""
@@ -8167,6 +8335,13 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             mem_ins = _try_lower_memcpy_memset(node, ctx)
             if mem_ins is not None:
                 return mem_ins
+        if (
+            isinstance(node.name, c.ID)
+            and node.name.name in ("strcpy", "strncpy", "memmove")
+        ):
+            str_ins = _try_lower_string_h_runtime(node, ctx)
+            if str_ins is not None:
+                return str_ins
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
             if nm == "mnemo_pthread_parallel2" and any(
