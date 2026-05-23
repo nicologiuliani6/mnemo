@@ -86,7 +86,6 @@ Tempo stimato: 6-10h + design review.
 ### Semantica reversibile
 
 - **Memory aliasing arbitrario**: caller-callee aliasing tra mem cells non sempre supportato.
-- **Side effects con risultato non-restored**: `x = f(x)` dove `f` ha side-effect richiede uncall implicit (non ancora wired).
 
 ### printf
 
