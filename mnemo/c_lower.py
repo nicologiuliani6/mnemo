@@ -7297,6 +7297,19 @@ def _lower_switch(node: c.Switch, ctx: _Ctx) -> list[Instr]:
     if not isinstance(node.stmt, c.Compound):
         raise MnemoCompileError("switch: il corpo deve essere { ... }")
     pre_d, disc_var, tm_d = _kairos_atom(node.cond, ctx)
+    # Snapshot disc in fresh temp: i body case potrebbero mutare la cella
+    # originale (state machine `state = next`) e rompere il check `fi disc==v`.
+    # Lo snapshot rimane immutato fino al cleanup.
+    disc_snap: str | None = None
+    if not disc_var.lstrip("-").isdigit():
+        disc_snap = ctx.fresh_temp()
+        ctx.use_hist = True
+        pre_d = list(pre_d) + [
+            IHistPush(ctx.hist, disc_snap),
+            IAddEq(disc_snap, Var(disc_var)),
+        ]
+        disc_var = disc_snap
+        tm_d = list(tm_d) + [disc_snap]
     segments = _parse_switch_segments(node.stmt.block_items or [], ctx)
     if not segments:
         out = list(pre_d)

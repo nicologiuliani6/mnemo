@@ -40,6 +40,113 @@ from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
 
+def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> None:
+    """Hoist `if (E) S` cond in fresh int quando S muta variabili usate in E.
+
+    La Kairos VM richiede che la condizione `fi c` post-branch coincida con `if c`
+    pre-branch. Se S muta variabili in E (es. `i = i + 1` con cond `i == 2`)
+    il check fi fallisce con "IF/FI non reversibile". Workaround tipico: lo
+    sviluppatore introduce `int g = i==2; if (g) ...`. Questo pass automatizza:
+
+        if (E) S1 else S2  →  int __mn_gif_k = (E); if (__mn_gif_k) S1 else S2
+
+    quando i nomi liberi in E intersecano i nomi assegnati in S1 ∪ S2.
+    """
+    counter = [0]
+
+    def _fresh() -> str:
+        counter[0] += 1
+        return f"__mn_gif_{counter[0]}"
+
+    def _ids_in(node: c.Node | None) -> set[str]:
+        out: set[str] = set()
+        if node is None:
+            return out
+        for sub in _iter_c_nodes(node):
+            if isinstance(sub, c.ID):
+                out.add(sub.name)
+        return out
+
+    def _lvalue_id_name(lv: c.Node | None) -> str | None:
+        if isinstance(lv, c.ID):
+            return lv.name
+        return None
+
+    def _writes_in(node: c.Node | None) -> set[str]:
+        out: set[str] = set()
+        if node is None:
+            return out
+        for sub in _iter_c_nodes(node):
+            if isinstance(sub, c.Assignment):
+                nm = _lvalue_id_name(sub.lvalue)
+                if nm is not None:
+                    out.add(nm)
+            if isinstance(sub, c.UnaryOp) and sub.op in ("++", "--", "p++", "p--"):
+                nm = _lvalue_id_name(sub.expr)
+                if nm is not None:
+                    out.add(nm)
+        return out
+
+    def _wrap_block(items: list[c.Node]) -> list[c.Node]:
+        return [_rewrite_stmt(s) for s in items]
+
+    def _rewrite_stmt(s: c.Node) -> c.Node:
+        if isinstance(s, c.If):
+            new_t = _rewrite_stmt(s.iftrue) if s.iftrue is not None else None
+            new_f = _rewrite_stmt(s.iffalse) if s.iffalse is not None else None
+            cond_ids = _ids_in(s.cond)
+            body_writes = _writes_in(new_t) | _writes_in(new_f)
+            if cond_ids & body_writes:
+                g_name = _fresh()
+                g_decl = c.Decl(
+                    name=g_name,
+                    quals=[], align=[], storage=[], funcspec=[],
+                    type=c.TypeDecl(
+                        declname=g_name, quals=[], align=None,
+                        type=c.IdentifierType(names=["int"]),
+                    ),
+                    init=s.cond,
+                    bitsize=None,
+                )
+                new_if = c.If(
+                    cond=c.ID(name=g_name),
+                    iftrue=new_t,
+                    iffalse=new_f,
+                )
+                return c.Compound(block_items=[g_decl, new_if])
+            return c.If(cond=s.cond, iftrue=new_t, iffalse=new_f)
+        if isinstance(s, c.Compound):
+            items = s.block_items or []
+            return c.Compound(block_items=_wrap_block(list(items)))
+        if isinstance(s, c.While):
+            return c.While(cond=s.cond, stmt=_rewrite_stmt(s.stmt))
+        if isinstance(s, c.DoWhile):
+            return c.DoWhile(cond=s.cond, stmt=_rewrite_stmt(s.stmt))
+        if isinstance(s, c.For):
+            return c.For(
+                init=s.init, cond=s.cond, next=s.next,
+                stmt=_rewrite_stmt(s.stmt),
+            )
+        if isinstance(s, c.Switch):
+            return c.Switch(cond=s.cond, stmt=_rewrite_stmt(s.stmt))
+        if isinstance(s, c.Case):
+            return c.Case(
+                expr=s.expr,
+                stmts=[_rewrite_stmt(x) for x in (s.stmts or [])],
+            )
+        if isinstance(s, c.Default):
+            return c.Default(stmts=[_rewrite_stmt(x) for x in (s.stmts or [])])
+        return s
+
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if ext.body is None or not isinstance(ext.body, c.Compound):
+            continue
+        items = ext.body.block_items or []
+        ext.body.block_items = _wrap_block(list(items))
+
+
 def _transform_general_early_returns(ast: c.FileAST) -> None:
     """Rewrite `stmt1; ...; if (c) return E1; ...; return E2;` → single-return.
 
@@ -638,6 +745,8 @@ def compile_c_to_kairos(
     # Generalizzazione: ammette qualsiasi numero di stmt prima del primo
     # `if(c) return E`. Cascade trattata ricorsivamente sul ramo else.
     _transform_general_early_returns(ast)
+    # `if (E) S` con S che muta var di E → hoist E in fresh int (fi stabile).
+    _transform_hoist_unsafe_if_conds(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
