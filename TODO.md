@@ -67,7 +67,6 @@ Tempo stimato: 6-10h + design review.
 
 ### Struct / union
 
-- **Flexible array members** (struct con `int a[];` finale).
 
 ### Stdlib
 

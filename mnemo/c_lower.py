@@ -463,6 +463,14 @@ def _flatten_struct_fields(
             dims: list[int] = []
             elem: c.Node = cur
             while isinstance(elem, c.ArrayDecl):
+                # Flexible array member: `int data[];` come campo finale
+                # (C99). Mnemo non ha heap variable-size, quindi cappiamo
+                # con FLEX_ARR_CAP_DEFAULT (16). Override possibile via
+                # `// mnemo-flex-array-cap: N` (TODO se serve).
+                if elem.dim is None:
+                    dims.append(FLEX_ARR_CAP_DEFAULT)
+                    elem = elem.type
+                    continue
                 if not isinstance(elem.dim, c.Constant):
                     raise MnemoCompileError(
                         f"struct field '{fname}': array con dimensione non-costante"
@@ -1157,6 +1165,10 @@ def _ret_slot_names(n_words: int) -> list[str]:
 
 # Limite elementi totali per array (prodotto delle dimensioni; IR a catena if sull’indice lineare).
 ARR_MAX = 1024
+
+# Default cap per flexible array members (`struct { …; int a[]; }`). Mnemo non
+# ha alloc heap variable-size; il flex member viene cappato a questa costante.
+FLEX_ARR_CAP_DEFAULT = 16
 
 
 def _array_elem_local(base: str, linear: int) -> str:
