@@ -1,52 +1,31 @@
 # TODO
 
-## Librerie implementabili in Mnemo (compatibili modello reversibile)
+## Librerie standard C implementabili in Mnemo
 
-Stdlib C subset realizzabile dato che già abbiamo `malloc`/`free`,
-`printf`/`putchar`/`puts`, `memcpy`/`memset`/`strcpy`/`strncpy`/`memmove`
-compile-time, `strlen`/`strcmp` compile-time, variadic via `__mn_va_arg`,
-ptr_pool, IF/loop/struct/union, reversibili int64 cell.
+Funzioni C standard compatibili modello reversibile, realizzabili dato che
+già abbiamo `malloc`/`free`, `printf`/`putchar`/`puts`, `memcpy`/`memset`/
+`strcpy`/`strncpy`/`memmove` compile-time, `strlen`/`strcmp` compile-time,
+variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 ### stdlib.h
 
-- **`abs(int)` / `labs(long)` / `llabs(long long)`** — `if (x < 0) -x else x`. Reversibile diretto.
-- **`div_t div(int, int)` / `ldiv` / `lldiv`** — struct con quoziente e resto. Wrapper su `__mn_divmod_signed`.
-- **`abort()`** — Mnemo emit `show("abort\n")` + halt (no reverse needed, halt è fine).
-- **`atoi(const char *)`** — compile-time su letterale (analogo `strlen` compile-time esistente).
+- **`int abs(int)` / `long labs(long)` / `long long llabs(long long)`** — `if x<0 then -x else x`. Reversibile diretto.
+- **`div_t div(int, int)` / `ldiv` / `lldiv`** — struct quoziente+resto. Wrapper su `__mn_divmod_signed`.
+- **`void abort(void)`** — emit "abort\n" + halt.
+- **`int atoi(const char *)`** — compile-time su letterale (analogo `strlen` compile-time esistente).
 
 ### string.h aggiuntivi
 
-- **`strcat(dst, src)` / `strncat(dst, src, N)`** — compile-time se dst array Mnemo, src letterale o char[]. Append byte-per-byte.
-- **`strchr(s, c)` / `strrchr(s, c)`** — compile-time su letterale: ritorna indice/NULL.
-- **`strstr(haystack, needle)`** — compile-time su letterali entrambi. Naive search.
-- **`memcmp(a, b, N)`** — compile-time se entrambi array Mnemo + N const. Confronto byte-wise.
-- **`strspn` / `strcspn` / `strpbrk`** — char-class compile-time su letterali.
-- **`strdup`** — alloca via ptr_pool + memcpy compile-time. Solo se src letterale.
+- **`char *strcat(char *dst, const char *src)` / `strncat(dst, src, N)`** — compile-time se dst array Mnemo, src letterale o char[]. Append byte-per-byte.
+- **`char *strchr(const char *s, int c)` / `strrchr(s, c)`** — compile-time su letterale: ritorna indice/NULL.
+- **`char *strstr(const char *haystack, const char *needle)`** — compile-time su letterali. Naive search.
+- **`int memcmp(const void *a, const void *b, size_t N)`** — compile-time se entrambi array Mnemo + N const. Confronto byte-wise.
+- **`size_t strspn` / `strcspn(s, accept)` / `char *strpbrk(s, accept)`** — char-class compile-time su letterali.
+- **`char *strdup(const char *s)`** (POSIX/C23) — alloca via ptr_pool + memcpy compile-time. Solo se src letterale.
 
-### ctype.h
+### stdio.h aggiuntivi
 
-- Già implementato come macro inline in `mnemo/fake_include/ctype.h`. Funziona runtime per ogni char.
-
-### math.h subset integer
-
-- **`min(a, b)` / `max(a, b)`** — non standard ma utile. `if a<b then b else a`. Reversibile.
-- **Power-of-2 utilities**: `is_pow2(x) = (x & (x-1)) == 0` compile-time se x const.
-
-### Custom Mnemo helpers
-
-- **`itoa(int n, char *buf, int base)`** — base 10/16/8/2. Buf array Mnemo. Itera divmod_fast.
-- **`snprintf(buf, N, fmt, ...)`** — compile-time fmt parsing (analogo a printf). Scrive in buf array.
-- **`memswap(a, b, N)`** — scambio byte-wise reversibile. Utile per puzzles reversibili.
-
-### Concorrenza extra (π-channel based)
-
-- **`mnemo_kairos_broadcast(channel, value)`** — multi-recv pattern via fanout di srecv.
-- **`mnemo_barrier_2(b)`** — sync 2 worker via channel pair (già pattern in `lib/mps.h`).
-
-### Reversibility utilities
-
-- **`mnemo_snapshot(cells*, N)` / `mnemo_restore(cells*, N)`** — XOR snapshot esplicito di N celle in slot dedicato. Helper per opt-uncall manuale.
-- **`mnemo_assert_reversible(expr)`** — wrappa expr in IF/FI per verificare proprietà inversa a runtime.
+- **`int snprintf(char *buf, size_t N, const char *fmt, ...)` / `sprintf(buf, fmt, ...)`** — compile-time fmt parsing (analogo a `printf` esistente). Scrive in buf array Mnemo.
 
 ---
 
