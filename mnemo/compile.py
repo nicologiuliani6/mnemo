@@ -467,7 +467,15 @@ def compile_c_to_kairos(
     ptr_pool_size: int = 4,
     opt_uncall_user_calls: bool = False,
     check_invertibility: bool = False,
+    arr_max: int | None = None,
 ) -> str:
+    if arr_max is not None:
+        if arr_max < 1 or arr_max > 65536:
+            raise MnemoCompileError(
+                f"arr_max fuori intervallo (1..65536): {arr_max}"
+            )
+        import mnemo.c_lower as _cl
+        _cl.ARR_MAX = arr_max
     try:
         with open(path, encoding="utf-8") as f:
             src = f.read()

@@ -57,10 +57,6 @@ Tempo stimato: 6-10h + design review.
 
 - Function pointer runtime: solo compile-time-resolved.
 
-### Array
-
-- Array element count > 1024 (`ARR_MAX`).
-
 ### Funzioni
 
 - **Variadic user functions** (`int f(int n, ...)`). `<stdarg.h>` non implementato.

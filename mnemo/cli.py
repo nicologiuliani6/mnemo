@@ -91,6 +91,17 @@ def main(argv: list[str] | None = None) -> None:
         help="celle pool malloc/free (__mn_mem0..__mn_mem{N-1}); default 4, max 256",
     )
     p_c.add_argument(
+        "--arr-max",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "limite elementi totali per array (prodotto delle dimensioni); "
+            "default 1024, max 65536. NB: indicizzazione runtime emette "
+            "O(N) operazioni per accesso"
+        ),
+    )
+    p_c.add_argument(
         "--keep-kairos",
         action="store_true",
         help="scrive anche stem.kairos accanto al .c (il sorgente Kairos testuale)",
@@ -151,6 +162,13 @@ def main(argv: list[str] | None = None) -> None:
         help="come per compile",
     )
     p_dk.add_argument(
+        "--arr-max",
+        type=int,
+        default=None,
+        metavar="N",
+        help="come per compile",
+    )
+    p_dk.add_argument(
         "--opt-uncall-user-calls",
         action="store_true",
         help="come compile",
@@ -185,6 +203,13 @@ def main(argv: list[str] | None = None) -> None:
         default=4,
         metavar="N",
         help="come per compile: dimensione pool puntatori",
+    )
+    p_r.add_argument(
+        "--arr-max",
+        type=int,
+        default=None,
+        metavar="N",
+        help="come per compile: limite elementi totali per array",
     )
     p_r.add_argument(
         "--opt-uncall-user-calls",
@@ -229,6 +254,7 @@ def _cmd_compile(args: argparse.Namespace) -> None:
             ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
             check_invertibility=args.check_invertibility,
+            arr_max=getattr(args, "arr_max", None),
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -274,6 +300,7 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
             ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
             check_invertibility=args.check_invertibility,
+            arr_max=getattr(args, "arr_max", None),
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -346,6 +373,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
             ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
             check_invertibility=args.check_invertibility,
+            arr_max=getattr(args, "arr_max", None),
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
