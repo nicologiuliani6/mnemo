@@ -3716,8 +3716,45 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tm)
                     else:
                         if k == "u":
-                            callee = "__mn_putd_uint"
-                        elif "+" in flags:
+                            # %u runtime: sign-fix wrap. Cell può essere neg
+                            # (cast int signed→unsigned interpretato). VM int64
+                            # + __mn_putd_uint_fast permettono add 2^32 e
+                            # stamp unsigned via divmod O(log n) reversibile.
+                            t_u = ctx.fresh_temp()
+                            t_sign = ctx.fresh_temp()
+                            ctx.use_hist = True
+                            out.append(IHistPush(ctx.hist, t_u))
+                            out.append(IAddEq(t_u, Var(op.name)))
+                            out.append(IHistPush(ctx.hist, t_sign))
+                            out.append(
+                                IIfKairos(
+                                    op.name, "<", "0",
+                                    [IAddEq(t_sign, Imm(1))],
+                                    None,
+                                )
+                            )
+                            out.append(
+                                IIfKairos(
+                                    t_sign, "==", "1",
+                                    [IAddEq(t_u, Imm(4294967296))],
+                                    None,
+                                )
+                            )
+                            out.extend(
+                                _io_opt_uncall_wrap(
+                                    ctx,
+                                    ICall(
+                                        "__mn_putd_uint_fast",
+                                        [t_u] + _kairos_stack_actuals(ctx),
+                                    ),
+                                )
+                            )
+                            ctx.use_scratch = True
+                            out.append(IHistPush(ctx.scratch, t_sign))
+                            out.append(IHistPush(ctx.scratch, t_u))
+                            tm_acc.extend(tm)
+                            continue
+                        if "+" in flags:
                             callee = "__mn_putd_plus"
                         elif " " in flags:
                             callee = "__mn_putd_space"

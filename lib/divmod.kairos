@@ -67,6 +67,102 @@ procedure __mn_divmod_signed(int a, int b, int q, int r, stack __mn_hist, stack 
     delocal int abs_a = 0
     delocal int z = 0
 
+// Divmod reversibile O(log a) shift-and-subtract via halving nativo VM
+// (opcode MNHALVE = O(1) host C). Algoritmo:
+//   Phase 1: dimezza a iterativamente, push bit LSB su __mn_scratch.
+//            nbits = numero halvings (bits significativi di a).
+//   Phase 2: pop bit MSB first; r' = 2*r + bit; if r' >= b: r' -= b; q += pow.
+//            pow inizia a 2^(nbits-1), halved ad ogni iter.
+// Input: a >= 0, b > 0, q = 0, r = 0. Output: q=a/b, r=a%b, a inalterato.
+procedure __mn_divmod_nonneg_fast(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
+    local int t = 0
+    t += a
+    local int nbits = 0
+    local int pow = 0
+    local int j = 0
+    local int kp = 0
+    local int nbits_minus = 0
+    local int a_pos = 0
+    if a > 0 then
+        a_pos += 1
+    fi a > 0
+    if a_pos == 1 then
+        // Phase 1: extract bits LSB-first to scratch.
+        from nbits == 0 loop
+            local int qh = 0
+            local int ph = 0
+            mnhalve(t, qh, ph)
+            push(ph, __mn_scratch)
+            t += qh
+            push(ph, __mn_hist)
+            delocal int ph = 0
+            push(qh, __mn_hist)
+            delocal int qh = 0
+            nbits += 1
+        until t == 0
+        // Phase 2: pow = 2^(nbits-1) via doubling.
+        pow += 1
+        nbits_minus += nbits
+        nbits_minus -= 1
+        from kp == 0 loop
+            local int np_d = 0
+            np_d += pow
+            np_d += pow
+            push(pow, __mn_hist)
+            pow += np_d
+            push(np_d, __mn_hist)
+            delocal int np_d = 0
+            kp += 1
+        until kp == nbits_minus
+        // Phase 3: pop MSB-first, sub b, accumulate q, halve pow.
+        from j == 0 loop
+            local int bit = 0
+            pop(bit, __mn_scratch)
+            local int r_dbl = 0
+            r_dbl += r
+            r += r_dbl
+            push(r_dbl, __mn_hist)
+            delocal int r_dbl = 0
+            r += bit
+            local int doable = 0
+            if r >= b then
+                doable += 1
+            fi r >= b
+            if doable == 1 then
+                r -= b
+                q += pow
+            fi doable == 1
+            push(doable, __mn_hist)
+            delocal int doable = 0
+            push(bit, __mn_hist)
+            delocal int bit = 0
+            // Halve pow for next iter.
+            local int qh2 = 0
+            local int ph2 = 0
+            mnhalve(pow, qh2, ph2)
+            pow += qh2
+            push(ph2, __mn_hist)
+            delocal int ph2 = 0
+            push(qh2, __mn_hist)
+            delocal int qh2 = 0
+            j += 1
+        until j == nbits
+    fi a_pos == 1
+    push(a_pos, __mn_hist)
+    delocal int a_pos = 0
+    push(nbits_minus, __mn_hist)
+    delocal int nbits_minus = 0
+    push(kp, __mn_hist)
+    delocal int kp = 0
+    push(j, __mn_hist)
+    delocal int j = 0
+    push(pow, __mn_hist)
+    delocal int pow = 0
+    push(nbits, __mn_hist)
+    delocal int nbits = 0
+    push(t, __mn_hist)
+    delocal int t = 0
+
 // Resto signed: estrae solo r da __mn_divmod_signed, scarta q via uncall
 // dopo aver salvato r. Reversibilità preservata: uncall ripristina q=0,
 // r=0, a/b inalterati.
