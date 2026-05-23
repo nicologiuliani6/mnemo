@@ -40,6 +40,216 @@ from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import pycparser.c_ast as c
 
 
+def _transform_return_in_loop(ast: c.FileAST) -> None:
+    """Rewrite `return E;` dentro for/while/do-while body via return-flag.
+
+    Trasformazione:
+        int f(...) {
+            pre_stmts;
+            for (init; cond; next) {
+                body_with_returns;
+            }
+            return E_late;
+        }
+
+    diventa:
+        int __mn_rv5_k = 0;
+        int __mn_rf5_k = 0;
+        pre_stmts;
+        for (init; cond; next) {
+            if (!__mn_rf5_k) {
+                body_with_returns_to_flag_assignments;
+            }
+        }
+        if (!__mn_rf5_k) {
+            __mn_rv5_k = E_late;
+        }
+        return __mn_rv5_k;
+
+    Ogni `return E;` nel loop body diventa `{ __mn_rv5_k = E; __mn_rf5_k = 1; }`.
+    Il loop esegue tutte le iterazioni (no early break), ma il body è skippato
+    dopo che il flag è alzato. Il return finale viene anche skippato.
+
+    Restrizioni:
+    - L'ultima stmt deve essere `return E;`.
+    - I return interni devono essere dentro UN solo loop (no nested return).
+    - Niente return in stmt fra l'ultimo loop e il return finale.
+    """
+    counter = [0]
+
+    def _fresh_pair() -> tuple[str, str]:
+        counter[0] += 1
+        return f"__mn_rv5_{counter[0]}", f"__mn_rf5_{counter[0]}"
+
+    def _has_return(node: c.Node | None) -> bool:
+        if node is None:
+            return False
+        for sub in _iter_c_nodes(node):
+            if isinstance(sub, c.Return):
+                return True
+        return False
+
+    def _replace_returns_with_flag(
+        node: c.Node | None, rv: str, rf: str
+    ) -> c.Node | None:
+        if node is None:
+            return None
+        if isinstance(node, c.Return):
+            if node.expr is None:
+                return c.Compound(block_items=[
+                    c.Assignment(op="=", lvalue=c.ID(name=rf),
+                                 rvalue=c.Constant(type="int", value="1")),
+                ])
+            return c.Compound(block_items=[
+                c.Assignment(op="=", lvalue=c.ID(name=rv), rvalue=node.expr),
+                c.Assignment(op="=", lvalue=c.ID(name=rf),
+                             rvalue=c.Constant(type="int", value="1")),
+            ])
+        if isinstance(node, c.Compound):
+            new_items = []
+            for s in node.block_items or []:
+                ns = _replace_returns_with_flag(s, rv, rf)
+                if ns is not None:
+                    new_items.append(ns)
+            return c.Compound(block_items=new_items)
+        if isinstance(node, c.If):
+            return c.If(
+                cond=node.cond,
+                iftrue=_replace_returns_with_flag(node.iftrue, rv, rf),
+                iffalse=_replace_returns_with_flag(node.iffalse, rv, rf),
+            )
+        if isinstance(node, c.While):
+            return c.While(
+                cond=node.cond,
+                stmt=_replace_returns_with_flag(node.stmt, rv, rf),
+            )
+        if isinstance(node, c.DoWhile):
+            return c.DoWhile(
+                cond=node.cond,
+                stmt=_replace_returns_with_flag(node.stmt, rv, rf),
+            )
+        if isinstance(node, c.For):
+            return c.For(
+                init=node.init, cond=node.cond, next=node.next,
+                stmt=_replace_returns_with_flag(node.stmt, rv, rf),
+            )
+        if isinstance(node, c.Switch):
+            return c.Switch(
+                cond=node.cond,
+                stmt=_replace_returns_with_flag(node.stmt, rv, rf),
+            )
+        if isinstance(node, c.Case):
+            return c.Case(
+                expr=node.expr,
+                stmts=[
+                    _replace_returns_with_flag(x, rv, rf)
+                    for x in (node.stmts or [])
+                ],
+            )
+        if isinstance(node, c.Default):
+            return c.Default(
+                stmts=[
+                    _replace_returns_with_flag(x, rv, rf)
+                    for x in (node.stmts or [])
+                ],
+            )
+        return node
+
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        if ext.body is None or not isinstance(ext.body, c.Compound):
+            continue
+        items = list(ext.body.block_items or [])
+        if len(items) < 2:
+            continue
+        last = items[-1]
+        if not (isinstance(last, c.Return) and last.expr is not None):
+            continue
+        # Verifica che ci sia ALMENO un loop con return e che NON ci siano
+        # return fuori da loop fra gli stmts.
+        loops_with_return: list[int] = []
+        for k, s in enumerate(items[:-1]):
+            if isinstance(s, (c.For, c.While, c.DoWhile)):
+                if _has_return(s.stmt):
+                    loops_with_return.append(k)
+            else:
+                if _has_return(s):
+                    loops_with_return = []
+                    break
+        if not loops_with_return:
+            continue
+        rv_name, rf_name = _fresh_pair()
+        rv_decl = c.Decl(
+            name=rv_name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.TypeDecl(
+                declname=rv_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=c.Constant(type="int", value="0"),
+            bitsize=None,
+        )
+        rf_decl = c.Decl(
+            name=rf_name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.TypeDecl(
+                declname=rf_name, quals=[], align=None,
+                type=c.IdentifierType(names=["int"]),
+            ),
+            init=c.Constant(type="int", value="0"),
+            bitsize=None,
+        )
+        new_items: list[c.Node] = [rv_decl, rf_decl]
+        for k, s in enumerate(items[:-1]):
+            if k in loops_with_return:
+                inner = _replace_returns_with_flag(s.stmt, rv_name, rf_name)
+                guard = c.UnaryOp(op="!", expr=c.ID(name=rf_name))
+                wrapped_body = c.If(
+                    cond=guard,
+                    iftrue=inner if isinstance(inner, c.Compound)
+                    else c.Compound(block_items=[inner] if inner else []),
+                    iffalse=None,
+                )
+                # Estendi loop guard con `&& !flag` per uscire dopo che il
+                # return interno ha alzato la flag (next iter cond=false).
+                guard_and_noflag = c.BinaryOp(
+                    op="&&",
+                    left=s.cond if s.cond is not None
+                    else c.Constant(type="int", value="1"),
+                    right=c.UnaryOp(op="!", expr=c.ID(name=rf_name)),
+                )
+                if isinstance(s, c.For):
+                    new_loop = c.For(
+                        init=s.init, cond=guard_and_noflag, next=s.next,
+                        stmt=c.Compound(block_items=[wrapped_body]),
+                    )
+                elif isinstance(s, c.While):
+                    new_loop = c.While(
+                        cond=guard_and_noflag,
+                        stmt=c.Compound(block_items=[wrapped_body]),
+                    )
+                else:
+                    new_loop = c.DoWhile(
+                        cond=guard_and_noflag,
+                        stmt=c.Compound(block_items=[wrapped_body]),
+                    )
+                new_items.append(new_loop)
+            else:
+                new_items.append(s)
+        late_assign = c.Assignment(
+            op="=", lvalue=c.ID(name=rv_name), rvalue=last.expr,
+        )
+        late_guard = c.If(
+            cond=c.UnaryOp(op="!", expr=c.ID(name=rf_name)),
+            iftrue=c.Compound(block_items=[late_assign]),
+            iffalse=None,
+        )
+        new_items.append(late_guard)
+        new_items.append(c.Return(expr=c.ID(name=rv_name)))
+        ext.body.block_items = new_items
+
+
 def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> None:
     """Hoist `if (E) S` cond in fresh int quando S muta variabili usate in E.
 
@@ -736,6 +946,9 @@ def compile_c_to_kairos(
     _hoist_compound_literals_in_ast(ast)
     # `static int n = …;` → file-scope Decl rinominato. Persiste tra chiamate.
     _hoist_static_locals(ast)
+    # `return E;` dentro for/while → return-flag globale, body skipped via
+    # `if (!flag)`. Loop esegue tutte le iter ma il body è no-op dopo flag.
+    _transform_return_in_loop(ast)
     # `int f(...) { switch(...) { case A: return V; ... } }` → single-return.
     _transform_switch_returns(ast)
     # `int f(...) { if (c1) return E1; else if (c2) return E2; ... }` → single-return.

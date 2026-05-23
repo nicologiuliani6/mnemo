@@ -70,7 +70,7 @@ Tempo stimato: 6-10h + design review.
 ### Control flow / misc
 
 - **Direct self-recursion da main** (`int fib(int n){return fib(n-1)+fib(n-2);}` chiamata da main senza parallel2 wrap). Vedi opt-uncall self-rec sopra.
-- **`return` dentro `if`/`switch`**: pre-pass `_transform_switch_returns`, `_transform_if_chain_returns`, `_transform_early_return_if_then_return` e `_transform_general_early_returns` gestiscono switch-only, if/else-chain-only, body con `if(c) return E;` come primo stmt + return finale, e ora qualsiasi numero di stmt prima/dopo `if(c) return E;` (cascade ricorsivo, cond snapshot in `__mn_g_k` per stabilità fi). Resta TODO: return in loop body (richiede return-flag globale).
+- **`return` dentro `if`/`switch`/loop**: pre-pass `_transform_switch_returns`, `_transform_if_chain_returns`, `_transform_early_return_if_then_return`, `_transform_general_early_returns` e `_transform_return_in_loop` coprono: switch-only, if/else-chain-only, body con `if(c) return E;` come primo stmt + return finale, qualsiasi numero di stmt prima/dopo `if(c) return E;` (cascade ricorsivo, cond snap in `__mn_g_k`), e return dentro for/while/do-while (return-flag `__mn_rf5_k` + body wrap in `if (!flag)` + loop cond estesa con `&& !flag`).
 
 ### Semantica reversibile
 
