@@ -25,6 +25,17 @@ forniscono cardinalità ma non l'ORDINE delle branch-take per iterazione,
 e replay flat N volte ELSE non riproduce la struttura tree-of-calls.
 POP empty persiste su fib@49.
 
+Tentato Strada C (VM execution trace globale: op_jmpf push branch-take
+in trace LIFO, vm_invert JMPF_ELSE pop singola entry e replay esattamente
+quel branch invece di loop su recursion_depth): PROGRESS — opt-uncall
+self-rec fib non più POP empty, ma error diverso (DELOCAL valore non
+azzerato). Inoltre REGRESSIONE su divmod path standard non-opt-uncall:
+l'inverse normale che usava replay flat consumes wrong trace entries.
+
+Il trace deve essere LOCAL a opt-uncall pattern, non globale. Richiede
+nuovi opcode CALL_TRACED/UNCALL_TRACED che attivino/disattivino il
+mode trace per il subtree. Tempo ulteriore stimato: 3-4h.
+
 Guard `apply_uncall_opt`/`apply_void_uncall_opt` blocca sia `self_rec`
 sia `callee_recursive` (via `_func_is_recursive_user`). Trade-off:
 opt-uncall skip per qualsiasi call site la cui callee si auto-chiama
