@@ -70,7 +70,6 @@ Tempo stimato: 6-10h + design review.
 
 ### printf
 
-- **printf `%s` con argomento runtime** (non letterale né `char *x = "lit"`): non supportato. Le stringhe come parametri funzione/variabili dinamiche non hanno binding al payload bytes nella VM.
 - **printf `%u` runtime su valori negativi**: stampa la rappresentazione signed (non `2^32 + val`). Richiede 64-bit int in VM Kairos (attualmente `int` 32-bit host). Fix VM: cambiare `int *value` in `int64_t *value` in `vm_types.h` e propagare.
 - **printf width runtime**: `%Nd`/`%-Nd`/`%0Nd` via `__mn_putd_width{,_left,_zero}`, `%Nu`/`%-Nu`/`%0Nu` via `__mn_putd_uint_width{,_left,_zero}`, `%Nx`/`%-Nx`/`%0Nx` via `__mn_putx_width{,_left,_zero}`, `%No`/`%-No`/`%0No` via `__mn_puto_width{,_left,_zero}`, `%Np`/`%-Np`/`%0Np` via `__mn_putx_width{,_left,_zero}` (riusato sull'hex body, prefisso `0x` non padded). Flag `+`/` ` runtime su `%d` via `__mn_putd_plus` / `__mn_putd_space`.
 

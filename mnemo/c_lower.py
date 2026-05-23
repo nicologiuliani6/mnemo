@@ -3936,10 +3936,60 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         IShow(_phys(ctx, _array_elem_local(arr_log, i)), True)
                     )
             else:
-                raise MnemoCompileError(
-                    'printf %s: letterale "…" oppure char* da `char *x = "…";` '
-                    'o `char s[] = "…";`'
-                )
+                # Runtime dispatch: ex è ID non legato direttamente a stringa.
+                # Emit chain `if (ptr_cell == slot(base_k)) print bytes_k`
+                # su tutte le stringhe note nel file (char_ptr_string_base
+                # + char[] in array_info con elem_size=1).
+                candidates_runtime: list[tuple[int, str]] = []
+                seen_bases: set[str] = set()
+                for _vname, sbase in ctx.char_ptr_string_base.items():
+                    if sbase in seen_bases:
+                        continue
+                    info_b = ctx.array_info.get(sbase)
+                    if info_b is None or info_b.elem_size != 1:
+                        continue
+                    cell0 = _array_elem_local(sbase, 0)
+                    idx0 = ctx.slot_index.get(cell0)
+                    if idx0 is None and ctx.mem_layout is not None:
+                        fk = ("__file__", cell0)
+                        if fk in ctx.mem_layout.slot_of:
+                            idx0 = ctx.mem_layout.slot_of[fk]
+                    if idx0 is None:
+                        continue
+                    candidates_runtime.append((idx0, sbase))
+                    seen_bases.add(sbase)
+                for nm_arr, info_arr in ctx.array_info.items():
+                    if info_arr.elem_size != 1 or nm_arr in seen_bases:
+                        continue
+                    cell0 = _array_elem_local(nm_arr, 0)
+                    idx0 = ctx.slot_index.get(cell0)
+                    if idx0 is None and ctx.mem_layout is not None:
+                        fk = ("__file__", cell0)
+                        if fk in ctx.mem_layout.slot_of:
+                            idx0 = ctx.mem_layout.slot_of[fk]
+                    if idx0 is None:
+                        continue
+                    candidates_runtime.append((idx0, nm_arr))
+                    seen_bases.add(nm_arr)
+                if not isinstance(ex, c.ID) or not candidates_runtime:
+                    raise MnemoCompileError(
+                        'printf %s: letterale "…" oppure char* da `char *x = "…";` '
+                        'o `char s[] = "…";`'
+                    )
+                ptr_log = _scope_resolve(ctx, ex.name)
+                if ptr_log not in ctx.int_locals:
+                    raise MnemoCompileError(
+                        f"printf %s runtime: ptr {ex.name!r} non in int_locals"
+                    )
+                ptr_phys = _phys(ctx, ptr_log)
+                for idx_b, base_arr in candidates_runtime:
+                    info_b = ctx.array_info[base_arr]
+                    body_b: list[Instr] = []
+                    for i in range(info_b.total - 1):
+                        body_b.append(
+                            IShow(_phys(ctx, _array_elem_local(base_arr, i)), True)
+                        )
+                    out.append(IIfKairos(ptr_phys, "==", str(idx_b), body_b, None))
         else:
             raise MnemoCompileError("printf: segmento interno non valido")
     if tm_acc:
