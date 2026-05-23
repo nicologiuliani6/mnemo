@@ -49,10 +49,6 @@ Tempo stimato: 6-10h + design review.
 
 ## C-subset features ancora da implementare
 
-### Tipi / qualifiers
-
-- Nessuna mancanza nota su int family. `char` come variabile, `short/long/long long`, `size_t`/`ptrdiff_t`/`intptr_t`/`uintN_t`, `enum` come tipo: tutti supportati.
-
 ### Puntatori
 
 - Function pointer runtime: solo compile-time-resolved.
@@ -60,13 +56,6 @@ Tempo stimato: 6-10h + design review.
 ### Funzioni
 
 - **Variadic user functions** (`int f(int n, ...)`). `<stdarg.h>` non implementato.
-
-### Storage / linkage
-
-- Nessuna mancanza nota su static/extern/register/auto in single-TU.
-
-### Struct / union
-
 
 ### Stdlib
 
