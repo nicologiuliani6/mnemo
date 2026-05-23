@@ -6414,7 +6414,6 @@ def _lower_funccall_with_ret(
                 and ret_sink is not None
                 and rw_c >= 1
                 and not self_rec
-                and not callee_recursive
                 and not ir_blk
                 and not ch_blk
                 and not in_par2_worker
@@ -6425,7 +6424,6 @@ def _lower_funccall_with_ret(
                 and ret_sink is None
                 and rw_c == 0
                 and not self_rec
-                and not callee_recursive
                 and not ir_blk
                 and not ch_blk
                 and not in_par2_worker

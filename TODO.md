@@ -1,54 +1,5 @@
 # TODO
 
-## OPEN
-
-### [P3] opt-uncall su callee recursive — DEFERRED (guard esteso)
-
-`--opt-uncall-user-calls` su call site la cui callee è recursiva (diretta o
-indiretta) crasha durante uncall con `POP: stack vuoto! frame=fib@N`.
-
-Root cause: VM `invert_op_to_line` JMPF_ELSE handler (vm_invert.h:1080-1101)
-usa `vm->frames[fi_reset].recursion_depth` come "replay count" del ramo ELSE.
-Il count rappresenta la profondità totale del frame in nesting, NON quante
-volte ogni branch (ELSE vs THEN) è stato preso forward. Per fib(N), THEN
-branch viene preso 1 volta (base case) e ELSE N-1 volte. Replay ELSE depth=N
-sovraconta → pop oltre i push reali.
-
-Tentato Strada A (VM flag self_rec single-replay): NON funziona — single
-replay non corregge per non-self-rec callers; il flag non distingue
-chiamate inner vs outer rispetto al frame state effettivo.
-
-Tentato Strada B (VM per-branch entry counts then_count/else_count su
-Frame, incrementati a op_jmpf, replay basato sui count invece di
-recursion_depth, propagato anche al base frame): NON funziona — i count
-forniscono cardinalità ma non l'ORDINE delle branch-take per iterazione,
-e replay flat N volte ELSE non riproduce la struttura tree-of-calls.
-POP empty persiste su fib@49.
-
-Tentato Strada C (VM execution trace globale: op_jmpf push branch-take
-in trace LIFO, vm_invert JMPF_ELSE pop singola entry e replay esattamente
-quel branch invece di loop su recursion_depth): PROGRESS — opt-uncall
-self-rec fib non più POP empty, ma error diverso (DELOCAL valore non
-azzerato). Inoltre REGRESSIONE su divmod path standard non-opt-uncall:
-l'inverse normale che usava replay flat consumes wrong trace entries.
-
-Il trace deve essere LOCAL a opt-uncall pattern, non globale. Richiede
-nuovi opcode CALL_TRACED/UNCALL_TRACED che attivino/disattivino il
-mode trace per il subtree. Tempo ulteriore stimato: 3-4h.
-
-Guard `apply_uncall_opt`/`apply_void_uncall_opt` blocca sia `self_rec`
-sia `callee_recursive` (via `_func_is_recursive_user`). Trade-off:
-opt-uncall skip per qualsiasi call site la cui callee si auto-chiama
-(fib, gcd, divmod_signed → fallback non-opt funziona).
-
-Fix definitivo richiede una EXECUTION TRACE per-frame-clone (sequenza di
-branch-take per ogni JMPF_ELSE incontrato forward) che inversione possa
-riprodurre esattamente. O alternativa: rewrite della semantica
-opt-uncall in Mnemo per emettere snapshot manuale di hist (no `uncall
-callee` pattern). Stima 8-12h + design review.
-
----
-
 ## C-subset features ancora da implementare
 
 ### Stdlib
