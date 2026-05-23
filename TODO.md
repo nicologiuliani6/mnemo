@@ -1,27 +1,5 @@
 # TODO
 
-## C-subset features ancora da implementare
-
-### Stdlib
-
-- **`<string.h>`** runtime: `strlen` / `strcmp` compile-time su literal/`char *p
-  = "lit";`. `memcpy(dst, src, N)` / `memset(dst, v, N)` espansi a compile-time
-  se dst (e src) sono array Mnemo e N costante. Ora anche `strcpy(dst, src)`,
-  `strncpy(dst, src, N)` e `memmove(dst, src, N)` compile-time-expanded con dst
-  array Mnemo (src letterale o char[]). Caso completamente runtime (dst dinamico,
-  N runtime) richiede loop variable-length non rappresentabile reversibilmente
-  con bound staticamente noto.
-
-### Control flow / misc
-
-- **`return` dentro `if`/`switch`/loop**: pre-pass `_transform_switch_returns`, `_transform_if_chain_returns`, `_transform_early_return_if_then_return`, `_transform_general_early_returns` e `_transform_return_in_loop` coprono: switch-only, if/else-chain-only, body con `if(c) return E;` come primo stmt + return finale, qualsiasi numero di stmt prima/dopo `if(c) return E;` (cascade ricorsivo, cond snap in `__mn_g_k`), e return dentro for/while/do-while (return-flag `__mn_rf5_k` + body wrap in `if (!flag)` + loop cond estesa con `&& !flag`).
-
-### printf
-
-- **printf width runtime**: `%Nd`/`%-Nd`/`%0Nd` via `__mn_putd_width{,_left,_zero}`, `%Nu`/`%-Nu`/`%0Nu` via `__mn_putd_uint_width{,_left,_zero}`, `%Nx`/`%-Nx`/`%0Nx` via `__mn_putx_width{,_left,_zero}`, `%No`/`%-No`/`%0No` via `__mn_puto_width{,_left,_zero}`, `%Np`/`%-Np`/`%0Np` via `__mn_putx_width{,_left,_zero}` (riusato sull'hex body, prefisso `0x` non padded). Flag `+`/` ` runtime su `%d` via `__mn_putd_plus` / `__mn_putd_space`. `%u` runtime su valori negativi: sign-fix wrap (`if cell<0 then cell += 2^32`) + `__mn_putd_uint_fast` che usa `__mn_divmod_nonneg_fast` (sub-lineare via opcode VM `MNHALVE` O(1) halving) — stampa correttamente unsigned 32-bit interpretation (es. -1 → 4294967295).
-
----
-
 ## Non fattibile per modello reversibile / VM Kairos
 
 Features escluse strutturalmente — non saranno implementate finché Mnemo target una VM reversibile a interi.
