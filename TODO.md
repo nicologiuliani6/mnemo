@@ -49,10 +49,6 @@ Tempo stimato: 6-10h + design review.
 
 ## C-subset features ancora da implementare
 
-### Puntatori
-
-- Function pointer runtime: solo compile-time-resolved.
-
 ### Funzioni
 
 - **Variadic user functions** (`int f(int n, ...)`). `<stdarg.h>` non implementato.

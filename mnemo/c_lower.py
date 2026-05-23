@@ -811,6 +811,10 @@ class _Ctx:
     func_ptr_vars: set[str] = field(default_factory=set)
     """Puntatore a funzione (nome logico) → nome procedura risolto a compile-time."""
     func_ptr_alias: dict[str, str] = field(default_factory=dict)
+    """Fn ptr con >1 candidato runtime: nome logico → set di nomi fn possibili."""
+    func_ptr_runtime: dict[str, set[str]] = field(default_factory=dict)
+    """Tag intero per ogni fn addressable in modalità runtime-dispatch (file-level)."""
+    func_ptr_tags: dict[str, int] = field(default_factory=dict)
     """Scope blocchi: ogni frame mappa nome C → nome logico slot (shadowing)."""
     scope_stack: list[dict[str, str]] = field(default_factory=list)
     shadow_uid: int = 0
@@ -4587,6 +4591,68 @@ def _parse_function_designator(init: c.Node, ctx: _Ctx) -> str | None:
     return None
 
 
+def _parse_function_designator_name_only(init: c.Node) -> str | None:
+    """`name` o `&name` → restituisce stringa nome (no scope check)."""
+    if isinstance(init, c.ID):
+        return init.name
+    if isinstance(init, c.UnaryOp) and init.op == "&" and isinstance(init.expr, c.ID):
+        return init.expr.name
+    return None
+
+
+def _collect_fp_runtime_candidates(
+    fd: c.FuncDef,
+    defined_fns: frozenset[str],
+    td: dict[str, c.Node],
+) -> dict[str, set[str]]:
+    """Walk function body collecting candidate target sets per fn-ptr var.
+    Restituisce solo i fn-ptr con ≥2 candidati distinti."""
+    fp_vars: set[str] = set()
+    cands: dict[str, set[str]] = {}
+    if isinstance(fd.decl.type, c.FuncDecl) and fd.decl.type.args is not None:
+        for p in fd.decl.type.args.params or []:
+            if isinstance(p, c.Decl):
+                meta = _func_ptr_decl_meta(p, td)
+                if meta is not None:
+                    fp_vars.add(meta[0])
+
+    def visit(n: object) -> None:
+        if isinstance(n, c.Decl):
+            meta = _func_ptr_decl_meta(n, td)
+            if meta is not None:
+                fp_vars.add(meta[0])
+                if n.init is not None:
+                    init = n.init
+                    if isinstance(init, c.ExprList):
+                        init = init.exprs[-1] if init.exprs else init
+                    tgt = _parse_function_designator_name_only(init)
+                    if tgt is not None and tgt in defined_fns:
+                        cands.setdefault(meta[0], set()).add(tgt)
+        if isinstance(n, c.Assignment) and isinstance(n.lvalue, c.ID):
+            lv = n.lvalue.name
+            if lv in fp_vars:
+                rv = n.rvalue
+                if isinstance(rv, c.ExprList):
+                    rv = rv.exprs[-1] if rv.exprs else rv
+                tgt = _parse_function_designator_name_only(rv)
+                if tgt is not None and tgt in defined_fns:
+                    cands.setdefault(lv, set()).add(tgt)
+        if not hasattr(n, "children"):
+            return
+        for _nm, ch in n.children():
+            if ch is None:
+                continue
+            if isinstance(ch, list):
+                for it in ch:
+                    visit(it)
+            else:
+                visit(ch)
+
+    if fd.body is not None:
+        visit(fd.body)
+    return {log: c for log, c in cands.items() if len(c) >= 2}
+
+
 def _resolve_indirect_callee(
     node: c.FuncCall, ctx: _Ctx
 ) -> tuple[c.FuncCall, str]:
@@ -5405,6 +5471,24 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             res = _try_eval_string_builtin(expr, ctx)
             if res is not None:
                 return [], Imm(res), []
+        # Runtime fn-ptr dispatch: assegna sink temp, lancia dispatch.
+        fp_log_e: str | None = None
+        if isinstance(expr.name, c.ID):
+            cl_e = _scope_resolve(ctx, expr.name.name)
+            if cl_e in ctx.func_ptr_runtime:
+                fp_log_e = cl_e
+        elif (
+            isinstance(expr.name, c.UnaryOp)
+            and expr.name.op == "*"
+            and isinstance(expr.name.expr, c.ID)
+        ):
+            cl_e = _scope_resolve(ctx, expr.name.expr.name)
+            if cl_e in ctx.func_ptr_runtime:
+                fp_log_e = cl_e
+        if fp_log_e is not None:
+            t_sink = ctx.fresh_temp()
+            ins_d = _emit_fp_runtime_dispatch(expr, ctx, fp_log_e, t_sink)
+            return ins_d, Var(t_sink), [t_sink]
         expr, name = _resolve_indirect_callee(expr, ctx)
         if name == "malloc":
             if name not in ctx.extern_procs:
@@ -5954,6 +6038,39 @@ def _uncall_excluded_transitive_closure(probe_map: dict[str, Function]) -> froze
     return frozenset(blocked)
 
 
+def _emit_fp_runtime_dispatch(
+    node: c.FuncCall,
+    ctx: _Ctx,
+    fp_log: str,
+    ret_sink: str | list[str] | None,
+) -> list[Instr]:
+    """Dispatch runtime su fn ptr cell: chain `if cell == tag(f) call f fi`.
+    Salva l'alias originale, lo restaura per ogni branch così la sub-call
+    risolve direttamente sul nome funzione.
+    """
+    cands = sorted(ctx.func_ptr_runtime[fp_log])
+    phy = _phys(ctx, fp_log)
+    out: list[Instr] = []
+    saved_alias = ctx.func_ptr_alias.get(fp_log)
+    for fn_name in cands:
+        tag = ctx.func_ptr_tags.get(fn_name)
+        if tag is None:
+            continue
+        ctx.func_ptr_alias[fp_log] = fn_name
+        sub_call = c.FuncCall(
+            c.ID(fn_name, getattr(node, "coord", None)),
+            node.args,
+            getattr(node, "coord", None),
+        )
+        sub_ir = _lower_funccall_with_ret(sub_call, ctx, ret_sink)
+        out.append(IIfKairos(phy, "==", str(tag), sub_ir, None))
+    if saved_alias is not None:
+        ctx.func_ptr_alias[fp_log] = saved_alias
+    else:
+        ctx.func_ptr_alias.pop(fp_log, None)
+    return out
+
+
 def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
     if isinstance(expr, c.UnaryOp) and expr.op == "&" and isinstance(expr.expr, c.ID):
         return _phys(ctx, expr.expr.name)
@@ -5963,6 +6080,23 @@ def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
 def _lower_funccall_with_ret(
     node: c.FuncCall, ctx: _Ctx, ret_sink: str | list[str] | None
 ) -> list[Instr]:
+    # Fn-ptr runtime dispatch: se ptr ha >1 candidato runtime, emit chain
+    # di `if (cell == tag(f)) call f(...) fi cell == tag(f)`.
+    fp_log: str | None = None
+    if isinstance(node.name, c.ID):
+        cand_log = _scope_resolve(ctx, node.name.name)
+        if cand_log in ctx.func_ptr_runtime:
+            fp_log = cand_log
+    elif (
+        isinstance(node.name, c.UnaryOp)
+        and node.name.op == "*"
+        and isinstance(node.name.expr, c.ID)
+    ):
+        cand_log = _scope_resolve(ctx, node.name.expr.name)
+        if cand_log in ctx.func_ptr_runtime:
+            fp_log = cand_log
+    if fp_log is not None:
+        return _emit_fp_runtime_dispatch(node, ctx, fp_log, ret_sink)
     node, name = _resolve_indirect_callee(node, ctx)
     assert isinstance(node.name, c.ID)
     if name == "putchar":
@@ -7722,6 +7856,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ctx.decl_order.append(logical_fp)
                 ctx.var_types[logical_fp] = node.type
                 ctx.func_ptr_vars.add(logical_fp)
+                # Transfer runtime-dispatch candidates dal pre-pass (key = C-name)
+                # alla logical-name (shadowing-aware).
+                if (
+                    logical_fp != fp_name
+                    and fp_name in ctx.func_ptr_runtime
+                ):
+                    ctx.func_ptr_runtime[logical_fp] = ctx.func_ptr_runtime[fp_name]
+                elif fp_name in ctx.func_ptr_runtime:
+                    pass
                 ctx.use_hist = True
                 phy_fp = _phys(ctx, logical_fp)
                 out_fp: list[Instr] = [
@@ -7739,6 +7882,13 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             "`nome_funzione` o `&nome_funzione`"
                         )
                     ctx.func_ptr_alias[logical_fp] = tgt_fp
+                    # Runtime-dispatch: scrivi tag(tgt) nella cella per il
+                    # dispatch successivo. Mantiene anche alias per back-compat.
+                    if (
+                        fp_name in ctx.func_ptr_runtime
+                        and tgt_fp in ctx.func_ptr_tags
+                    ):
+                        out_fp.append(IAddEq(phy_fp, Imm(ctx.func_ptr_tags[tgt_fp])))
                 return out_fp
             pn = _int_ptr_var_decl_name(node, td)
             if pn is None:
@@ -7856,6 +8006,19 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 rlog = _scope_resolve(ctx, rhs_fp.name)
                 if rlog in ctx.func_ptr_alias:
                     ctx.func_ptr_alias[lhs_fp] = ctx.func_ptr_alias[rlog]
+                    if (
+                        lhs_fp in ctx.func_ptr_runtime
+                        and ctx.func_ptr_alias[rlog] in ctx.func_ptr_tags
+                    ):
+                        phy_lhs = _phys(ctx, lhs_fp)
+                        ctx.use_hist = True
+                        return [
+                            IHistPush(ctx.hist, phy_lhs),
+                            IAddEq(
+                                phy_lhs,
+                                Imm(ctx.func_ptr_tags[ctx.func_ptr_alias[rlog]]),
+                            ),
+                        ]
                     return []
             tgt_as = _parse_function_designator(rhs_fp, ctx)
             if tgt_as is None:
@@ -7864,6 +8027,16 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     "un altro puntatore già inizializzato"
                 )
             ctx.func_ptr_alias[lhs_fp] = tgt_as
+            if (
+                lhs_fp in ctx.func_ptr_runtime
+                and tgt_as in ctx.func_ptr_tags
+            ):
+                phy_lhs = _phys(ctx, lhs_fp)
+                ctx.use_hist = True
+                return [
+                    IHistPush(ctx.hist, phy_lhs),
+                    IAddEq(phy_lhs, Imm(ctx.func_ptr_tags[tgt_as])),
+                ]
             return []
         if (
             node.op == "="
@@ -8781,6 +8954,8 @@ def _lower_user_function(
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
     file_field_bits: dict[tuple[str, str], int] | None = None,
+    fp_runtime: dict[str, set[str]] | None = None,
+    fp_tags: dict[str, int] | None = None,
 ) -> Function:
     name = fdef.decl.name
     fd = fdef.decl.type
@@ -8823,6 +8998,10 @@ def _lower_user_function(
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
     )
+    if fp_runtime:
+        ctx.func_ptr_runtime = dict(fp_runtime)
+    if fp_tags:
+        ctx.func_ptr_tags = dict(fp_tags)
     _bind_ctx_layout(ctx, layout, name)
     ctx.file_scope_channel_order = file_scope_channel_order
     if file_scope_channel_kairos:
@@ -9355,6 +9534,21 @@ def lower_file_to_program(
 
     par2_workers_all = infer_par2_workers_all(ast)
 
+    # Pre-pass: rileva fn ptr con multi-target per dispatch runtime.
+    fp_runtime_per_fn: dict[str, dict[str, set[str]]] = {}
+    for ext in ast.ext:
+        if isinstance(ext, c.FuncDef) and ext.body is not None:
+            runtime = _collect_fp_runtime_candidates(ext, du, file_td)
+            if runtime:
+                fp_runtime_per_fn[ext.decl.name or ""] = runtime
+    all_fp_targets: set[str] = set()
+    for runtime in fp_runtime_per_fn.values():
+        for cands in runtime.values():
+            all_fp_targets.update(cands)
+    fp_tags_global: dict[str, int] = {
+        nm: i + 1 for i, nm in enumerate(sorted(all_fp_targets))
+    }
+
     def _lower_one_user(
         ext_phys: tuple[c.FuncDef, int],
         *,
@@ -9385,6 +9579,8 @@ def lower_file_to_program(
             channel_using_targets=ch_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
+            fp_runtime=fp_runtime_per_fn.get(ext.decl.name or ""),
+            fp_tags=fp_tags_global,
         )
 
     user_fns_probe = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
@@ -9443,6 +9639,11 @@ def lower_file_to_program(
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,
     )
+    main_fp_runtime = fp_runtime_per_fn.get("main")
+    if main_fp_runtime:
+        ctx.func_ptr_runtime = dict(main_fp_runtime)
+    if fp_tags_global:
+        ctx.func_ptr_tags = dict(fp_tags_global)
     _bind_ctx_layout(ctx, layout, "main")
     ctx.file_scope_channel_order = fs_ch_order
     ctx.channel_decl_order = list(fs_ch_order)
