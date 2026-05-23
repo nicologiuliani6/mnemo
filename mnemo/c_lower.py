@@ -3486,7 +3486,7 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             elif spec == "o":
                 out.append(("o", frozenset(flags), width))
             elif spec == "p":
-                out.append(("p",))
+                out.append(("p", frozenset(flags), width))
             elif spec == "s":
                 out.append(("s",))
             else:
@@ -3819,14 +3819,18 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
         elif k == "p":
             ex = exprs[arg_i]
             arg_i += 1
-            # Formato compatibile pratico: 0x + hex lowercase.
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
+            # Formato compatibile pratico: 0x + hex lowercase, width applicata al
+            # solo body hex (es. `%5p` di 0x42 → "0x   42" se sinistra-pad, …).
             ins0, tt0 = _ir_emit_byte_as_show_char(ctx, ord("0"))
             insx, ttx = _ir_emit_byte_as_show_char(ctx, ord("x"))
             out.extend(ins0 + insx)
             tm_acc.extend(tt0 + ttx)
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                for ch in _format_hex_u32(val):
+                s = _printf_pad(_format_hex_u32(val), flags, width)
+                for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                     out.extend(ins)
                     tm_acc.extend(tt)
@@ -3834,19 +3838,45 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    for ch in _format_hex_u32(op.value):
+                    s = _printf_pad(_format_hex_u32(op.value), flags, width)
+                    for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                         out.extend(ins)
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    out.extend(
-                        _io_opt_uncall_wrap(
-                            ctx,
-                            ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                    if (
+                        width > 0
+                        and "+" not in flags
+                        and " " not in flags
+                    ):
+                        if "-" in flags:
+                            callee_p = "__mn_putx_width_left"
+                        elif "0" in flags:
+                            callee_p = "__mn_putx_width_zero"
+                        else:
+                            callee_p = "__mn_putx_width"
+                        t_w = ctx.fresh_temp()
+                        out.append(IConst(t_w, width))
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall(
+                                    callee_p,
+                                    [op.name, t_w] + _kairos_stack_actuals(ctx),
+                                ),
+                            )
                         )
-                    )
-                    tm_acc.extend(tm)
+                        out.append(ISubEq(t_w, Imm(width)))
+                        tm_acc.extend(tm)
+                    else:
+                        out.extend(
+                            _io_opt_uncall_wrap(
+                                ctx,
+                                ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                            )
+                        )
+                        tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError("printf %p: espressione non valida")
         elif k == "s":
