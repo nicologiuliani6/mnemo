@@ -5027,6 +5027,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             inner = expr.expr
             if isinstance(inner, c.ID):
                 n = _scope_resolve(ctx, inner.name)
+                fs_key = ("__file__", n)
+                fs_slot: int | None = None
+                if (
+                    ctx.mem_layout is not None
+                    and fs_key in ctx.mem_layout.slot_of
+                ):
+                    fs_slot = ctx.mem_layout.slot_of[fs_key]
                 if n in ctx.array_info:
                     # `&a` su array: indirizzo dell'elemento 0.
                     cell0 = _array_elem_local(n, 0)
@@ -5039,6 +5046,9 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 if n in ctx.slot_index:
                     ctx.addr_taken_logicals.add(n)
                     return [], Imm(ctx.slot_index[n]), []
+                if fs_slot is not None:
+                    ctx.addr_taken_logicals.add(n)
+                    return [], Imm(fs_slot), []
                 if n in ctx.struct_tag_of_var:
                     tag = ctx.struct_tag_of_var[n]
                     fields = ctx.struct_specs.get(tag)
@@ -9557,6 +9567,24 @@ def lower_file_to_program(
                 pn = _phys(ctx, cell_name)
                 instrs.append(IAddEq(pn, Imm(v)))
             continue
+        # `int *p = &id;` file-scope: emit p_slot += slot_of(id) (pool index).
+        pn_ptr = _int_ptr_var_decl_name(ext, file_td)
+        if (
+            pn_ptr is not None
+            and isinstance(ext.init, c.UnaryOp)
+            and ext.init.op == "&"
+            and isinstance(ext.init.expr, c.ID)
+        ):
+            target = ext.init.expr.name
+            slot: int | None = None
+            fs_key_t = ("__file__", target)
+            if fs_key_t in layout.slot_of:
+                slot = layout.slot_of[fs_key_t]
+                ctx.addr_taken_logicals.add(target)
+            if slot is not None and slot != 0:
+                instrs.append(IAddEq(_phys(ctx, pn_ptr), Imm(slot)))
+            if slot is not None:
+                continue
         # Solo scalar int / typedef-of-int / enum con init Constant non-zero.
         nm = _scalar_int_decl_name_for_init(ext, file_td)
         if nm is None:
