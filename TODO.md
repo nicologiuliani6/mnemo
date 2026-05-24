@@ -1,5 +1,41 @@
 # TODO
 
+## Bug aperti
+
+### `--opt-uncall-user-calls` su `c_test/des.c` → DELOCAL valore errato
+
+`mnemo run c_test/des.c --opt-uncall-user-calls` fallisce con:
+```
+[VM] DELOCAL: valore finale errato! (frame=keyschedule var=__mn_lc1, atteso=0, trovato=2, c_val=0)
+```
+
+- `keyschedule` ha `for(i=0; i<16; i++)` con body che chiama helper Mnemo (`__mn_shl_into`, `__mn_or_into`, `__mn_and_into`, `__mn_pool_store`).
+- `__mn_lc1` (entry-flag del for, max 1 in forward) viene trovato a 2 al delocal → contaminazione hist o snapshot non protegge correttamente.
+- Senza il flag: `des.c` gira (exit=0) ma output `cipher: x` strano (probabile bug separato lato emit, non VM).
+- `c_test/loop.c --opt-uncall-user-calls` funziona — sospetto: chiamate ai helper dentro body loop inquinano `__mn_hist` in modo non bilanciato in uncall.
+- Indagine richiede log `inv_depth` al panic per distinguere forward vs reverse run; primo tentativo di aggiungere log a Kairos `vm_ops.h` ha causato hang inatteso, rollback fatto.
+
+Prossimi passi:
+1. Re-strumentare panic con `inv_depth` + dump primi N entry di `__mn_hist`.
+2. Diff strutturale tra `loop.kairos` (works) vs sezione `procedure keyschedule` in `des.kairos`.
+3. Verificare se `__mn_pool_store`/`__mn_and_into`/`__mn_shl_into` lasciano residui su `__mn_hist` non riassorbiti nel reverse del chiamante.
+
+### Overflow / output strano in `c_test/des.c` senza opt
+
+`mnemo run c_test/des.c` (no flag) termina exit=0 ma stampa:
+```
+plain : 123456789abcdef0
+cipher: x
+dec   : 7ff7ede1718e2635
+```
+
+- `cipher: %llx` stampa `x` da solo → emit del `printf` per `unsigned long long` rotto su valore alto (possibile overflow cell 64-bit a 32-bit, oppure `__mn_putx`/`__mn_putx_width` non gestisce il valore grande).
+- `dec` ≠ `plain` → encrypt/decrypt non round-trip → bug semantico in DES (rotazioni `<<5 | >>(64-5)` su `u64` con cell int64_t, possibile sign-extension o mask mancante).
+- Indagare:
+  1. `lib/putx.kairos` / `__mn_putx` per valori > 2^31.
+  2. Lowering di `u64` shift in `c_lower.py`: `(key << 5) | (key >> 59)` con `key` cella `int64_t` — controllare mask intermedie.
+  3. Confronto gcc vs mnemo su un caso ridotto (`u64 x = 0x...; printf("%llx\n", x)`).
+
 ## Librerie standard C implementabili in Mnemo
 
 Funzioni C standard compatibili modello reversibile, realizzabili dato che
