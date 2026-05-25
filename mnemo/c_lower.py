@@ -3969,10 +3969,13 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
             elif (
                 isinstance(ex, c.ID)
                 and _scope_resolve(ctx, ex.name) in ctx.array_info
+                and not ctx.array_info[_scope_resolve(ctx, ex.name)].array_decay_pointer
             ):
                 # `char s[] = "Hello"; printf("%s", s);` — l'array è
                 # registrato in array_info ma non in char_ptr_string_base
                 # (vedi `_literal_c_array_meta` per char[] da letterale).
+                # Skip decay-pointer params (`char *p`): nessun storage locale,
+                # serve runtime dispatch sul valore del ptr (else sotto).
                 arr_log = _scope_resolve(ctx, ex.name)
                 info = ctx.array_info[arr_log]
                 if info.elem_size != 1:
@@ -3990,38 +3993,77 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 # Runtime dispatch: ex è ID non legato direttamente a stringa.
                 # Emit chain `if (ptr_cell == slot(base_k)) print bytes_k`
                 # su tutte le stringhe note nel file (char_ptr_string_base
-                # + char[] in array_info con elem_size=1).
-                candidates_runtime: list[tuple[int, str]] = []
-                seen_bases: set[str] = set()
+                # + char[] in array_info con elem_size=1, + tutti i
+                # `__mn_ros_*` cross-funzione noti nel layout — necessario
+                # per `f("lit")` lowered come `char *p = "lit"; f(p)` quando
+                # printf("%s", arg) avviene in altra funzione).
+                # Lista: (cell0_idx, [(i, cell_idx)..]).
+                candidates_runtime: list[tuple[int, list[tuple[int, int]]]] = []
+                seen_cell0: set[int] = set()
+
+                def add_candidate(cells: list[tuple[int, int]]) -> None:
+                    if not cells:
+                        return
+                    cells.sort(key=lambda kv: kv[0])
+                    if cells[0][0] != 0:
+                        return
+                    c0 = cells[0][1]
+                    if c0 in seen_cell0:
+                        return
+                    seen_cell0.add(c0)
+                    candidates_runtime.append((c0, cells))
+
+                # Locali: char_ptr_string_base + char[] in array_info.
+                local_bases: list[str] = []
                 for _vname, sbase in ctx.char_ptr_string_base.items():
-                    if sbase in seen_bases:
-                        continue
                     info_b = ctx.array_info.get(sbase)
-                    if info_b is None or info_b.elem_size != 1:
-                        continue
-                    cell0 = _array_elem_local(sbase, 0)
-                    idx0 = ctx.slot_index.get(cell0)
-                    if idx0 is None and ctx.mem_layout is not None:
-                        fk = ("__file__", cell0)
-                        if fk in ctx.mem_layout.slot_of:
-                            idx0 = ctx.mem_layout.slot_of[fk]
-                    if idx0 is None:
-                        continue
-                    candidates_runtime.append((idx0, sbase))
-                    seen_bases.add(sbase)
+                    if info_b is not None and info_b.elem_size == 1:
+                        local_bases.append(sbase)
                 for nm_arr, info_arr in ctx.array_info.items():
-                    if info_arr.elem_size != 1 or nm_arr in seen_bases:
+                    if info_arr.elem_size == 1:
+                        local_bases.append(nm_arr)
+                for sbase in local_bases:
+                    info_b = ctx.array_info.get(sbase)
+                    if info_b is None:
                         continue
-                    cell0 = _array_elem_local(nm_arr, 0)
-                    idx0 = ctx.slot_index.get(cell0)
-                    if idx0 is None and ctx.mem_layout is not None:
-                        fk = ("__file__", cell0)
-                        if fk in ctx.mem_layout.slot_of:
-                            idx0 = ctx.mem_layout.slot_of[fk]
-                    if idx0 is None:
-                        continue
-                    candidates_runtime.append((idx0, nm_arr))
-                    seen_bases.add(nm_arr)
+                    cells: list[tuple[int, int]] = []
+                    ok = True
+                    for i in range(info_b.total):
+                        cell = _array_elem_local(sbase, i)
+                        idx_c = ctx.slot_index.get(cell)
+                        if idx_c is None and ctx.mem_layout is not None:
+                            for (fk, nm), v in ctx.mem_layout.slot_of.items():
+                                if nm == cell:
+                                    idx_c = v
+                                    break
+                        if idx_c is None:
+                            ok = False
+                            break
+                        cells.append((i, idx_c))
+                    if ok:
+                        add_candidate(cells)
+
+                # Cross-funzione: __mn_ros_* registrati nel layout (anche se
+                # non in ctx.array_info corrente). Cell pattern:
+                # `__mn_arr_<sbase>_<i>` con sbase = `__mn_ros_<fn>_<name>`.
+                if ctx.mem_layout is not None:
+                    ros_by_base: dict[str, list[tuple[int, int]]] = {}
+                    arr_prefix = "__mn_arr___mn_ros_"
+                    for (_fk, nm), idx_c in ctx.mem_layout.slot_of.items():
+                        if not nm.startswith(arr_prefix):
+                            continue
+                        last_us = nm.rfind("_")
+                        if last_us <= 0:
+                            continue
+                        suffix = nm[last_us + 1:]
+                        if not suffix.isdigit():
+                            continue
+                        sbase = nm[len("__mn_arr_"):last_us]
+                        i_cell = int(suffix)
+                        ros_by_base.setdefault(sbase, []).append((i_cell, idx_c))
+                    for _sbase, cells in ros_by_base.items():
+                        add_candidate(cells)
+
                 if not isinstance(ex, c.ID) or not candidates_runtime:
                     raise MnemoCompileError(
                         'printf %s: letterale "…" oppure char* da `char *x = "…";` '
@@ -4033,14 +4075,12 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         f"printf %s runtime: ptr {ex.name!r} non in int_locals"
                     )
                 ptr_phys = _phys(ctx, ptr_log)
-                for idx_b, base_arr in candidates_runtime:
-                    info_b = ctx.array_info[base_arr]
+                for c0, cells in candidates_runtime:
                     body_b: list[Instr] = []
-                    for i in range(info_b.total - 1):
-                        body_b.append(
-                            IShow(_phys(ctx, _array_elem_local(base_arr, i)), True)
-                        )
-                    out.append(IIfKairos(ptr_phys, "==", str(idx_b), body_b, None))
+                    # Stampa cells[0..total-2] (skip terminatore NUL finale).
+                    for i, idx_c in cells[:-1]:
+                        body_b.append(IShow(f"__mn_mem{idx_c}", True))
+                    out.append(IIfKairos(ptr_phys, "==", str(c0), body_b, None))
         else:
             raise MnemoCompileError("printf: segmento interno non valido")
     if tm_acc:
@@ -9516,6 +9556,108 @@ def _hoist_compound_literals_in_ast(ast: c.FileAST) -> None:
             continue
         items = list(body.block_items or [])
         body.block_items = decls + items
+
+
+_PRINTF_LIKE_FORMAT_ARG0 = frozenset({
+    "printf", "fprintf", "sprintf", "snprintf", "dprintf",
+    "scanf", "fscanf", "sscanf",
+    "puts", "fputs", "perror",
+})
+
+# Builtins / lowering passes che richiedono `c.Constant(type="string")`
+# letterale direttamente come arg: NON hoistare. Esempio: `offsetof()` →
+# `__mn_offsetof_str("struct T", "member")` legge entrambi gli arg come
+# stringhe a compile-time per calcolare field-index.
+_STRING_LITERAL_RAW_ARG_CALLEES = frozenset({
+    "__mn_offsetof_str",
+    # memcpy/memmove copiano da letterale a char[] byte-per-byte (vedi
+    # `_try_lower_memcpy_memset` ramo `Constant string`). Senza letterale
+    # diretto la lowering fallisce / il rt-call inesiste.
+    "memcpy",
+    "memmove",
+})
+
+
+def _hoist_string_literal_call_args_in_ast(ast: c.FileAST) -> None:
+    """Hoist string-literal call args (non-printf-format) a Decl `char *p = "..."`
+    sintetiche in testa al body della funzione chiamante. Permette di passare
+    letterali stringa a funzioni utente (`f("lit")`) — riusa l'infra
+    `__mn_ros_*` di `_char_ptr_string_literal_meta`.
+
+    Dedup per (funzione, valore stringa). Skip primo arg di printf-family
+    (è il format string, gestito direttamente da `_parse_printf_format`).
+    Altri arg di printf con %s su Constant string sono pure gestiti inline
+    (vedi `c.Constant` branch in printf %s lowering): hoist solo se non in
+    printf-family per restare conservativi.
+    """
+    counter = [0]
+
+    def fresh() -> str:
+        counter[0] += 1
+        return f"__mn_anon_str_{counter[0]}"
+
+    def make_char_ptr_decl(name: str, lit_value: str) -> c.Decl:
+        return c.Decl(
+            name=name,
+            quals=[], align=[], storage=[], funcspec=[],
+            type=c.PtrDecl(
+                quals=[],
+                type=c.TypeDecl(
+                    declname=name, quals=[], align=None,
+                    type=c.IdentifierType(names=["char"]),
+                ),
+            ),
+            init=c.Constant(type="string", value=lit_value),
+            bitsize=None,
+        )
+
+    for ext in ast.ext:
+        if not isinstance(ext, c.FuncDef) or ext.body is None:
+            continue
+        body = ext.body
+        if not isinstance(body, c.Compound):
+            continue
+        dedup: dict[str, str] = {}
+        new_decls: list[c.Decl] = []
+
+        def rewrite(node: c.Node | None) -> None:
+            if node is None:
+                return
+            for _attr, child in node.children():
+                if isinstance(child, c.FuncCall):
+                    callee_name = (
+                        child.name.name if isinstance(child.name, c.ID) else None
+                    )
+                    skip_first = (
+                        callee_name is not None
+                        and callee_name in _PRINTF_LIKE_FORMAT_ARG0
+                    )
+                    skip_all = (
+                        callee_name is not None
+                        and (
+                            callee_name in _PRINTF_LIKE_FORMAT_ARG0
+                            or callee_name in _STRING_LITERAL_RAW_ARG_CALLEES
+                        )
+                    )
+                    if child.args is not None and not skip_all:
+                        exprs = list(child.args.exprs or [])
+                        for i, a in enumerate(exprs):
+                            if isinstance(a, c.Constant) and a.type == "string":
+                                if i == 0 and skip_first:
+                                    continue
+                                lit = a.value
+                                nm = dedup.get(lit)
+                                if nm is None:
+                                    nm = fresh()
+                                    dedup[lit] = nm
+                                    new_decls.append(make_char_ptr_decl(nm, lit))
+                                exprs[i] = c.ID(name=nm, coord=a.coord)
+                        child.args.exprs = exprs
+                rewrite(child)
+
+        rewrite(body)
+        if new_decls:
+            body.block_items = list(new_decls) + list(body.block_items or [])
 
 
 def _rename_id_in_subtree(node: c.Node | None, old: str, new: str) -> None:

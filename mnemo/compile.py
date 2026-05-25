@@ -7,6 +7,7 @@ from mnemo.c_lower import (
     _convert_kr_to_ansi,
     _hoist_compound_literals_in_ast,
     _hoist_static_locals,
+    _hoist_string_literal_call_args_in_ast,
     _name_anonymous_structs_unions,
     infer_auto_lib_files,
     infer_lib_files_from_calls,
@@ -946,6 +947,9 @@ def compile_c_to_kairos(
     _hoist_compound_literals_in_ast(ast)
     # `static int n = …;` → file-scope Decl rinominato. Persiste tra chiamate.
     _hoist_static_locals(ast)
+    # `f("lit")` → `char *__mn_anon_str_k = "lit"; f(__mn_anon_str_k)` (skip
+    # printf-family). Materializza in pool prima del layout per allocare celle.
+    _hoist_string_literal_call_args_in_ast(ast)
     # `return E;` dentro for/while → return-flag globale, body skipped via
     # `if (!flag)`. Loop esegue tutte le iter ma il body è no-op dopo flag.
     _transform_return_in_loop(ast)
