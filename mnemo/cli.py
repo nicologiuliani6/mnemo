@@ -232,6 +232,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="stampa anche il blocco dump della VM (dopo «=== VM dump ===»); default: no",
     )
+    p_r.add_argument(
+        "--native-arith",
+        action="store_true",
+        help="abilita KAIROS_NATIVE_ARITH=1 nella VM (mul/div/bitwise O(1) in C, uncall preservato)",
+    )
     p_r.set_defaults(handler=_cmd_run)
 
     args = parser.parse_args(argv)
@@ -409,12 +414,17 @@ def _cmd_run(args: argparse.Namespace) -> None:
                 exe = found
             cmd = [exe, out_abs]
 
+    run_env = os.environ.copy()
+    if getattr(args, "native_arith", False):
+        run_env["KAIROS_NATIVE_ARITH"] = "1"
+
     if args.verbose:
         print(f"mnemo: run {cmd!r} cwd={cwd!r}", file=sys.stderr)
     try:
         r = subprocess.run(
             cmd,
             cwd=cwd,
+            env=run_env,
             check=False,
             stdout=subprocess.PIPE,
             stderr=(subprocess.PIPE if args.verbose else subprocess.DEVNULL),

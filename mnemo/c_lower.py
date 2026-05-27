@@ -90,6 +90,8 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_mod_signed",
         "__mn_putx",
         "__mn_putx_uint",
+        "__mn_putx_u64",
+        "__mn_u64_split32",
         "__mn_putx_width",
         "__mn_putx_width_left",
         "__mn_putx_width_zero",
@@ -485,6 +487,45 @@ def _flatten_struct_fields(
             total = 1
             for n in dims:
                 total *= n
+            # Se elem è struct/union nested (o typedef-of-struct), espandi
+            # ogni indice in (sotto-campi). Permette `K.arr[i].field` con K
+            # struct contenente array di struct.
+            elem_stripped = _strip_typedecl(elem) if isinstance(elem, c.Node) else elem
+            elem_struct: c.Struct | None = None
+            if isinstance(elem_stripped, c.Struct):
+                elem_struct = elem_stripped
+            elif (
+                struct_specs is not None
+                and typedef_map is not None
+                and isinstance(elem_stripped, c.IdentifierType)
+                and len(elem_stripped.names) == 1
+                and elem_stripped.names[0] in typedef_map
+            ):
+                leaf_e = _follow_typedef_chain(
+                    list(elem_stripped.names), typedef_map, set()
+                )
+                if isinstance(leaf_e, c.Struct):
+                    elem_struct = leaf_e
+            if elem_struct is not None:
+                # Risolvi sotto-campi: definizione inline o via struct_specs[tag].
+                sub_fields: list[tuple[str, c.Node]] | None = None
+                if elem_struct.decls:
+                    sub_fields = _flatten_struct_fields(
+                        elem_struct, struct_specs=struct_specs, typedef_map=typedef_map,
+                    )
+                elif (
+                    struct_specs is not None
+                    and elem_struct.name
+                    and elem_struct.name in struct_specs
+                ):
+                    sub_fields = list(struct_specs[elem_struct.name])
+                if sub_fields:
+                    for i in range(total):
+                        for sub_fn, sub_fty in sub_fields:
+                            out.append(
+                                (prefix + fname + "__" + str(i) + "__" + sub_fn, sub_fty)
+                            )
+                    continue
             for i in range(total):
                 out.append((prefix + fname + "__" + str(i), elem))
             continue
@@ -2713,6 +2754,76 @@ def _struct_field_local(var: str, field: str) -> str:
     return f"{var}__{field}"
 
 
+def _resolve_struct_array_target(
+    node: c.Node, ctx: "_Ctx"
+) -> tuple[str, tuple[str, tuple[int, ...], int] | None]:
+    """Risolve `arr` o `BASE.arr` (espressione array-di-struct) in
+    (logical_name, struct_array_meta) per supportare `BASE.arr[i].f`
+    (nested struct-array field) oltre al caso piatto `arr[i].f`.
+
+    Per nested field si sintetizza un tag virtuale (`<mangled>__elem`)
+    e si registra `ctx.struct_specs[tag] = [(sub, fty), ...]` lazy
+    scansionando le celle flattenate già allocate (struct_specs della
+    struct contenitore le ha come `arr__<i>__<sub>`).
+
+    Restituisce `(logical, None)` se non risolvibile.
+    """
+    if isinstance(node, c.ID):
+        log = _scope_resolve(ctx, node.name)
+        return log, ctx.struct_array_info.get(log)
+    if isinstance(node, c.StructRef) and node.type == ".":
+        try:
+            base, path = _structref_base_and_path(node)
+        except MnemoCompileError:
+            return "", None
+        base_log = _scope_resolve(ctx, base)
+        mangled = base_log
+        for p in path:
+            mangled = mangled + "__" + p
+        meta = ctx.struct_array_info.get(mangled)
+        if meta is not None:
+            return mangled, meta
+        # Sintetizza meta scansionando struct_specs del tag base.
+        if not (base_log in ctx.struct_tag_of_var and ctx.struct_specs):
+            return mangled, None
+        base_tag = ctx.struct_tag_of_var[base_log]
+        spec = ctx.struct_specs.get(base_tag, [])
+        # Cerca campi `<rel>__<i>__<sub>` con rel = "__".join(path)
+        rel = "__".join(path)
+        prefix = rel + "__"
+        max_idx = -1
+        subfields_by_idx: dict[int, list[tuple[str, c.Node]]] = {}
+        for fn_, fty_ in spec:
+            if not fn_.startswith(prefix):
+                continue
+            rest = fn_[len(prefix):]
+            us = rest.find("__")
+            if us < 0:
+                continue
+            idx_s = rest[:us]
+            sub = rest[us + 2:]
+            if not idx_s.isdigit():
+                continue
+            i_v = int(idx_s)
+            if i_v > max_idx:
+                max_idx = i_v
+            subfields_by_idx.setdefault(i_v, []).append((sub, fty_))
+        if max_idx < 0:
+            return mangled, None
+        tot = max_idx + 1
+        # Sintetizza tag virtuale + struct_specs entry.
+        synth_tag = mangled + "__elem"
+        if synth_tag not in ctx.struct_specs:
+            ctx.struct_specs[synth_tag] = subfields_by_idx.get(0, [])
+        # Registra struct_array_info per riusare lookup veloce.
+        synth_meta = (synth_tag, (tot,), tot)
+        ctx.struct_array_info[mangled] = synth_meta
+        # Aliasa le celle: `<mangled>__<i>__<sub>` (atteso da lowering)
+        # già esiste se struct_specs flat è coerente.
+        return mangled, synth_meta
+    return "", None
+
+
 def _structref_base_and_path(expr: c.StructRef) -> tuple[str, list[str]]:
     """Es. `o.a.b` → (`o`, [`a`,`b`]); supporta `StructRef` annidati nel campo base."""
     parts: list[str] = []
@@ -3495,9 +3606,13 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
                 j += 1
                 while j < len(fmt) and fmt[j].isdigit():
                     j += 1
-            # Length modifiers (no-op nel word-VM): `l`, `ll`, `h`, `hh`, `z`, `j`, `t`.
+            # Length modifiers: `l`, `ll`, `h`, `hh`, `z`, `j`, `t`. Captura `ll`
+            # per discriminare %llx (u64) vs %x (u32) nel lowering printf.
+            length_mod = ""
             while j < len(fmt) and fmt[j] in ("l", "h", "z", "j", "t"):
+                length_mod += fmt[j]
                 j += 1
+            is_ll = (length_mod == "ll")
             if j >= len(fmt):
                 raise MnemoCompileError(
                     "printf: specificatore di conversione mancante dopo `%`"
@@ -3512,7 +3627,8 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             elif spec == "u":
                 out.append(("u", frozenset(flags), width))
             elif spec == "x":
-                out.append(("x", frozenset(flags), width))
+                # Distinguiamo %llx (u64) da %x (u32) nel piece tag.
+                out.append(("llx" if is_ll else "x", frozenset(flags), width))
             elif spec == "o":
                 out.append(("o", frozenset(flags), width))
             elif spec == "p":
@@ -3769,14 +3885,19 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError(f"printf %{k}: espressione non valida")
-        elif k == "x":
+        elif k == "x" or k == "llx":
             ex = exprs[arg_i]
             arg_i += 1
             flags = piece[1] if len(piece) > 1 else frozenset()
             width = piece[2] if len(piece) > 2 else 0
+            is_u64 = (k == "llx")
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                s = _printf_pad(_format_hex_u32(val), flags, width)
+                fmt_v = (
+                    format(val & 0xFFFFFFFFFFFFFFFF, "x") if is_u64
+                    else _format_hex_u32(val)
+                )
+                s = _printf_pad(fmt_v, flags, width)
                 for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                     out.extend(ins)
@@ -3785,7 +3906,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    s = _printf_pad(_format_hex_u32(op.value), flags, width)
+                    fmt_v = (
+                        format(op.value & 0xFFFFFFFFFFFFFFFF, "x") if is_u64
+                        else _format_hex_u32(op.value)
+                    )
+                    s = _printf_pad(fmt_v, flags, width)
                     for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
                         out.extend(ins)
@@ -3796,6 +3921,7 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         width > 0
                         and "+" not in flags
                         and " " not in flags
+                        and not is_u64
                     ):
                         if "-" in flags:
                             callee_x = "__mn_putx_width_left"
@@ -3817,10 +3943,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         out.append(ISubEq(t_w, Imm(width)))
                         tm_acc.extend(tm)
                     else:
+                        callee_x = "__mn_putx_u64" if is_u64 else "__mn_putx"
                         out.extend(
                             _io_opt_uncall_wrap(
                                 ctx,
-                                ICall("__mn_putx", [op.name] + _kairos_stack_actuals(ctx)),
+                                ICall(callee_x, [op.name] + _kairos_stack_actuals(ctx)),
                             )
                         )
                         tm_acc.extend(tm)
@@ -4214,6 +4341,74 @@ def _try_lower_string_h_runtime(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | No
         if len(args) != 2:
             return None
         dst_arg = args[0]
+        # `strcpy(BASE.arr[i].field, "lit")` con field char[] nested in
+        # struct-array: emit byte writes con dispatch per-indice.
+        if isinstance(dst_arg, c.StructRef) and dst_arg.type == "." and isinstance(dst_arg.name, c.ArrayRef) and isinstance(dst_arg.field, c.ID):
+            sv_n = _string_literal_value_of(args[1], ctx)
+            if sv_n is None:
+                return None
+            arr_log_n, sa_meta_n = _resolve_struct_array_target(dst_arg.name.name, ctx)
+            if sa_meta_n is None:
+                return None
+            elem_tag_n, _sa_dims_n, sa_tot_n = sa_meta_n
+            field_n = dst_arg.field.name
+            spec_n = ctx.struct_specs.get(elem_tag_n, [])
+            # Cerca `<field>__<j>` entries; tipo deve essere char/unsigned char.
+            j_max_n = -1
+            for fn_n, fty_n in spec_n:
+                if not fn_n.startswith(field_n + "__"):
+                    continue
+                tail_n = fn_n[len(field_n) + 2:]
+                if not tail_n.isdigit():
+                    continue
+                # Verifica char.
+                inner_n = _strip_typedecl(fty_n)
+                if not (isinstance(inner_n, c.IdentifierType) and tuple(inner_n.names) in (("char",), ("unsigned", "char"))):
+                    return None
+                j_n = int(tail_n)
+                if j_n > j_max_n:
+                    j_max_n = j_n
+            if j_max_n < 0:
+                return None
+            cap_n = j_max_n + 1
+            bs_n = sv_n.encode("utf-8")
+            if len(bs_n) + 1 > cap_n:
+                raise MnemoCompileError(
+                    f"strcpy: src len={len(bs_n)}+1 supera dst cap={cap_n}"
+                )
+            # Subscript: const o runtime.
+            subs_n = dst_arg.name.subscript
+            def emit_for_idx(idx_v: int) -> list[Instr]:
+                ins_n: list[Instr] = []
+                for j in range(len(bs_n)):
+                    cell_n = f"{arr_log_n}__{idx_v}__{field_n}__{j}"
+                    ins_n.extend(_lower_assign(_phys(ctx, cell_n), c.Constant("int", str(int(bs_n[j])), call.coord), ctx))
+                if len(bs_n) < cap_n:
+                    cell_z = f"{arr_log_n}__{idx_v}__{field_n}__{len(bs_n)}"
+                    ins_n.extend(_lower_assign(_phys(ctx, cell_z), c.Constant("int", "0", call.coord), ctx))
+                return ins_n
+            if isinstance(subs_n, c.Constant):
+                i_c = int(subs_n.value)
+                if i_c < 0 or i_c >= sa_tot_n:
+                    raise MnemoCompileError(f"strcpy: indice {i_c} fuori range")
+                return emit_for_idx(i_c)
+            ix_pre_n, ix_op_n, ix_tm_n = _eval_expr(subs_n, ctx)
+            if isinstance(ix_op_n, Imm):
+                tix_n = ctx.fresh_temp()
+                ix_pre_n = ix_pre_n + [IConst(tix_n, ix_op_n.value)]
+                ix_name_n = tix_n
+                ix_tm_n = ix_tm_n + [tix_n]
+            else:
+                ix_name_n = ix_op_n.name
+            out_n: list[Instr] = list(ix_pre_n)
+            for kk in range(sa_tot_n):
+                body_n = emit_for_idx(kk)
+                out_n.append(IIfKairos(ix_name_n, "==", str(kk), body_n, None))
+            for t_n in ix_tm_n:
+                out_n.append(IHistPush(ctx.scratch, t_n))
+            if ix_tm_n:
+                ctx.use_scratch = True
+            return out_n
         if not isinstance(dst_arg, c.ID):
             return None
         dst_log = _scope_resolve(ctx, dst_arg.name)
@@ -4864,13 +5059,11 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         if (
             expr.type == "."
             and isinstance(expr.name, c.ArrayRef)
-            and isinstance(expr.name.name, c.ID)
             and isinstance(expr.field, c.ID)
         ):
-            arr_id = expr.name.name.name
-            arr_log = _scope_resolve(ctx, arr_id)
-            sa_meta = ctx.struct_array_info.get(arr_log)
+            arr_log, sa_meta = _resolve_struct_array_target(expr.name.name, ctx)
             if sa_meta is not None:
+                arr_id = arr_log
                 sa_tag, sa_dims, sa_tot = sa_meta
                 field = expr.field.name
                 spec = ctx.struct_specs.get(sa_tag, [])
@@ -8267,18 +8460,20 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         ]
                         return _lower_funccall_with_ret(norm_sc, ctx, sinks)
         if isinstance(node.lvalue, c.StructRef):
-            # `arr[i].field = X` con arr array di struct.
+            # `arr[i].field = X` con arr array di struct, oppure
+            # `BASE.arr[i].field = X` con BASE struct e campo `arr` array
+            # di struct (nested struct-array field).
             lvs = node.lvalue
             if (
                 lvs.type == "."
                 and isinstance(lvs.name, c.ArrayRef)
-                and isinstance(lvs.name.name, c.ID)
                 and isinstance(lvs.field, c.ID)
             ):
-                arr_id_w = lvs.name.name.name
-                arr_log_w = _scope_resolve(ctx, arr_id_w)
-                sa_meta_w = ctx.struct_array_info.get(arr_log_w)
+                arr_log_w, sa_meta_w = _resolve_struct_array_target(
+                    lvs.name.name, ctx
+                )
                 if sa_meta_w is not None:
+                    arr_id_w = arr_log_w
                     sa_tag_w, _sa_dims_w, sa_tot_w = sa_meta_w
                     field_w = lvs.field.name
                     spec_w = ctx.struct_specs.get(sa_tag_w, [])

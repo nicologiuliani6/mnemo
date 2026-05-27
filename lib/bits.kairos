@@ -192,7 +192,9 @@ procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
     push(pow, __mn_hist)
     delocal int pow = 0
 
-// dst += (x >> n) aritmetico
+// dst += (x >> n) unsigned (logical shift). Necessario per u32/u64 dove
+// bit pattern del cell può avere high bit set (signed-negative); aritmetico
+// >> sign-extende perdendo bit utili. mnhalve usa semantica unsigned div2.
 // NOTA BUG VM: stesso problema di __mn_shl_into per n==0. Encrypt usa n=8.
 // Per n=0 vedere c_test/uncall_bug_shr_n0.kairos.
 procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scratch)
@@ -202,11 +204,14 @@ procedure __mn_shr_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
     if n != 0 then
         from i == 0 loop
             i += 1
-            local int q = 0
-            call __mn_floor_div2_signed(t, q, __mn_hist, __mn_scratch)
-            t += q
-            push(q, __mn_hist)
-            delocal int q = 0
+            local int qh = 0
+            local int ph = 0
+            mnhalve(t, qh, ph)
+            t += qh
+            push(ph, __mn_hist)
+            delocal int ph = 0
+            push(qh, __mn_hist)
+            delocal int qh = 0
         until i == n
     fi n != 0
     dst += t

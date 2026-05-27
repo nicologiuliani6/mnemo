@@ -2,39 +2,61 @@
 
 ## Bug aperti
 
-### `--opt-uncall-user-calls` su `c_test/des.c` → DELOCAL valore errato
+### `c_test/des.c` — round-trip dec != plain (semantic u32 modular)
 
-`mnemo run c_test/des.c --opt-uncall-user-calls` fallisce con:
-```
-[VM] DELOCAL: valore finale errato! (frame=keyschedule var=__mn_lc1, atteso=0, trovato=2, c_val=0)
-```
+Status corrente (post-fix VM int64 + mnhalve unsigned + MNSPLIT32 + putx_u64):
 
-- `keyschedule` ha `for(i=0; i<16; i++)` con body che chiama helper Mnemo (`__mn_shl_into`, `__mn_or_into`, `__mn_and_into`, `__mn_pool_store`).
-- `__mn_lc1` (entry-flag del for, max 1 in forward) viene trovato a 2 al delocal → contaminazione hist o snapshot non protegge correttamente.
-- Senza il flag: `des.c` gira (exit=0) ma output `cipher: x` strano (probabile bug separato lato emit, non VM).
-- `c_test/loop.c --opt-uncall-user-calls` funziona — sospetto: chiamate ai helper dentro body loop inquinano `__mn_hist` in modo non bilanciato in uncall.
-- Indagine richiede log `inv_depth` al panic per distinguere forward vs reverse run; primo tentativo di aggiungere log a Kairos `vm_ops.h` ha causato hang inatteso, rollback fatto.
-
-Prossimi passi:
-1. Re-strumentare panic con `inv_depth` + dump primi N entry di `__mn_hist`.
-2. Diff strutturale tra `loop.kairos` (works) vs sezione `procedure keyschedule` in `des.kairos`.
-3. Verificare se `__mn_pool_store`/`__mn_and_into`/`__mn_shl_into` lasciano residui su `__mn_hist` non riassorbiti nel reverse del chiamante.
-
-### Overflow / output strano in `c_test/des.c` senza opt
-
-`mnemo run c_test/des.c` (no flag) termina exit=0 ma stampa:
 ```
 plain : 123456789abcdef0
-cipher: x
-dec   : 7ff7ede1718e2635
+cipher: ffbf6b6962f07ddb        (gcc: 71deeadd14969ffc)
+dec   : fd6effb90ccee6f7        (gcc: 123456789abcdef0)
 ```
 
-- `cipher: %llx` stampa `x` da solo → emit del `printf` per `unsigned long long` rotto su valore alto (possibile overflow cell 64-bit a 32-bit, oppure `__mn_putx`/`__mn_putx_width` non gestisce il valore grande).
-- `dec` ≠ `plain` → encrypt/decrypt non round-trip → bug semantico in DES (rotazioni `<<5 | >>(64-5)` su `u64` con cell int64_t, possibile sign-extension o mask mancante).
-- Indagare:
-  1. `lib/putx.kairos` / `__mn_putx` per valori > 2^31.
-  2. Lowering di `u64` shift in `c_lower.py`: `(key << 5) | (key >> 59)` con `key` cella `int64_t` — controllare mask intermedie.
-  3. Confronto gcc vs mnemo su un caso ridotto (`u64 x = 0x...; printf("%llx\n", x)`).
+- Print `%llx` di u64 ora corretto (MNSPLIT32 + `__mn_putx_u64`).
+- u64 rotate `(key << 5) | (key >> 59)` ora corretto (mnhalve unsigned in `__mn_shr_into`).
+- Subkeys keyschedule corretti (verificato `_dbg_keysched.c`).
+- Bug residuo: `F(u32 x, u32 k)` opera su `u32` ma Mnemo cella è int64. Ops
+  in F (shift, xor, mul) non maschereranno a 32-bit a ogni step → divergenza
+  da semantica C u32 modular.
+  - GCC: `F(0x12345678, 0x14075314) = 0xfc5ca526` (32-bit).
+  - Mnemo: `658cc5136099183e` (64-bit).
+- Fix richiede: c_lower traccia tipo u32 vs u64 per ogni var; emette
+  `& 0xFFFFFFFF` (or simile) dopo ogni op che può overflow 32-bit.
+  Alternativa: workaround sorgente con mask espliciti (`x &= 0xFFFFFFFF`).
+
+### `--opt-uncall-user-calls` su `c_test/des.c` → POP stack vuoto
+
+`mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
+```
+[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)
+```
+
+- Triggered durante inverse a profondità 4 (opt-uncall stratifica).
+- `__mn_shr_into` ora usa mnhalve-based push pattern; opt-uncall hist tracking
+  potrebbe non riconoscere il nuovo pattern correttamente.
+- `c_test/loop.c --opt-uncall-user-calls` funziona — sospetto pattern shift
+  o interazione con altri helper (and_into, or_into, etc.).
+
+### `c_test/kernel.c` — struct array runtime indexing
+
+`mnemo run c_test/kernel.c`:
+```
+mnemo: &: supportati `&x`, `&struct.campo`, `&array[idx]`
+```
+
+Blockers:
+- `&K.procs[K.current]` — & su array di struct con idx runtime, base StructRef.
+  Mnemo c_lower attualmente supporta solo `&x`, `&struct.campo`, `&array[idx]`
+  con base c.ID — non `&base.field[idx]`.
+- `K.procs[idx].field = ...` con `idx` runtime — richiede pool dispatch su
+  array di struct (Mnemo supporta dispatch su array di scalari, non struct).
+- `process_t* p = &K.procs[idx]; p->state = X` — pointer-to-struct con
+  runtime dispatch su tutti i campi.
+- `strcpy(K.procs[i].mem, "init")` con `i` runtime su array di char dentro
+  struct.
+
+Fix richiede estensione layout per struct-of-array runtime + multi-target
+dispatch su tutti i campi della struct element.
 
 ## Librerie standard C implementabili in Mnemo
 
