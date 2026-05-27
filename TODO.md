@@ -2,27 +2,26 @@
 
 ## Bug aperti
 
-### `c_test/des.c` — round-trip dec != plain (semantic u32 modular)
+### `c_test/des.c` — round-trip dec != plain
 
 Status corrente (post-fix VM int64 + mnhalve unsigned + MNSPLIT32 + putx_u64):
-
-```
-plain : 123456789abcdef0
-cipher: ffbf6b6962f07ddb        (gcc: 71deeadd14969ffc)
-dec   : fd6effb90ccee6f7        (gcc: 123456789abcdef0)
-```
 
 - Print `%llx` di u64 ora corretto (MNSPLIT32 + `__mn_putx_u64`).
 - u64 rotate `(key << 5) | (key >> 59)` ora corretto (mnhalve unsigned in `__mn_shr_into`).
 - Subkeys keyschedule corretti (verificato `_dbg_keysched.c`).
-- Bug residuo: `F(u32 x, u32 k)` opera su `u32` ma Mnemo cella è int64. Ops
-  in F (shift, xor, mul) non maschereranno a 32-bit a ogni step → divergenza
-  da semantica C u32 modular.
-  - GCC: `F(0x12345678, 0x14075314) = 0xfc5ca526` (32-bit).
-  - Mnemo: `658cc5136099183e` (64-bit).
-- Fix richiede: c_lower traccia tipo u32 vs u64 per ogni var; emette
-  `& 0xFFFFFFFF` (or simile) dopo ogni op che può overflow 32-bit.
-  Alternativa: workaround sorgente con mask espliciti (`x &= 0xFFFFFFFF`).
+- F() inline in main + masks (`x &= 0xFFFFFFFF` dopo ogni op) → output matcha
+  gcc (verificato `_dbg_enc1.c` 16 rounds: L16=71deeadd R16=14969ffc).
+- Bug residuo SCOPERTO: array locale di funzione non-main passato a callee
+  NON è condiviso tra caller e callee. Es. `u32 subkeys[16]` in `encrypt()`
+  vive in cell locali `__mn_v___mn_arr_subkeys_*`; chiamata `keyschedule(key, subkeys)`
+  passa solo `__mn_mem*` (shared mem), non i cell locali. Keyschedule riempie
+  mem cells (sbagliati), encrypt legge sub locali (zero). Repro minimal:
+  `c_test/_dbg_arr3.c` (use() chiama fill() con int a[4]; a resta 0).
+- Fix richiede layout_collect: local array passato a callee deve essere
+  promosso a `__mn_mem*` (oppure copia in/out al call boundary).
+- Bug u32 modular SEPARATO: ops in F() su u32 non maschereranno a 32-bit;
+  c_lower dovrebbe tracciare tipo unsigned int e emit `& 0xFFFFFFFF` dopo
+  ogni assignment. Workaround sorgente con mask espliciti.
 
 ### `--opt-uncall-user-calls` su `c_test/des.c` → POP stack vuoto
 
