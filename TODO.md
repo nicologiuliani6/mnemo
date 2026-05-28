@@ -35,22 +35,21 @@ Bug aperti:
    Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
    pattern.
 
-### `init_mutexes(&struct.field)` non supportato
+### `mnemo_pthread_parallel2` su mps.h con kloop a 2 params (1° ignorato)
 
-`c_test/kernel.c` (versione multithread con `mps_t channel` come campo di
-`kernel_t K`):
+`c_test/kernel.c` multithread:
 ```c
-init_mutexes(&K.channel);
+void kloop(mps_t *mps, int *unused) { ... }
+void kernel_recv(mps_t *mps, int *answer) { ... }
+mnemo_pthread_parallel2(kloop, kernel_recv, &K.channel, &K.channel, &answer);
 ```
-→ `mnemo: init_mutexes: atteso &id`.
+mps.h's macro accetta `void (*)(mps_t*, int)` come worker e chiama solo `fn(mps)`
+ignorando il secondo arg. Mnemo invece pretende N args dove N = numero param
+di ciascun worker (qui 2+2 = 4 worker args). User passa 3, Mnemo errore.
 
-`_lower_mps_init_destroy_inline` (c_lower.py ~6080) accetta solo `&id` (c.ID),
-non `&struct.field` (c.StructRef). Stesso vincolo si applica a `destroy_mutexes`.
-
-Fix: estendere il parser dell'argomento a `init_mutexes`/`destroy_mutexes`
-per accettare anche `&base.field` con base = c.ID di struct, risolvere il
-canale come fa già `_mps_channel_ptr_id` su `&p->lane` (caso pointer).
-Pattern simile a quello di `&BASE.arr[const]` aggiunto per kernel.c v1.
+Fix: estendere parser parallel2 per riconoscere il pattern asimmetrico mps.h
+(a: 1 arg, b: 2 args). O fornire `mnemo_pthread_parallel2_async` con ABI
+flexible. O auto-detect quando worker decl ha 2 params ma callsite ne dà 1.
 
 ### Nested array dentro struct-array element con idx runtime
 

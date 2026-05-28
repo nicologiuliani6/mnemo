@@ -6073,28 +6073,108 @@ def _lower_mps_init_destroy_inline(
     Espande init_mutexes/destroy_mutexes da mps.h sul chiamante, così i canali mutex
     usano il nome della variabile reale (es. mps, req) e non il parametro formale `m`
     della static inline.
+
+    Accetta come arg0:
+    - `&id` con id di struct mps_t (o ptr a mps_t)
+    - `&base.field` con field di tipo mps_t dentro struct base (es. `&K.channel`)
     """
     if not isinstance(arg0, c.UnaryOp) or arg0.op != "&":
-        raise MnemoCompileError(f"{fname}: atteso &variabile")
+        raise MnemoCompileError(f"{fname}: atteso &variabile o &struct.campo")
     inner = arg0.expr
-    if not isinstance(inner, c.ID):
-        raise MnemoCompileError(f"{fname}: atteso &id")
-    vid = inner.name
     coord = getattr(arg0, "coord", None)
-    pty = ctx.var_types.get(vid)
-    if pty is None:
-        tag = ctx.struct_tag_of_var.get(vid)
+    # Risolvi target → (tag_struct, pointer_level).
+    if isinstance(inner, c.ID):
+        vid = inner.name
+        pty = ctx.var_types.get(vid)
+        if pty is None:
+            tag = ctx.struct_tag_of_var.get(vid)
+            if tag is None:
+                raise MnemoCompileError(f"{fname}: tipo di {vid!r} sconosciuto")
+            pl = 0
+        else:
+            pl = _pointer_level(pty)
+            if pl >= 1:
+                tag = _pointee_struct_tag(pty, ctx)
+            else:
+                tag = _struct_tag_for_decl_type(pty, ctx)
+            if tag is None:
+                raise MnemoCompileError(
+                    f"{fname}: {vid!r} non è struct mps / puntatore a struct"
+                )
+    elif isinstance(inner, c.StructRef) and inner.type in (".", "->"):
+        base, path = _structref_base_and_path(inner)
+        base_log = _scope_resolve(ctx, base)
+        # Determina tag della struct base, poi traversa path per arrivare al
+        # field finale (mps_t).
+        if inner.type == ".":
+            base_tag = ctx.struct_tag_of_var.get(base_log)
+            if base_tag is None:
+                raise MnemoCompileError(
+                    f"{fname}: base {base!r} non è una variabile struct"
+                )
+        else:
+            base_pty = ctx.var_types.get(base_log)
+            base_tag = _pointee_struct_tag(base_pty, ctx) if base_pty else None
+            if base_tag is None:
+                raise MnemoCompileError(
+                    f"{fname}: base {base!r} non è puntatore a struct"
+                )
+        # Determina il tipo del field finale (mps_t). Il field può essere
+        # presente come singolo entry in struct_specs (se non flattened) o
+        # come prefisso multiplo `<field>__<subfield>` (flattened nested
+        # struct). In caso flatten, deriviamo il tag mps_t cercando i campi
+        # del path direttamente nel typedef AST.
+        def _resolve_field_struct_tag(struct_tag: str, field: str) -> str | None:
+            cs = ctx.struct_specs.get(struct_tag)
+            if not cs:
+                return None
+            # Caso non-flat: field presente diretto.
+            fmap = {fn: ft for fn, ft in cs}
+            if field in fmap:
+                return _struct_tag_for_decl_type(fmap[field], ctx)
+            # Caso flat: cerca campi con prefix `<field>__`. Se almeno uno
+            # esiste, il sotto-struct esiste; risolvi via AST typedef.
+            prefix = field + "__"
+            if not any(fn.startswith(prefix) for fn, _ in cs):
+                return None
+            # Cerca AST decl del field nel typedef originale.
+            if ctx.file_ast is None:
+                return None
+            for ext in ctx.file_ast.ext or []:
+                if isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct):
+                    if ext.type.name == struct_tag and ext.type.decls:
+                        for fd in ext.type.decls:
+                            if (
+                                isinstance(fd, c.Decl)
+                                and fd.name == field
+                            ):
+                                return _struct_tag_for_decl_type(fd.type, ctx)
+            return None
+
+        cur_tag = base_tag
+        tag: str | None = None
+        for p in path:
+            nxt = _resolve_field_struct_tag(cur_tag, p)
+            if nxt is None:
+                raise MnemoCompileError(
+                    f"{fname}: campo {p!r} non è una sotto-struct in {cur_tag!r}"
+                )
+            cur_tag = nxt
+            tag = nxt
         if tag is None:
-            raise MnemoCompileError(f"{fname}: tipo di {vid!r} sconosciuto")
+            raise MnemoCompileError(
+                f"{fname}: {base}.{'.'.join(path)} non è una struct mps_t"
+            )
+        # vid usato in mref: la "variabile" target è la sotto-struct.
+        # Per init/destroy mps single-channel il body è no-op quindi non
+        # è strettamente necessario espandere mref; basta che la validazione
+        # del tag passi.
+        vid = f"{base_log}__" + "__".join(path)
         pl = 0
     else:
-        pl = _pointer_level(pty)
-        if pl >= 1:
-            tag = _pointee_struct_tag(pty, ctx)
-        else:
-            tag = _struct_tag_for_decl_type(pty, ctx)
-        if tag is None:
-            raise MnemoCompileError(f"{fname}: {vid!r} non è struct mps / puntatore a struct")
+        raise MnemoCompileError(
+            f"{fname}: atteso &id o &base.campo (struct con field mps_t)"
+        )
     spec = ctx.struct_specs.get(tag)
     if not spec:
         raise MnemoCompileError(f"{fname}: struct {tag!r} senza metadati")
