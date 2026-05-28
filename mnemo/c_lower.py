@@ -4733,6 +4733,22 @@ def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
         if ba > bb:
             return 1
         return 0
+    if name in ("strspn", "strcspn"):
+        if len(args) != 2:
+            return None
+        s = _string_literal_value_of(args[0], ctx)
+        accept = _string_literal_value_of(args[1], ctx)
+        if s is None or accept is None:
+            return None
+        accept_set = set(accept)
+        out = 0
+        if name == "strspn":
+            while out < len(s) and s[out] in accept_set:
+                out += 1
+        else:
+            while out < len(s) and s[out] not in accept_set:
+                out += 1
+        return out
     return None
 
 
@@ -6115,7 +6131,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return pre_ix + chain_va, Var(t_v), tm_ix + [t_v]
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
-        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "atoi", "memcmp"):
+        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "atoi", "memcmp", "strspn", "strcspn"):
             res = _try_eval_string_builtin(expr, ctx)
             if res is not None:
                 return [], Imm(res), []
