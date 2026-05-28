@@ -50,16 +50,6 @@ d. **Worker-side pool dispatch**: i workers prendono solo handle al
 
 **Lavoro non triviale; documentato per ripresa futura.**
 
-### Nested array dentro struct-array element con idx runtime
-
-- Read `B.arr[i].buf[0]` (campo nested array dentro struct-array elem con i
-  runtime) → `campo 'buf' assente`.
-- `printf("%s", B.arr[i].buf)` con i runtime → "letterale … o char*".
-  Stesso scope — nested char[] field read tramite dispatch non implementato.
-
-Fix: estendere `_disj_eq_chain` su struct-array per dispatch su campi
-nested array; e printf %s dispatch su char[] tramite struct-array.
-
 ### VM `op_uncall` su void proc con `show` → SIGSEGV (workaroundato Mnemo)
 
 Bug VM sotto la superficie. Workaround corrente in Mnemo:
