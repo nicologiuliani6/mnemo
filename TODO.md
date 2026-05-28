@@ -4,24 +4,41 @@
 
 ### `c_test/des.c` — round-trip dec != plain
 
-Status corrente (post-fix VM int64 + mnhalve unsigned + MNSPLIT32 + putx_u64):
+Status (post-fix VM int64 + mnhalve unsigned + MNSPLIT32 + putx_u64):
 
-- Print `%llx` di u64 ora corretto (MNSPLIT32 + `__mn_putx_u64`).
-- u64 rotate `(key << 5) | (key >> 59)` ora corretto (mnhalve unsigned in `__mn_shr_into`).
-- Subkeys keyschedule corretti (verificato `_dbg_keysched.c`).
-- F() inline in main + masks (`x &= 0xFFFFFFFF` dopo ogni op) → output matcha
-  gcc (verificato `_dbg_enc1.c` 16 rounds: L16=71deeadd R16=14969ffc).
-- Bug residuo SCOPERTO: array locale di funzione non-main passato a callee
-  NON è condiviso tra caller e callee. Es. `u32 subkeys[16]` in `encrypt()`
-  vive in cell locali `__mn_v___mn_arr_subkeys_*`; chiamata `keyschedule(key, subkeys)`
-  passa solo `__mn_mem*` (shared mem), non i cell locali. Keyschedule riempie
-  mem cells (sbagliati), encrypt legge sub locali (zero). Repro minimal:
-  `c_test/_dbg_arr3.c` (use() chiama fill() con int a[4]; a resta 0).
-- Fix richiede layout_collect: local array passato a callee deve essere
-  promosso a `__mn_mem*` (oppure copia in/out al call boundary).
-- Bug u32 modular SEPARATO: ops in F() su u32 non maschereranno a 32-bit;
-  c_lower dovrebbe tracciare tipo unsigned int e emit `& 0xFFFFFFFF` dopo
-  ogni assignment. Workaround sorgente con mask espliciti.
+- `%llx` u64 OK (MNSPLIT32 + `__mn_putx_u64`).
+- u64 rotate `(key << 5) | (key >> 59)` OK (mnhalve unsigned in `__mn_shr_into`).
+- Subkeys keyschedule OK (verificato `_dbg_keysched.c`).
+- F() inline in main + masks → output matcha gcc (verificato `_dbg_enc1.c`
+  16 rounds: L16=71deeadd R16=14969ffc, dec round-trip OK).
+- **Workaround `des_global.c`**: subkeys promosso a global `g_sub[16]` →
+  cipher e dec corretti (matcha gcc).
+- **`des.c` originale `dec != plain`**: oltre ai sub-bugs sotto, anche output
+  non riesce. Repro: `make run FILE=c_test/des.c MAIN_ARGC=0` con o senza
+  `--native-arith`.
+
+Bug aperti:
+
+1. **u32 modular semantics**: ops in F() su u32 non mascherano a 32-bit. c_lower
+   deve tracciare tipo unsigned int e emit `& 0xFFFFFFFF` dopo ogni op
+   aritmetica/shift/xor. Senza mask, valori int64 cell crescono oltre 2^32.
+   Workaround sorgente con mask espliciti già necessario in `_dbg_enc1.c`.
+   Fix: estendere `c_lower.py` per detection u32 type e inserire IAndEq
+   con maschera dopo BinaryOp/UnaryOp che producono u32.
+2. **Local array passing**: `u32 subkeys[16]` in `encrypt()` (non-main) non è
+   condiviso con callee `keyschedule`. Local cells `__mn_v___mn_arr_subkeys_*`
+   vivono in caller; callee scrive su mem cells diversi. Repro: `c_test/_dbg_arr3.c`
+   (use() chiama fill(int a[4]); a resta 0).
+   Fix: `layout_collect` deve promuovere array locali non-main passati come
+   parametro a `__mn_mem*` slot, oppure inserire copia in/out al call boundary.
+3. **`--opt-uncall-user-calls` + arith helpers → POP empty**:
+   `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
+   `[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)`.
+   Pattern shr_into (mnhalve-based) hist tracking probabile non riconosciuto
+   da opt-uncall. `c_test/loop.c --opt-uncall-user-calls` OK; sospetto
+   interazione con and_into/or_into/shr_into nested in user fn.
+   Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
+   pattern.
 
 ### `--opt-uncall-user-calls` su `c_test/des.c` → POP stack vuoto
 
@@ -43,16 +60,21 @@ Status corrente (post-fix VM int64 + mnhalve unsigned + MNSPLIT32 + putx_u64):
 mnemo: &: supportati `&x`, `&struct.campo`, `&array[idx]`
 ```
 
-Blockers:
-- `&K.procs[K.current]` — & su array di struct con idx runtime, base StructRef.
-  Mnemo c_lower attualmente supporta solo `&x`, `&struct.campo`, `&array[idx]`
-  con base c.ID — non `&base.field[idx]`.
-- `K.procs[idx].field = ...` con `idx` runtime — richiede pool dispatch su
-  array di struct (Mnemo supporta dispatch su array di scalari, non struct).
-- `process_t* p = &K.procs[idx]; p->state = X` — pointer-to-struct con
-  runtime dispatch su tutti i campi.
-- `strcpy(K.procs[i].mem, "init")` con `i` runtime su array di char dentro
-  struct.
+Subtasks ordinati (incrementali, ognuno testabile):
+
+1. **`&base.field[idx]` parser** (c_lower.py ~5481): inner.name può essere
+   `c.StructRef` (es. `K.procs`). Sintetizzare BinaryOp(`+`, K.procs, idx)
+   con base risolta a slot del primo elemento dell'array struct.
+2. **Layout struct-array**: ogni `K.procs[k]` occupa N slot consecutivi
+   (= numero campi struct). `_array_elem_local` esistente è per array di
+   scalari; serve `_struct_array_elem_field_local(base, k, field)` →
+   nome cell univoco. Aggiornare `layout_collect`.
+3. **Runtime R/W field**: `K.procs[i].field` con `i` runtime → disj_eq_chain
+   su `i ∈ [0..MAX_PROCS)`, ramo k legge/scrive cell di elemento k.
+4. **Fat pointer `process_t* p = &K.procs[i]`**: store `i` in scalar cell.
+   `p->field` → disj_eq_chain su scalar cell, per-field.
+5. **strcpy/memcpy in struct-array char field**: `strcpy(K.procs[i].mem, "init")`
+   con i runtime → dispatch dst sotto disj_eq_chain.
 
 Fix richiede estensione layout per struct-of-array runtime + multi-target
 dispatch su tutti i campi della struct element.
