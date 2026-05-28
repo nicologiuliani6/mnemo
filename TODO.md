@@ -48,8 +48,9 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 - **`char *strchr(const char *s, int c)` / `strrchr(s, c)`** — compile-time su letterale: ritorna indice/NULL.
 - **`char *strstr(const char *haystack, const char *needle)`** — compile-time su letterali. Naive search.
 - ✓ `memcmp(a, b, n)` (commit c6eedc7) — compile-time su 2 string literal.
-- **`size_t strspn` / `strcspn(s, accept)` / `char *strpbrk(s, accept)`** — char-class compile-time su letterali.
-- **`char *strdup(const char *s)`** (POSIX/C23) — alloca via ptr_pool + memcpy compile-time. Solo se src letterale.
+- ✓ `strspn/strcspn(s, accept)` (commit 7819f96) — char-class compile-time.
+- **`char *strpbrk(s, accept)`** — char-class compile-time su letterali.
+- ✓ `strdup(const char *s)` (commit bdacbf2) — AST rewrite a literal.
 
 ### stdio.h aggiuntivi
 
