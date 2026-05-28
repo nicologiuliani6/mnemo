@@ -35,6 +35,25 @@ Bug aperti:
    Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
    pattern.
 
+### `c_test/kernel.c` multithread: layout memoria troppo grande per pthread ABI
+
+Dopo fix `init_mutexes(&K.channel)` + `&K.channel` (sub-struct) + parallel2
+ABI flessibile (1 arg per worker0, 2 per worker1), Mnemo errore:
+```
+mnemo: layout memoria troppo grande per le `call` Kairos con ABI pthread:
+riduci celle / ptr pool oppure evita mnemo_pthread_* in questo file.
+```
+
+Causa: kernel.c globale `K` con `process_t procs[4]` (4×67 cells per
+campo pid/state/pc + char mem[64]) + `mps_t channel` + answer locali
+supera `KAIROS_MAX_CALL_ARGS`. Inline_user normalmente collassa, ma
+disabilitato in presenza di pthread (ABI two-region par).
+
+Fix: o ridurre dimensione mem[64] → mem[16] in kernel.c, o estendere
+`maybe_inline_user_functions` per supportare pthread (inlinare callees
+non-pthread). Strategicamente: layout banking, o split mem buffers in
+strutture esterne (`__mn_pool_*`).
+
 ### `mnemo_pthread_parallel2` su mps.h con kloop a 2 params (1° ignorato)
 
 `c_test/kernel.c` multithread:

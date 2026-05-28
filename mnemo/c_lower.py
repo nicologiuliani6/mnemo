@@ -2511,14 +2511,32 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         g0 = _func_param_slot_groups(fd0, ctx.typedef_map, pm0)
         g1 = _func_param_slot_groups(fd1, ctx.typedef_map, pm1)
         expected_len = 2 + len(g0) + len(g1)
-        if len(exprs) != expected_len:
+        actual_worker_args = len(exprs) - 2
+        # mps.h pattern: kloop a 2 param (mps_t*, int*) ma callsite passa
+        # solo 1 arg per il primo worker (mps.h `_mps_run_a` chiama
+        # `a->fn(mps)` ignorando il secondo). Auto-pad: split sui param
+        # del secondo worker e padda il primo con 0.
+        pad_n0 = 0
+        if actual_worker_args < len(g0) + len(g1):
+            missing = (len(g0) + len(g1)) - actual_worker_args
+            if missing <= len(g0) - 1 + 1 and actual_worker_args >= len(g1) + 1:
+                pad_n0 = missing
+        if len(exprs) != expected_len and pad_n0 == 0:
             raise MnemoCompileError(
                 "mnemo_pthread_parallel2: numero argomenti errato — attesi "
                 f"{expected_len} (due nomi di funzione, poi {len(g0)} per `{f0}`, "
                 f"{len(g1)} per `{f1}`), ne ho {len(exprs)}"
             )
-        raw0 = exprs[2 : 2 + len(g0)]
-        raw1 = exprs[2 + len(g0) :]
+        if pad_n0 > 0:
+            # Inserisci pad_n0 Constant(0) come ultimi arg di worker0.
+            coord0 = getattr(exprs[0], "coord", None) if exprs else None
+            pad_consts = [c.Constant("int", "0", coord0) for _ in range(pad_n0)]
+            n0_actual = len(g0) - pad_n0
+            raw0 = list(exprs[2 : 2 + n0_actual]) + pad_consts
+            raw1 = list(exprs[2 + n0_actual :])
+        else:
+            raw0 = exprs[2 : 2 + len(g0)]
+            raw1 = exprs[2 + len(g0) :]
         # Fallback sequenziale solo se questo frame è uno dei due worker E i worker
         # prendono almeno un `int` (o `int *`) come arg: altrimenti `IPar(left=f0,right=f1)`
         # partiziona `__mn_mem*` in due finestre da S celle, e ogni livello ricorsivo
@@ -5477,12 +5495,39 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                         f"&.{mangled!r}: base non è una variabile struct"
                     )
                 cell = _struct_field_local(base_log, mangled)
-                if cell not in ctx.slot_index:
+                slot_id: int | None = ctx.slot_index.get(cell)
+                if slot_id is None and ctx.mem_layout is not None:
+                    # File-scope fallback (es. `K` global struct).
+                    if ("__file__", cell) in ctx.mem_layout.slot_of:
+                        slot_id = ctx.mem_layout.slot_of[("__file__", cell)]
+                if slot_id is None:
+                    # Sub-struct flattened: cerca slot del primo sotto-campo
+                    # `<cell>__<sub>`. Es. `&K.channel` con K.channel mps_t
+                    # → `K__channel__lane`.
+                    pref = cell + "__"
+                    candidates = sorted(
+                        n for n in ctx.slot_index if n.startswith(pref)
+                    )
+                    if not candidates and ctx.mem_layout is not None:
+                        candidates = sorted(
+                            log for (fn_, log) in ctx.mem_layout.slot_of
+                            if fn_ == "__file__" and log.startswith(pref)
+                        )
+                    if candidates:
+                        cell = candidates[0]
+                        if cell in ctx.slot_index:
+                            slot_id = ctx.slot_index[cell]
+                        elif (
+                            ctx.mem_layout is not None
+                            and ("__file__", cell) in ctx.mem_layout.slot_of
+                        ):
+                            slot_id = ctx.mem_layout.slot_of[("__file__", cell)]
+                if slot_id is None:
                     raise MnemoCompileError(
                         f"&{base}.{mangled}: indirizzo slot non disponibile"
                     )
                 ctx.addr_taken_logicals.add(cell)
-                return [], Imm(ctx.slot_index[cell]), []
+                return [], Imm(slot_id), []
             if isinstance(inner, c.ArrayRef) and isinstance(inner.name, c.ID):
                 # `&a[K]` ≡ `a + K` (l-value indirizzo del K-esimo elemento).
                 synth = c.BinaryOp(op="+", left=inner.name, right=inner.subscript)
