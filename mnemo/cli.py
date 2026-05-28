@@ -237,6 +237,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="abilita KAIROS_NATIVE_ARITH=1 nella VM (mul/div/bitwise O(1) in C, uncall preservato)",
     )
+    p_r.add_argument(
+        "--vm-stats",
+        action="store_true",
+        help="dopo il dump VM stampa mean_abs e max_abs dei cell int rimasti (stats post-execution)",
+    )
     p_r.set_defaults(handler=_cmd_run)
 
     args = parser.parse_args(argv)
@@ -324,12 +329,21 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
         print(f"mnemo: scritto {written}", file=sys.stderr)
 
 
-def _stdout_without_vm_dump(stdout: str) -> str:
-    """Rimuove la sezione dump Kairos se presente (tutto da «=== VM dump ===» in poi)."""
-    head, sep, _ = stdout.partition("=== VM dump ===")
+def _stdout_without_vm_dump(stdout: str, *, keep_stats: bool = False) -> str:
+    """Rimuove la sezione dump Kairos se presente (tutto da «=== VM dump ===» in poi).
+    Se `keep_stats`, preserva il blocco «=== VM stats ===» (lo trasla in coda)."""
+    head, sep, tail = stdout.partition("=== VM dump ===")
     if not sep:
         return stdout
-    return head.rstrip() + ("\n" if head.strip() else "")
+    out = head.rstrip() + ("\n" if head.strip() else "")
+    if keep_stats:
+        stats_marker = "=== VM stats ==="
+        if stats_marker in tail:
+            stats_block = stats_marker + tail.split(stats_marker, 1)[1]
+            out = out + stats_block
+            if not stats_block.endswith("\n"):
+                out += "\n"
+    return out
 
 
 def _parse_main_exit_from_kairos_stdout(stdout: str) -> int | None:
@@ -417,6 +431,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
     run_env = os.environ.copy()
     if getattr(args, "native_arith", False):
         run_env["KAIROS_NATIVE_ARITH"] = "1"
+    if getattr(args, "vm_stats", False):
+        run_env["KAIROS_VM_STATS"] = "1"
+        # Propaga il flag al wrapper kairos (parse di sys.argv per --vm-stats).
+        cmd = list(cmd) + ["--vm-stats"]
 
     if args.verbose:
         print(f"mnemo: run {cmd!r} cwd={cwd!r}", file=sys.stderr)
@@ -443,7 +461,9 @@ def _cmd_run(args: argparse.Namespace) -> None:
     display = (
         raw_stdout
         if args.vm_dump
-        else _stdout_without_vm_dump(raw_stdout)
+        else _stdout_without_vm_dump(
+            raw_stdout, keep_stats=getattr(args, "vm_stats", False)
+        )
     )
     if display:
         sys.stdout.write(display)
