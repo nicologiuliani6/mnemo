@@ -4711,6 +4711,28 @@ def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
         if not digits:
             return 0
         return sign * int(digits)
+    if name == "memcmp":
+        if len(args) != 3:
+            return None
+        if not isinstance(args[2], c.Constant):
+            return None
+        try:
+            n = int(args[2].value, 0)
+        except (ValueError, TypeError):
+            return None
+        if n < 0:
+            return None
+        a = _string_literal_value_of(args[0], ctx)
+        b = _string_literal_value_of(args[1], ctx)
+        if a is None or b is None:
+            return None
+        ba = a.encode("utf-8")[:n].ljust(n, b"\x00")
+        bb = b.encode("utf-8")[:n].ljust(n, b"\x00")
+        if ba < bb:
+            return -1
+        if ba > bb:
+            return 1
+        return 0
     return None
 
 
@@ -6093,7 +6115,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return pre_ix + chain_va, Var(t_v), tm_ix + [t_v]
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
-        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "atoi"):
+        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "atoi", "memcmp"):
             res = _try_eval_string_builtin(expr, ctx)
             if res is not None:
                 return [], Imm(res), []
