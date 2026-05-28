@@ -4147,6 +4147,76 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     out.append(
                         IShow(_phys(ctx, _array_elem_local(arr_log, i)), True)
                     )
+            elif (
+                isinstance(ex, c.StructRef)
+                and ex.type == "."
+                and isinstance(ex.name, c.ArrayRef)
+                and isinstance(ex.field, c.ID)
+            ):
+                # `printf("%s", B.arr[i].buf)` con B struct, arr campo
+                # struct-array, buf campo char[] dentro elem_t.
+                arr_log_s, sa_meta_s = _resolve_struct_array_target(
+                    ex.name.name, ctx
+                )
+                if sa_meta_s is None:
+                    raise MnemoCompileError(
+                        f"printf %s: campo struct-array {ex.field.name!r} non risolvibile"
+                    )
+                sa_tag_s, _sa_dims_s, sa_tot_s = sa_meta_s
+                field_arr_s = ex.field.name
+                spec_s = ctx.struct_specs.get(sa_tag_s, [])
+                flat_names_s = {fn for fn, _ in spec_s}
+                buf_total = 0
+                while (field_arr_s + "__" + str(buf_total)) in flat_names_s:
+                    buf_total += 1
+                if buf_total == 0:
+                    raise MnemoCompileError(
+                        f"printf %s: campo {field_arr_s!r} non è char[] in struct-array"
+                    )
+                coord_s = getattr(ex, "coord", None)
+                def gated_show_cell(seq: list[Instr], cell_logical: str) -> None:
+                    """Emit `if cell != 0 then show cell`. Gating per gcc-equiv:
+                    char[N] con NUL embedded interrompe stampa (qui skippa byte 0)."""
+                    phys = _phys(ctx, cell_logical)
+                    seq.append(IIfKairos(
+                        phys, "!=", "0",
+                        [IShow(phys, True)],
+                        None,
+                    ))
+                if isinstance(ex.name.subscript, c.Constant):
+                    i_const_s = int(ex.name.subscript.value)
+                    if i_const_s < 0 or i_const_s >= sa_tot_s:
+                        raise MnemoCompileError(
+                            f"{arr_log_s}[{i_const_s}]: indice fuori range"
+                        )
+                    for jj in range(buf_total - 1):
+                        cell_s = f"{arr_log_s}__{i_const_s}__{field_arr_s}__{jj}"
+                        gated_show_cell(out, cell_s)
+                else:
+                    ix_pre_s, ix_op_s, ix_tm_s = _eval_expr(
+                        ex.name.subscript, ctx
+                    )
+                    out.extend(ix_pre_s)
+                    if isinstance(ix_op_s, Imm):
+                        tix_s = ctx.fresh_temp()
+                        out.append(IConst(tix_s, ix_op_s.value))
+                        ix_name_s = tix_s
+                        ix_tm_s = ix_tm_s + [tix_s]
+                    else:
+                        ix_name_s = ix_op_s.name
+                    for kk_s in range(sa_tot_s):
+                        body_show: list[Instr] = []
+                        for jj in range(buf_total - 1):
+                            cell_s = f"{arr_log_s}__{kk_s}__{field_arr_s}__{jj}"
+                            gated_show_cell(body_show, cell_s)
+                        guard_s = c.BinaryOp(
+                            "==",
+                            c.ID(ix_name_s, coord_s),
+                            c.Constant("int", str(kk_s), coord_s),
+                            coord_s,
+                        )
+                        out.extend(_lower_if_from_expr(guard_s, body_show, [], ctx))
+                    tm_acc.extend(ix_tm_s)
             else:
                 # Runtime dispatch: ex è ID non legato direttamente a stringa.
                 # Emit chain `if (ptr_cell == slot(base_k)) print bytes_k`
@@ -5286,6 +5356,65 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                     ]
                     chain = _disj_eq_chain(ix, list(range(total)), bodies)
                     return pre_l + chain, Var(t_dest), tm_l + [t_dest]
+        # `B.arr[i].buf[K]` con B globale, arr campo struct-array, buf campo
+        # array dentro elem_t, K costante. Risolve a `B__arr__I__buf__K`
+        # con dispatch su i.
+        if (
+            isinstance(nm, c.StructRef)
+            and nm.type == "."
+            and isinstance(nm.name, c.ArrayRef)
+            and isinstance(nm.field, c.ID)
+            and isinstance(expr.subscript, c.Constant)
+        ):
+            try:
+                k_const = int(expr.subscript.value)
+            except (ValueError, TypeError):
+                k_const = None
+            if k_const is not None and k_const >= 0:
+                arr_log, sa_meta = _resolve_struct_array_target(nm.name.name, ctx)
+                if sa_meta is not None:
+                    arr_id = arr_log
+                    sa_tag, sa_dims, sa_tot = sa_meta
+                    field_arr = nm.field.name
+                    spec = ctx.struct_specs.get(sa_tag, [])
+                    flat_fnames = [fn for fn, _ in spec]
+                    cell_field = field_arr + "__" + str(k_const)
+                    if cell_field in flat_fnames:
+                        if isinstance(nm.name.subscript, c.Constant):
+                            i_const = int(nm.name.subscript.value)
+                            if i_const < 0 or i_const >= sa_tot:
+                                raise MnemoCompileError(
+                                    f"{arr_id}[{i_const}]: indice fuori range (0..{sa_tot - 1})"
+                                )
+                            cell = f"{arr_log}__{i_const}__{cell_field}"
+                            if cell not in ctx.int_locals:
+                                raise MnemoCompileError(
+                                    f"campo struct array mancante: {cell!r}"
+                                )
+                            return [], Var(_phys(ctx, cell)), []
+                        pre_ix, op_ix, tm_ix = _eval_expr(nm.name.subscript, ctx)
+                        if isinstance(op_ix, Imm):
+                            tix = ctx.fresh_temp()
+                            pre_ix = pre_ix + [IConst(tix, op_ix.value)]
+                            ix_name = tix
+                            tm_ix = tm_ix + [tix]
+                        else:
+                            ix_name = op_ix.name
+                        t_dest = ctx.fresh_temp()
+                        ctx.use_hist = True
+                        bodies = []
+                        for kk in range(sa_tot):
+                            cell_kk = f"{arr_log}__{kk}__{cell_field}"
+                            if cell_kk not in ctx.int_locals:
+                                raise MnemoCompileError(
+                                    f"campo struct array mancante: {cell_kk!r}"
+                                )
+                            bodies.append([
+                                IHistPush(ctx.hist, t_dest),
+                                IAddEq(t_dest, Var(_phys(ctx, cell_kk))),
+                            ])
+                        chain = _disj_eq_chain(ix_name, list(range(sa_tot)), bodies)
+                        return pre_ix + chain, Var(t_dest), tm_ix + [t_dest]
         # `s.ptr_field[i]` o `p->ptr_field[i]`: base StructRef → `*(base + i)`.
         if isinstance(nm, c.StructRef):
             new_expr = c.UnaryOp(
@@ -8975,6 +9104,103 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         if ix_tm:
                             ctx.use_scratch = True
                         return out_assign
+            # `B.arr[i].buf[K] = X` con B struct, arr campo struct-array,
+            # buf campo array dentro elem_t, K costante. Risolve a
+            # `B__arr__I__buf__K`, dispatch su i.
+            if (
+                isinstance(lv.name, c.StructRef)
+                and lv.name.type == "."
+                and isinstance(lv.name.name, c.ArrayRef)
+                and isinstance(lv.name.field, c.ID)
+                and isinstance(lv.subscript, c.Constant)
+            ):
+                try:
+                    k_const_w = int(lv.subscript.value)
+                except (ValueError, TypeError):
+                    k_const_w = None
+                if k_const_w is not None and k_const_w >= 0:
+                    arr_log_n, sa_meta_n = _resolve_struct_array_target(
+                        lv.name.name.name, ctx
+                    )
+                    if sa_meta_n is not None:
+                        sa_tag_n, _sa_dims_n, sa_tot_n = sa_meta_n
+                        field_arr_n = lv.name.field.name
+                        spec_n = ctx.struct_specs.get(sa_tag_n, [])
+                        flat_names_n = [fn for fn, _ in spec_n]
+                        cell_field_n = field_arr_n + "__" + str(k_const_w)
+                        if cell_field_n in flat_names_n:
+                            coord_n = node.coord
+                            if isinstance(lv.name.name.subscript, c.Constant):
+                                i_const_n = int(lv.name.name.subscript.value)
+                                if i_const_n < 0 or i_const_n >= sa_tot_n:
+                                    raise MnemoCompileError(
+                                        f"{arr_log_n}[{i_const_n}]: indice fuori range"
+                                    )
+                                cell_n = f"{arr_log_n}__{i_const_n}__{cell_field_n}"
+                                target_phys_n = _phys(ctx, cell_n)
+                                if node.op == "=":
+                                    return _lower_assign(
+                                        target_phys_n, node.rvalue, ctx
+                                    )
+                                if node.op in _COMPOUND_ASSIGN_OPS:
+                                    rhs_n = c.BinaryOp(
+                                        _COMPOUND_ASSIGN_OPS[node.op],
+                                        c.ID(cell_n, coord_n),
+                                        node.rvalue,
+                                        coord_n,
+                                    )
+                                    return _lower_assign(
+                                        target_phys_n, rhs_n, ctx
+                                    )
+                                raise MnemoCompileError(
+                                    f"arr[i].f[K]: op {node.op!r} non supportato"
+                                )
+                            ix_pre_n, ix_op_n, ix_tm_n = _eval_expr(
+                                lv.name.name.subscript, ctx
+                            )
+                            if isinstance(ix_op_n, Imm):
+                                tix_n = ctx.fresh_temp()
+                                ix_pre_n = ix_pre_n + [IConst(tix_n, ix_op_n.value)]
+                                ix_name_n = tix_n
+                                ix_tm_n = ix_tm_n + [tix_n]
+                            else:
+                                ix_name_n = ix_op_n.name
+                            out_n: list[Instr] = list(ix_pre_n)
+                            for kk_n in range(sa_tot_n):
+                                cell_kk_n = f"{arr_log_n}__{kk_n}__{cell_field_n}"
+                                target_phys_kk_n = _phys(ctx, cell_kk_n)
+                                if node.op == "=":
+                                    body_n = _lower_assign(
+                                        target_phys_kk_n, node.rvalue, ctx
+                                    )
+                                elif node.op in _COMPOUND_ASSIGN_OPS:
+                                    rhs_kk_n = c.BinaryOp(
+                                        _COMPOUND_ASSIGN_OPS[node.op],
+                                        c.ID(cell_kk_n, coord_n),
+                                        node.rvalue,
+                                        coord_n,
+                                    )
+                                    body_n = _lower_assign(
+                                        target_phys_kk_n, rhs_kk_n, ctx
+                                    )
+                                else:
+                                    raise MnemoCompileError(
+                                        f"arr[i].f[K]: op {node.op!r} non supportato"
+                                    )
+                                guard_n = c.BinaryOp(
+                                    "==",
+                                    c.ID(ix_name_n, coord_n),
+                                    c.Constant("int", str(kk_n), coord_n),
+                                    coord_n,
+                                )
+                                out_n.extend(
+                                    _lower_if_from_expr(guard_n, body_n, [], ctx)
+                                )
+                            for t_n in ix_tm_n:
+                                out_n.append(IHistPush(ctx.scratch, t_n))
+                            if ix_tm_n:
+                                ctx.use_scratch = True
+                            return out_n
             # `s.ptr_field[i] = X` o `p->ptr_field[i] = X` → `*(s.ptr_field + i) = X`.
             if isinstance(lv.name, c.StructRef):
                 new_lv = c.UnaryOp(
