@@ -8,11 +8,12 @@ soglia serve «banking» (procedure per slice) o inlining.
 
 from __future__ import annotations
 
-# Chiamata `call p(a0,...,ak)` stabile fino a ~65 argomenti nel tester locale.
-KAIROS_MAX_CALL_ARGS = 64
+# VM Kairos: `Frame.param_indices[MAX_PROC_PARAMS]` + `CallRecord.saved_params[MAX_PROC_PARAMS]`
+# definito in src/vm/vm_types.h come 1024. Mnemo usa una soglia leggermente inferiore.
+KAIROS_MAX_CALL_ARGS = 1000
 
-# Procedure `procedure p(...)` stabili fino a 100 parametri int.
-KAIROS_MAX_PROC_PARAMS = 100
+# Procedure `procedure p(...)`: stessa frontiera del CALL.
+KAIROS_MAX_PROC_PARAMS = 1000
 
 # `__mn_pool_store(slot, val, __mn_mem0..)` ha 2+N argomenti nella call IR.
 MONOLITHIC_POOL_MEM_MAX = KAIROS_MAX_CALL_ARGS - 2
