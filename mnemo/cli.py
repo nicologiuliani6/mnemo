@@ -331,11 +331,16 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
 
 def _stdout_without_vm_dump(stdout: str, *, keep_stats: bool = False) -> str:
     """Rimuove la sezione dump Kairos se presente (tutto da «=== VM dump ===» in poi).
+    Rimuove anche `__mn_exit: N` (Kairos VM show output, gcc-equiv = exit propagato
+    come codice di uscita del processo).
     Se `keep_stats`, preserva il blocco «=== VM stats ===» (lo trasla in coda)."""
     head, sep, tail = stdout.partition("=== VM dump ===")
+    head_filtered = re.sub(
+        r"^__mn_exit:\s*-?\d+\s*\n?", "", head, flags=re.MULTILINE
+    )
     if not sep:
-        return stdout
-    out = head.rstrip() + ("\n" if head.strip() else "")
+        return head_filtered
+    out = head_filtered.rstrip() + ("\n" if head_filtered.strip() else "")
     if keep_stats:
         stats_marker = "=== VM stats ==="
         if stats_marker in tail:
