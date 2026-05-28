@@ -40,58 +40,26 @@ Bug aperti:
    Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
    pattern.
 
-### `--opt-uncall-user-calls` su void function con printf → VM SEGFAULT
-
-Pre-existing bug (non causato da work kernel.c). Repro minimal:
-```c
-void use(int x) { printf("x=%d\n", x); }
-int main(void) { use(42); return 0; }
-```
-`mnemo run … --opt-uncall-user-calls` → exit 245 (= 256 - SIGSEGV 11).
-VM diretto: `Segmentation fault (core dumped)`.
-
-Stesso bug colpisce `c_test/kernel.c --opt-uncall-user-calls` → output vuoto
-(invece di 2 righe come gcc/no-opt). Anche `_dbg_crossfn_ptr.c`, `_dbg_opt_void2.c`.
-
-Fix probabile: VM `op_uncall` su procedura void con `show` (printf) +
-`call __mn_putd` non gestisce correttamente lo stack inverse. Indagare
-`vm_invert.h` per uncall di void proc con show ops.
-
-### `--opt-uncall-user-calls` su `c_test/des.c` → POP stack vuoto
-
-`mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
-```
-[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)
-```
-
-- Triggered durante inverse a profondità 4 (opt-uncall stratifica).
-- `__mn_shr_into` ora usa mnhalve-based push pattern; opt-uncall hist tracking
-  potrebbe non riconoscere il nuovo pattern correttamente.
-- `c_test/loop.c --opt-uncall-user-calls` funziona — sospetto pattern shift
-  o interazione con altri helper (and_into, or_into, etc.).
-
-### ~~`c_test/kernel.c` — struct array runtime indexing~~ ✅ RISOLTO
-
-`mnemo run c_test/kernel.c` matcha output gcc. Subtask completati:
-
-1. ✅ `&base.field[const]` parser (c_lower.py): supporta `&K.procs[const]`.
-2. ✅ Runtime R/W `K.procs[i].field` con i runtime: già supportato via
-   `_disj_eq_chain` in c_lower (read line 5057, write line 8505).
-3. ✅ Fat pointer `process_t* p = &K.procs[i]`: AST rewrite
-   `_transform_struct_array_pointer_alias` in compile.py — `p` diventa
-   int holding idx, `p->f` riscritto a `K.procs[p].f`. Cross-fn:
-   parametri `T*` di funzioni con T = struct-tag file-scope-unico
-   promossi ad alias.
-4. ✅ `strcpy(K.procs[i].mem, "init")` con i runtime: già funzionante.
-5. ✅ Bonus: `_transform_return_in_loop` esteso a void function con
-   bare `return;` (richiesto da `void schedule()`).
-
-Bug residui osservati:
+### Nested array dentro struct-array element con idx runtime
 
 - Read `B.arr[i].buf[0]` (campo nested array dentro struct-array elem con i
-  runtime) → `campo 'buf' assente`. Non blocca kernel.c (non usa pattern).
+  runtime) → `campo 'buf' assente`.
 - `printf("%s", B.arr[i].buf)` con i runtime → "letterale … o char*".
   Stesso scope — nested char[] field read tramite dispatch non implementato.
+
+Fix: estendere `_disj_eq_chain` su struct-array per dispatch su campi
+nested array; e printf %s dispatch su char[] tramite struct-array.
+
+### VM `op_uncall` su void proc con `show` → SIGSEGV (workaroundato Mnemo)
+
+Bug VM sotto la superficie. Workaround corrente in Mnemo:
+`show_using_targets` transitive closure esclude user fn con printf
+da single-call opt-uncall.
+
+Fix VM corretto: `vm_invert.h` / `op_uncall` deve gestire void proc con
+`show` ops senza crashare. Permette di ri-abilitare opt-uncall per fn
+con printf (perf gain). Indagare inverse di INVOP_SHOW + interaction
+con `call __mn_putd`.
 
 ## Librerie standard C implementabili in Mnemo
 
