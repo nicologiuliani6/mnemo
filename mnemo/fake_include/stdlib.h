@@ -13,4 +13,7 @@ int             abs(int x);
 long            labs(long x);
 long long       llabs(long long x);
 
+/* atoi: Mnemo compile-time su string literal. */
+int             atoi(const char *s);
+
 #endif
