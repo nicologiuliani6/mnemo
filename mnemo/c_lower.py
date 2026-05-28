@@ -5482,8 +5482,48 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 # `&a[K]` ≡ `a + K` (l-value indirizzo del K-esimo elemento).
                 synth = c.BinaryOp(op="+", left=inner.name, right=inner.subscript)
                 return _eval_expr(synth, ctx)
+            if isinstance(inner, c.ArrayRef) and isinstance(inner.name, c.StructRef):
+                # `&BASE.arr[K]`: array di struct dentro struct (es. `&K.procs[i]`).
+                arr_log, sa_meta = _resolve_struct_array_target(inner.name, ctx)
+                if sa_meta is not None:
+                    sa_tag, sa_dims, sa_tot = sa_meta
+                    spec = ctx.struct_specs.get(sa_tag, [])
+                    if not spec:
+                        raise MnemoCompileError(
+                            f"&{arr_log}[..]: metadati struct {sa_tag!r} mancanti"
+                        )
+                    first_field = spec[0][0]
+                    if isinstance(inner.subscript, c.Constant):
+                        i_const = int(inner.subscript.value)
+                        if i_const < 0 or i_const >= sa_tot:
+                            raise MnemoCompileError(
+                                f"&{arr_log}[{i_const}]: indice fuori range "
+                                f"(0..{sa_tot - 1})"
+                            )
+                        cell = f"{arr_log}__{i_const}__{first_field}"
+                        slot_id: int | None = ctx.slot_index.get(cell)
+                        if (
+                            slot_id is None
+                            and ctx.mem_layout is not None
+                            and ("__file__", cell) in ctx.mem_layout.slot_of
+                        ):
+                            slot_id = ctx.mem_layout.slot_of[("__file__", cell)]
+                        if slot_id is None:
+                            raise MnemoCompileError(
+                                f"&{arr_log}[{i_const}]: slot mancante per "
+                                f"{cell!r}"
+                            )
+                        ctx.addr_taken_logicals.add(cell)
+                        return [], Imm(slot_id), []
+                    raise MnemoCompileError(
+                        f"&{arr_log}[<runtime>]: indirizzo di elemento "
+                        f"struct-array con indice runtime non ancora "
+                        f"supportato (fat-pointer pendente — vedi TODO.md "
+                        f"`kernel.c` subtask 3)"
+                    )
             raise MnemoCompileError(
-                "&: supportati `&x`, `&struct.campo`, `&array[idx]`"
+                "&: supportati `&x`, `&struct.campo`, `&array[idx]`, "
+                "`&BASE.arr[const]` (struct-array)"
             )
         if expr.op == "*":
             inner = expr.expr
