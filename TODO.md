@@ -18,14 +18,17 @@ Status (post-fix u32 mask `__mn_mask_u32` lib helper):
 
 Bug aperti:
 
-1. **Local array passing**: `u32 subkeys[16]` in `encrypt()` (non-main) non è
-   condiviso con callee `keyschedule`. Local cells `__mn_v___mn_arr_subkeys_*`
-   vivono in caller; callee scrive su mem cells diversi. Repro: `c_test/_dbg_arr3.c`
-   (use() chiama fill(int a[4]); a resta 0).
-   Fix: `layout_collect` deve promuovere array locali non-main passati come
-   parametro a `__mn_mem*` slot, oppure inserire copia in/out al call boundary.
-   Effetto: cipher Mnemo differisce da gcc (round-trip dec=plain però OK
-   perché bug simmetrico per encrypt e decrypt).
+1. **Local array passing con param scalar non-const**: `fill(scalar_var, array)`
+   call → array non condiviso caller↔callee se scalar arg è variabile (param o
+   local). Funziona se scalar è costante.
+   Repro: `c_test/_dbg_arr_v3.c` vs `_dbg_arr_v5.c`:
+   - v3: `void use(int key) { ... fill(key, a); ... }` → a resta 0.
+   - v5: `void use(void) { ... fill(0, a); ... }` → a popolato OK.
+   - `_dbg_arr3.c` (int+int array, no scalar param) → OK.
+   Affligge `des.c` keyschedule (passa `u64 key` + `u32 subkeys[16]`).
+   Effetto: cipher Mnemo differisce da gcc (round-trip dec=plain però OK).
+   Sospetto: arg evaluation order in `_prepare_call_arg` allocates temp che
+   collide con cells dell'array.
 2. **`--opt-uncall-user-calls` + arith helpers → POP empty**:
    `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
    `[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)`.

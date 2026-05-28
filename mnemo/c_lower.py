@@ -1175,6 +1175,14 @@ def _phys(ctx: _Ctx, logical: str) -> str:
                 and suf.isdigit()
                 and int(suf) < ctx.total_mem_cells
             ):
+                # Skip rename per element-of-array passato a callee:
+                # quando un array locale `int a[N]` viene passato come
+                # arg, il pool dispatch nel callee accede via `__mn_memN+i`.
+                # Se rinominiamo a `__mn_v_a__i`, caller scrive su nome
+                # diverso da quello che il callee modifica via pool → array
+                # non sincronizzato. Manteniamo __mn_memN per array-elem.
+                if logical.startswith("__mn_arr_"):
+                    return hit
                 alt = f"__mn_v_{logical}"
                 ctx.int_locals.add(alt)
                 if alt not in ctx.decl_order:
