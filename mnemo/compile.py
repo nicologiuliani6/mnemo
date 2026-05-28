@@ -1217,10 +1217,18 @@ def _transform_u32_modular_masks(ast: c.FileAST) -> None:
 
     def _trailing_masks(s: c.Node, u32_vars: set[str]) -> list[c.Node]:
         if isinstance(s, c.Assignment) and isinstance(s.lvalue, c.ID):
-            if s.lvalue.name in u32_vars and _needs_mask(s.rvalue):
-                # Mask con literal 0xFFFFFFFF: il `&=` non sarebbe applicato
-                # ricorsivamente perché rvalue è costante fits.
-                return [_mask_stmt(s.lvalue.name, s.coord)]
+            if s.lvalue.name in u32_vars:
+                op = s.op
+                # Compound op (`+=`, `*=`, `<<=`, `-=`) può eccedere 32 bit
+                # anche se rvalue fits → maschera sempre. Solo `=` puro con
+                # rvalue costante fits-u32 può saltare il mask.
+                # `^=`, `&=`, `|=`, `>>=` non crescono ma maskiamo comunque
+                # per coerenza/idempotenza.
+                if op == "=":
+                    if _needs_mask(s.rvalue):
+                        return [_mask_stmt(s.lvalue.name, s.coord)]
+                else:
+                    return [_mask_stmt(s.lvalue.name, s.coord)]
         if isinstance(s, c.UnaryOp) and s.op in ("p++", "p--", "++", "--"):
             if isinstance(s.expr, c.ID) and s.expr.name in u32_vars:
                 return [_mask_stmt(s.expr.name, s.coord)]
