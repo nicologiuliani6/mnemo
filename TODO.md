@@ -53,31 +53,28 @@ Bug aperti:
 - `c_test/loop.c --opt-uncall-user-calls` funziona — sospetto pattern shift
   o interazione con altri helper (and_into, or_into, etc.).
 
-### `c_test/kernel.c` — struct array runtime indexing
+### ~~`c_test/kernel.c` — struct array runtime indexing~~ ✅ RISOLTO
 
-`mnemo run c_test/kernel.c`:
-```
-mnemo: &: supportati `&x`, `&struct.campo`, `&array[idx]`
-```
+`mnemo run c_test/kernel.c` matcha output gcc. Subtask completati:
 
-Subtasks ordinati (incrementali, ognuno testabile):
+1. ✅ `&base.field[const]` parser (c_lower.py): supporta `&K.procs[const]`.
+2. ✅ Runtime R/W `K.procs[i].field` con i runtime: già supportato via
+   `_disj_eq_chain` in c_lower (read line 5057, write line 8505).
+3. ✅ Fat pointer `process_t* p = &K.procs[i]`: AST rewrite
+   `_transform_struct_array_pointer_alias` in compile.py — `p` diventa
+   int holding idx, `p->f` riscritto a `K.procs[p].f`. Cross-fn:
+   parametri `T*` di funzioni con T = struct-tag file-scope-unico
+   promossi ad alias.
+4. ✅ `strcpy(K.procs[i].mem, "init")` con i runtime: già funzionante.
+5. ✅ Bonus: `_transform_return_in_loop` esteso a void function con
+   bare `return;` (richiesto da `void schedule()`).
 
-1. **`&base.field[idx]` parser** (c_lower.py ~5481): inner.name può essere
-   `c.StructRef` (es. `K.procs`). Sintetizzare BinaryOp(`+`, K.procs, idx)
-   con base risolta a slot del primo elemento dell'array struct.
-2. **Layout struct-array**: ogni `K.procs[k]` occupa N slot consecutivi
-   (= numero campi struct). `_array_elem_local` esistente è per array di
-   scalari; serve `_struct_array_elem_field_local(base, k, field)` →
-   nome cell univoco. Aggiornare `layout_collect`.
-3. **Runtime R/W field**: `K.procs[i].field` con `i` runtime → disj_eq_chain
-   su `i ∈ [0..MAX_PROCS)`, ramo k legge/scrive cell di elemento k.
-4. **Fat pointer `process_t* p = &K.procs[i]`**: store `i` in scalar cell.
-   `p->field` → disj_eq_chain su scalar cell, per-field.
-5. **strcpy/memcpy in struct-array char field**: `strcpy(K.procs[i].mem, "init")`
-   con i runtime → dispatch dst sotto disj_eq_chain.
+Bug residui osservati:
 
-Fix richiede estensione layout per struct-of-array runtime + multi-target
-dispatch su tutti i campi della struct element.
+- Read `B.arr[i].buf[0]` (campo nested array dentro struct-array elem con i
+  runtime) → `campo 'buf' assente`. Non blocca kernel.c (non usa pattern).
+- `printf("%s", B.arr[i].buf)` con i runtime → "letterale … o char*".
+  Stesso scope — nested char[] field read tramite dispatch non implementato.
 
 ## Librerie standard C implementabili in Mnemo
 
