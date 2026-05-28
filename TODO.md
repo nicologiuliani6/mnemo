@@ -40,6 +40,23 @@ Bug aperti:
    Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
    pattern.
 
+### `init_mutexes(&struct.field)` non supportato
+
+`c_test/kernel.c` (versione multithread con `mps_t channel` come campo di
+`kernel_t K`):
+```c
+init_mutexes(&K.channel);
+```
+→ `mnemo: init_mutexes: atteso &id`.
+
+`_lower_mps_init_destroy_inline` (c_lower.py ~6080) accetta solo `&id` (c.ID),
+non `&struct.field` (c.StructRef). Stesso vincolo si applica a `destroy_mutexes`.
+
+Fix: estendere il parser dell'argomento a `init_mutexes`/`destroy_mutexes`
+per accettare anche `&base.field` con base = c.ID di struct, risolvere il
+canale come fa già `_mps_channel_ptr_id` su `&p->lane` (caso pointer).
+Pattern simile a quello di `&BASE.arr[const]` aggiunto per kernel.c v1.
+
 ### Nested array dentro struct-array element con idx runtime
 
 - Read `B.arr[i].buf[0]` (campo nested array dentro struct-array elem con i
