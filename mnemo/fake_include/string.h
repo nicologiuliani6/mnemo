@@ -12,6 +12,7 @@ int strcmp(const char *a, const char *b);
 int memcmp(const void *a, const void *b, size_t n);
 size_t strspn(const char *s, const char *accept);
 size_t strcspn(const char *s, const char *reject);
+char *strdup(const char *s);
 void *memcpy(void *dst, const void *src, size_t n);
 void *memset(void *dst, int v, size_t n);
 

@@ -1235,6 +1235,7 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
 
 def _transform_stdlib_abs(ast: c.FileAST) -> None:
     """`abs(x)`/`labs(x)`/`llabs(x)` → `(x < 0 ? -x : x)`.
+    `strdup("...")` → `"..."` (Mnemo char* da literal già malloc-like).
 
     Inlined ternario, reversibile, no lib call. Param può essere espressione
     arbitraria; per side-effect safety si valuta x una sola volta? — no,
@@ -1254,6 +1255,12 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                     cond = c.BinaryOp("<", x, zero, coord)
                     neg_x = c.UnaryOp("-", x, coord)
                     return c.TernaryOp(cond, neg_x, x, coord)
+            if node.name.name == "strdup" and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 1 and isinstance(exprs[0], c.Constant) and exprs[0].type == "string":
+                    # `strdup("lit")` → `"lit"` (Mnemo char* literal materializzato come
+                    # array in __mn_ros_*; semantica free() resta no-op via ptr_pool).
+                    return exprs[0]
         return node
 
     def rewrite_expr(n: c.Node) -> c.Node:
@@ -1581,6 +1588,9 @@ def compile_c_to_kairos(
     _hoist_compound_literals_in_ast(ast)
     # `static int n = …;` → file-scope Decl rinominato. Persiste tra chiamate.
     _hoist_static_locals(ast)
+    # stdlib abs/labs/llabs/strdup AST rewrite. Prima di hoist_string_literal:
+    # strdup("lit") → "lit" così init `char *p = "lit"` resta semplice.
+    _transform_stdlib_abs(ast)
     # `f("lit")` → `char *__mn_anon_str_k = "lit"; f(__mn_anon_str_k)` (skip
     # printf-family). Materializza in pool prima del layout per allocare celle.
     _hoist_string_literal_call_args_in_ast(ast)
@@ -1603,8 +1613,6 @@ def compile_c_to_kairos(
     # u32 vars: inserisce `__mn_mask_u32(&x)` dopo ogni assignment per emulare
     # semantica modular C. Helper lib basato su mnsplit32 (O(1) VM op).
     _transform_u32_modular_masks(ast)
-    # stdlib.h: abs/labs/llabs → ternario `(x < 0 ? -x : x)`.
-    _transform_stdlib_abs(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
