@@ -2,54 +2,6 @@
 
 ## Bug aperti
 
-### `c_test/kernel.c` multithread: layout memoria troppo grande per pthread ABI
-
-Dopo fix `init_mutexes(&K.channel)` + `&K.channel` (sub-struct) + parallel2
-ABI flessibile (1 arg per worker0, 2 per worker1), Mnemo errore:
-```
-mnemo: layout memoria troppo grande per le `call` Kairos con ABI pthread:
-riduci celle / ptr pool oppure evita mnemo_pthread_* in questo file.
-```
-
-**Diagnosi profonda (post-investigazione)**:
-
-1. `layout.total_cells = 370` per kernel.c (con `mem[64]`). MAX
-   monolithic = 62. Anche stripping `mem[]` field → 105 (sotto pthread,
-   ancora oltre 62).
-2. Skip della guardia `ast_uses_mnemo_pthread → raise` espone la causa
-   reale: `kernel_recv` emette `call kernel_recv(...)` con **375
-   argomenti `__mn_mem*`**. Causa: `callee_mem_touches` chiusura
-   transitiva include TUTTI i banchi del pool perché `printf("%d",
-   *answer)` lower a `__mn_putd` + pool dispatch banked → assume tutti i
-   cell args toccati (callee non-user = lib/builtin).
-3. Procedure `proc0..proc3 / sys_write` invece emettono ~66-69 args
-   (solo cells effettivamente lette+scritte), quindi NON sono il
-   blocker reale. Il blocker è `kernel_recv` con printf che attraversa
-   il pool banked completo.
-4. `_parallel_branch_mem_actuals` shared-file slots: K globale →
-   tutti i cells condivisi tra brace par; right-branch ottiene
-   base+i solo per cells non-shared → riduzione minima.
-
-**Fix strutturali (in ordine di complessità)**:
-
-a. **Sorgente**: ridurre `process_t.mem[64]` → `mem[8]` E ridurre
-   layout fattori altrove. Non sufficiente da solo (105>62 anche con
-   mem[2]).
-b. **Inline non-pthread callees in pthread workers**: estendere
-   `maybe_inline_user_functions` per espandere `proc0..proc3`,
-   `sys_write` dentro `kloop`. NON aiuta su `kernel_recv` (touches
-   guidati da printf+banking).
-c. **Touch-set raffinato per lib**: rivedere
-   `_compute_callee_mem_touches` su lib callees (es. `__mn_putd`,
-   `__mn_pool_*_b*`): non assumere tutti gli args toccati, ma fare
-   analisi della singola lib (solo cell-arg effettivamente pop/push
-   dalla procedure body in `lib/*.kairos`).
-d. **Worker-side pool dispatch**: i workers prendono solo handle al
-   pool (qualche cell) + dispatch interno simile a non-pthread main.
-   Richiede ABI redesign dei worker pthread.
-
-**Lavoro non triviale; documentato per ripresa futura.**
-
 ### VM `op_uncall` su void proc con `show` → SIGSEGV (workaroundato Mnemo)
 
 Bug VM sotto la superficie. Workaround corrente in Mnemo:
