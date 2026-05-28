@@ -156,21 +156,37 @@ def _transform_return_in_loop(ast: c.FileAST) -> None:
             )
         return node
 
+    def _is_void_func(fd: c.FuncDef) -> bool:
+        fdt = fd.decl.type
+        if not isinstance(fdt, c.FuncDecl):
+            return False
+        rt = fdt.type
+        if isinstance(rt, c.TypeDecl) and isinstance(rt.type, c.IdentifierType):
+            return rt.type.names == ["void"]
+        return False
+
     for ext in ast.ext or []:
         if not isinstance(ext, c.FuncDef):
             continue
         if ext.body is None or not isinstance(ext.body, c.Compound):
             continue
         items = list(ext.body.block_items or [])
-        if len(items) < 2:
+        if not items:
             continue
         last = items[-1]
-        if not (isinstance(last, c.Return) and last.expr is not None):
+        is_void = _is_void_func(ext)
+        has_trailing_return = isinstance(last, c.Return) and last.expr is not None
+        if not has_trailing_return and not is_void:
             continue
+        if len(items) < 2 and not is_void:
+            continue
+        # Per void senza trailing return: trattiamo come se trailing return None.
+        last_is_loop_only = is_void and not has_trailing_return
+        scan_items = items[:-1] if has_trailing_return else items
         # Verifica che ci sia ALMENO un loop con return e che NON ci siano
         # return fuori da loop fra gli stmts.
         loops_with_return: list[int] = []
-        for k, s in enumerate(items[:-1]):
+        for k, s in enumerate(scan_items):
             if isinstance(s, (c.For, c.While, c.DoWhile)):
                 if _has_return(s.stmt):
                     loops_with_return.append(k)
@@ -202,7 +218,7 @@ def _transform_return_in_loop(ast: c.FileAST) -> None:
             bitsize=None,
         )
         new_items: list[c.Node] = [rv_decl, rf_decl]
-        for k, s in enumerate(items[:-1]):
+        for k, s in enumerate(scan_items):
             if k in loops_with_return:
                 inner = _replace_returns_with_flag(s.stmt, rv_name, rf_name)
                 guard = c.UnaryOp(op="!", expr=c.ID(name=rf_name))
@@ -238,16 +254,17 @@ def _transform_return_in_loop(ast: c.FileAST) -> None:
                 new_items.append(new_loop)
             else:
                 new_items.append(s)
-        late_assign = c.Assignment(
-            op="=", lvalue=c.ID(name=rv_name), rvalue=last.expr,
-        )
-        late_guard = c.If(
-            cond=c.UnaryOp(op="!", expr=c.ID(name=rf_name)),
-            iftrue=c.Compound(block_items=[late_assign]),
-            iffalse=None,
-        )
-        new_items.append(late_guard)
-        new_items.append(c.Return(expr=c.ID(name=rv_name)))
+        if has_trailing_return:
+            late_assign = c.Assignment(
+                op="=", lvalue=c.ID(name=rv_name), rvalue=last.expr,
+            )
+            late_guard = c.If(
+                cond=c.UnaryOp(op="!", expr=c.ID(name=rf_name)),
+                iftrue=c.Compound(block_items=[late_assign]),
+                iffalse=None,
+            )
+            new_items.append(late_guard)
+            new_items.append(c.Return(expr=c.ID(name=rv_name)))
         ext.body.block_items = new_items
 
 
@@ -786,59 +803,253 @@ def _iter_c_nodes(node: c.Node | None) -> list[c.Node]:
     return out
 
 
+def _ptr_to_struct_tag(ptr_decl: c.PtrDecl) -> str | None:
+    """Estrae il tag struct da `PtrDecl(TypeDecl(IdentifierType([tag])))`.
+
+    Restituisce None se non è un puntatore a typedef/struct semplice.
+    """
+    inner = ptr_decl.type
+    if not isinstance(inner, c.TypeDecl):
+        return None
+    t = inner.type
+    if isinstance(t, c.Struct) and t.name:
+        return t.name
+    if isinstance(t, c.IdentifierType) and len(t.names) == 1:
+        return t.names[0]
+    return None
+
+
+def _collect_file_scope_struct_arrays(
+    ast: c.FileAST,
+) -> dict[str, c.StructRef | c.ID]:
+    """Mappa struct_tag → AST node che identifica l'array di struct file-scope.
+
+    Pattern supportati:
+    - `T arr[N];` (top-level array of struct/typedef) → node = c.ID(arr).
+    - `BoxT B; B contiene `T arr[N]` campo → node = c.StructRef(B.arr).
+
+    Solo una entry per tag (ambiguità: prima trovata vince — gli usi
+    devono essere a singola istanza).
+    """
+    # Tag → struct-definition (decls) map (typedef + file-scope struct decls).
+    tag_struct: dict[str, c.Struct] = {}
+    for ext in ast.ext or []:
+        # File-scope hoisted struct decl: `c.Decl(name=None, type=Struct(name=tag, decls=...))`.
+        if isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct) and ext.type.decls:
+            if ext.type.name:
+                tag_struct[ext.type.name] = ext.type
+        if isinstance(ext, c.Typedef) and isinstance(ext.type, c.TypeDecl):
+            inner = ext.type.type
+            if isinstance(inner, c.Struct) and inner.name:
+                if inner.decls:
+                    tag_struct[inner.name] = inner
+                    tag_struct[ext.name] = inner
+                elif inner.name in tag_struct:
+                    # Riferimento a tag-only: typedef → struct file-scope già hoistata.
+                    tag_struct[ext.name] = tag_struct[inner.name]
+            elif isinstance(inner, c.IdentifierType) and len(inner.names) == 1:
+                # `typedef U V;` — risolveremo lazy.
+                pass
+
+    # Seconda passata: typedef→typedef alias (chain) — risolvi typedef A che
+    # punta a typedef B (entrambi su struct).
+    for ext in ast.ext or []:
+        if isinstance(ext, c.Typedef) and isinstance(ext.type, c.TypeDecl):
+            inner = ext.type.type
+            if (
+                isinstance(inner, c.Struct) and inner.name
+                and inner.name in tag_struct
+                and ext.name not in tag_struct
+            ):
+                tag_struct[ext.name] = tag_struct[inner.name]
+
+    def _resolve_struct(node: c.Node) -> c.Struct | None:
+        if isinstance(node, c.Struct) and node.decls:
+            return node
+        if isinstance(node, c.Struct) and node.name in tag_struct:
+            return tag_struct[node.name]
+        if isinstance(node, c.IdentifierType) and len(node.names) == 1:
+            return tag_struct.get(node.names[0])
+        return None
+
+    def _array_of_struct_tag(at: c.ArrayDecl) -> str | None:
+        elem = at.type
+        while isinstance(elem, c.ArrayDecl):
+            elem = elem.type
+        if isinstance(elem, c.TypeDecl):
+            t = elem.type
+            if isinstance(t, c.IdentifierType) and len(t.names) == 1:
+                return t.names[-1]
+            if isinstance(t, c.Struct) and t.name:
+                return t.name
+        return None
+
+    out: dict[str, c.StructRef | c.ID] = {}
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.Decl) or not ext.name:
+            continue
+        # Variabile globale di tipo struct → cerca campi array-of-struct.
+        if isinstance(ext.type, c.TypeDecl):
+            s = _resolve_struct(ext.type.type)
+            if s is not None and s.decls:
+                for fd in s.decls:
+                    if not isinstance(fd, c.Decl) or not fd.name:
+                        continue
+                    if isinstance(fd.type, c.ArrayDecl):
+                        tag = _array_of_struct_tag(fd.type)
+                        if tag and tag not in out:
+                            out[tag] = c.StructRef(
+                                name=c.ID(name=ext.name),
+                                type=".",
+                                field=c.ID(name=str(fd.name)),
+                            )
+        # Array of struct top-level: `T arr[N];`.
+        if isinstance(ext.type, c.ArrayDecl):
+            tag = _array_of_struct_tag(ext.type)
+            if tag and tag not in out:
+                out[tag] = c.ID(name=ext.name)
+    return out
+
+
 def _transform_struct_array_pointer_alias(ast: c.FileAST) -> None:
     """Riscrittura AST: `T* p = &BASE.arr[idx]` con `BASE.arr` array di struct
     → trattare `p` come int holding idx; sostituire `p->f` con `BASE.arr[p].f`.
 
+    Cross-fn: se `void f(T* p)` ha `T` con file-scope struct-array unico
+    `BASE.arr` di tipo `T`, `p` è promosso ad alias di `BASE.arr` nel body
+    della funzione. Caller può passare un alias come argomento.
+
     Limiti correnti:
-    - `p` non può essere passato a funzioni (cross-fn fat-ptr non implementato).
-    - Alias valido fino a fine funzione (nessun reset).
+    - File scope: deve esistere una sola struct-array per ciascun tag T usato
+      come `T*` parametro (altrimenti ambiguo).
+    - Alias non resettato fino a fine funzione (nessun reset interno).
     - Solo accessi `p->f` (no `*p`, no `p[k]`).
     """
+    file_arrays = _collect_file_scope_struct_arrays(ast)
+    # Per-funzione alias: {fn_name: {var_name: arr_ref}}.
+    fn_aliases: dict[str, dict[str, c.Node]] = {}
+    # Per-funzione: nome param → True se è un alias struct-array (per validazione).
+    fn_param_aliases: dict[str, set[str]] = {}
+
+    # Pass 1: scan params + local Decls in ogni funzione.
     for ext in ast.ext or []:
         if not isinstance(ext, c.FuncDef):
             continue
-        body = ext.body
-        if body is None:
-            continue
-        # Pass 1: scan Decl nodes for fat-ptr pattern.
+        fname = ext.decl.name
         aliases: dict[str, c.Node] = {}
-        for n in _iter_c_nodes(body):
-            if not isinstance(n, c.Decl) or not n.name:
-                continue
-            if not isinstance(n.type, c.PtrDecl):
-                continue
-            init = n.init
-            if not isinstance(init, c.UnaryOp) or init.op != "&":
-                continue
-            inner = init.expr
-            if not isinstance(inner, c.ArrayRef):
-                continue
-            if not isinstance(inner.name, c.StructRef):
-                continue
-            aliases[str(n.name)] = inner.name
+        param_aliases: set[str] = set()
+        # Param scan: `T* p` con T tag in file_arrays.
+        fdtype = ext.decl.type
+        if isinstance(fdtype, c.FuncDecl) and fdtype.args is not None:
+            for prm in fdtype.args.params or []:
+                if not isinstance(prm, c.Decl) or not prm.name:
+                    continue
+                if isinstance(prm.type, c.PtrDecl):
+                    tag = _ptr_to_struct_tag(prm.type)
+                    if tag and tag in file_arrays:
+                        aliases[str(prm.name)] = file_arrays[tag]
+                        param_aliases.add(str(prm.name))
+        # Body scan: `T* p = &BASE.arr[idx];` con T = struct tag conosciuto.
+        if ext.body is not None:
+            for n in _iter_c_nodes(ext.body):
+                if not isinstance(n, c.Decl) or not n.name:
+                    continue
+                if not isinstance(n.type, c.PtrDecl):
+                    continue
+                # Type filter: solo `struct_tag*` su tag con struct-array file-scope.
+                ptag = _ptr_to_struct_tag(n.type)
+                if ptag is None or ptag not in file_arrays:
+                    continue
+                init = n.init
+                if not isinstance(init, c.UnaryOp) or init.op != "&":
+                    continue
+                inner = init.expr
+                if not isinstance(inner, c.ArrayRef):
+                    continue
+                if not isinstance(inner.name, (c.StructRef, c.ID)):
+                    continue
+                aliases[str(n.name)] = inner.name
+        fn_aliases[fname] = aliases
+        fn_param_aliases[fname] = param_aliases
+
+    # Pass 2: validate FuncCall args — se arg è alias, callee param matching
+    # deve anch'esso essere alias.
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        fname = ext.decl.name
+        aliases = fn_aliases.get(fname, {})
+        if not aliases or ext.body is None:
+            continue
+        for n in _iter_c_nodes(ext.body):
+            if isinstance(n, c.FuncCall) and n.args is not None:
+                callee_name = getattr(n.name, "name", None)
+                callee_aliases = fn_param_aliases.get(callee_name, set())
+                # Recupera param names del callee (ordinati).
+                callee_def = None
+                for e2 in ast.ext or []:
+                    if isinstance(e2, c.FuncDef) and e2.decl.name == callee_name:
+                        callee_def = e2
+                        break
+                callee_param_names: list[str] = []
+                if callee_def is not None:
+                    fdt = callee_def.decl.type
+                    if isinstance(fdt, c.FuncDecl) and fdt.args is not None:
+                        for prm in fdt.args.params or []:
+                            if isinstance(prm, c.Decl) and prm.name:
+                                callee_param_names.append(str(prm.name))
+                for i, arg in enumerate(n.args.exprs or []):
+                    if isinstance(arg, c.ID) and arg.name in aliases:
+                        # Callee param matching deve essere alias.
+                        if (
+                            i < len(callee_param_names)
+                            and callee_param_names[i] in callee_aliases
+                        ):
+                            continue
+                        raise MnemoCompileError(
+                            f"`{arg.name}` (alias struct-array) passato a "
+                            f"`{callee_name}` ma il parametro corrispondente "
+                            f"non è riconosciuto come alias struct-array. "
+                            f"Verifica che il param sia `T*` con T struct-array "
+                            f"file-scope unico."
+                        )
+
+    # Pass 3: rewrite ogni funzione.
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        fname = ext.decl.name
+        aliases = fn_aliases.get(fname, {})
         if not aliases:
             continue
-        # Pass 2: validate — `p` must not appear as arg of a FuncCall.
-        for n in _iter_c_nodes(body):
-            if isinstance(n, c.FuncCall) and n.args is not None:
-                for arg in n.args.exprs or []:
-                    if isinstance(arg, c.ID) and arg.name in aliases:
-                        raise MnemoCompileError(
-                            f"`{arg.name}` (puntatore a elemento struct-array) "
-                            f"passato a funzione `{getattr(n.name, 'name', '?')}` — "
-                            f"cross-fn fat-pointer non supportato. "
-                            f"Inlinea manualmente l'uso o rimuovi il pattern."
+        param_aliases = fn_param_aliases.get(fname, set())
+
+        # Rewrite params: `T* p` → `int p`.
+        fdtype = ext.decl.type
+        if isinstance(fdtype, c.FuncDecl) and fdtype.args is not None:
+            for prm in fdtype.args.params or []:
+                if (
+                    isinstance(prm, c.Decl) and prm.name
+                    and prm.name in param_aliases
+                    and isinstance(prm.type, c.PtrDecl)
+                ):
+                    inner_td = prm.type.type
+                    if isinstance(inner_td, c.TypeDecl):
+                        prm.type = c.TypeDecl(
+                            declname=inner_td.declname,
+                            quals=[],
+                            align=None,
+                            type=c.IdentifierType(names=["int"]),
                         )
-        # Pass 3: rewrite.
-        def _rewrite(node: c.Node) -> c.Node:
+
+        def _rewrite(node: c.Node, aliases=aliases) -> c.Node:
             for child_name, ch in list(node.children()):
                 if ch is None:
                     continue
                 if isinstance(ch, list):
                     new_list = [_rewrite(x) if x is not None else None for x in ch]
-                    setattr(node, child_name.split("[")[0]
-                            if "[" in child_name else child_name, new_list)
+                    base_name = child_name.split("[")[0] if "[" in child_name else child_name
+                    setattr(node, base_name, new_list)
                 else:
                     new_ch = _rewrite(ch)
                     if new_ch is not ch:
@@ -885,7 +1096,8 @@ def _transform_struct_array_pointer_alias(ast: c.FileAST) -> None:
                     subscript=c.ID(name=node.name.name),
                 )
             return node
-        _rewrite(body)
+        if ext.body is not None:
+            _rewrite(ext.body)
 
 
 def _ast_needs_two_mem_partitions(ast: c.FileAST) -> bool:
