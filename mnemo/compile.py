@@ -1100,6 +1100,178 @@ def _transform_struct_array_pointer_alias(ast: c.FileAST) -> None:
             _rewrite(ext.body)
 
 
+def _collect_u32_typedefs(ast: c.FileAST) -> set[str]:
+    """Set di typedef name che risolvono a `unsigned int` / `unsigned`.
+
+    Ricorsivo su typedef-of-typedef. `uint32_t`, `u32`, ecc.
+    """
+    direct: dict[str, str | None] = {}  # name → underlying typedef name (or None se base)
+    base_unsigned: set[str] = set()
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.Typedef):
+            continue
+        t = ext.type
+        if not isinstance(t, c.TypeDecl):
+            continue
+        inner = t.type
+        if isinstance(inner, c.IdentifierType):
+            names = tuple(inner.names)
+            if names in (("unsigned", "int"), ("unsigned",)):
+                base_unsigned.add(ext.name)
+            elif len(names) == 1:
+                direct[ext.name] = names[0]
+    # Risoluzione transitiva.
+    out: set[str] = set(base_unsigned)
+    changed = True
+    while changed:
+        changed = False
+        for n, ref in direct.items():
+            if n in out:
+                continue
+            if ref in out:
+                out.add(n)
+                changed = True
+    return out
+
+
+def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
+    """True se il nodo tipo (TypeDecl wrapping IdentifierType) è u32."""
+    if isinstance(t, c.TypeDecl):
+        t = t.type
+    if isinstance(t, c.IdentifierType):
+        names = tuple(t.names)
+        if names in (("unsigned", "int"), ("unsigned",)):
+            return True
+        if len(names) == 1 and names[0] in u32_typedefs:
+            return True
+    return False
+
+
+_U32_MASK_LITERAL = "4294967295"  # 0xFFFFFFFF
+
+
+def _transform_u32_modular_masks(ast: c.FileAST) -> None:
+    """Inserisce `x &= 0xFFFFFFFFu;` dopo ogni assignment ad una variabile u32.
+
+    Mnemo cell è int64; ops aritmetiche/shift/bitwise C su u32 dovrebbero
+    troncare a 32 bit ma Mnemo non lo fa automaticamente. Questa pass
+    aggiunge il mask esplicito a livello AST, lasciando il lowering esistente
+    (`&=` → `__mn_and_into` reversibile) gestire la conversione.
+
+    Limiti correnti:
+    - Solo lvalue = c.ID di variabile dichiarata localmente o param u32 nel
+      contesto. Struct field u32, array element u32, deref puntatori u32:
+      non gestiti (tradeoff costo/complessità).
+    - Compound ops (`+=`, `^=`, `*=`, etc.): masked dopo l'op.
+    - `++`/`--`: masked dopo.
+    - L'rvalue di un assignment non viene maskato (i ops intermedi in int64
+      sono safe; solo lo store finale serve mask).
+    """
+    u32_typedefs = _collect_u32_typedefs(ast)
+
+    def _decl_is_u32(d: c.Decl) -> bool:
+        return _is_u32_type_node(d.type, u32_typedefs)
+
+    def _collect_u32_vars_in_func(fd: c.FuncDef) -> set[str]:
+        """Variabili u32 visibili (params + locals di tutti scope)."""
+        names: set[str] = set()
+        fdt = fd.decl.type
+        if isinstance(fdt, c.FuncDecl) and fdt.args is not None:
+            for prm in fdt.args.params or []:
+                if isinstance(prm, c.Decl) and prm.name and _decl_is_u32(prm):
+                    names.add(str(prm.name))
+        if fd.body is None:
+            return names
+        for n in _iter_c_nodes(fd.body):
+            if isinstance(n, c.Decl) and n.name and _decl_is_u32(n):
+                names.add(str(n.name))
+        return names
+
+    def _mask_stmt(var_name: str, coord: object) -> c.Node:
+        return c.Assignment(
+            op="&=",
+            lvalue=c.ID(name=var_name, coord=coord),
+            rvalue=c.Constant(type="unsigned int", value=_U32_MASK_LITERAL, coord=coord),
+            coord=coord,
+        )
+
+    def _needs_mask(rhs: c.Node) -> bool:
+        # Skip se rhs è costante che già fits in u32.
+        if isinstance(rhs, c.Constant):
+            try:
+                v = int(rhs.value, 0)
+                if 0 <= v <= 0xFFFFFFFF:
+                    return False
+            except (ValueError, TypeError):
+                pass
+        return True
+
+    def _wrap_compound(items: list[c.Node], u32_vars: set[str]) -> list[c.Node]:
+        out: list[c.Node] = []
+        for s in items:
+            new_s = _rewrite(s, u32_vars)
+            out.append(new_s)
+            # Dopo lo statement, inserisci mask se è un assignment a u32 ID.
+            extra = _trailing_masks(new_s, u32_vars)
+            out.extend(extra)
+        return out
+
+    def _trailing_masks(s: c.Node, u32_vars: set[str]) -> list[c.Node]:
+        if isinstance(s, c.Assignment) and isinstance(s.lvalue, c.ID):
+            if s.lvalue.name in u32_vars and _needs_mask(s.rvalue):
+                # Mask con literal 0xFFFFFFFF: il `&=` non sarebbe applicato
+                # ricorsivamente perché rvalue è costante fits.
+                return [_mask_stmt(s.lvalue.name, s.coord)]
+        if isinstance(s, c.UnaryOp) and s.op in ("p++", "p--", "++", "--"):
+            if isinstance(s.expr, c.ID) and s.expr.name in u32_vars:
+                return [_mask_stmt(s.expr.name, s.coord)]
+        return []
+
+    def _rewrite(s: c.Node, u32_vars: set[str]) -> c.Node:
+        if isinstance(s, c.Compound):
+            new_items = _wrap_compound(list(s.block_items or []), u32_vars)
+            return c.Compound(block_items=new_items, coord=s.coord)
+        if isinstance(s, c.If):
+            return c.If(
+                cond=s.cond,
+                iftrue=_rewrite(s.iftrue, u32_vars) if s.iftrue is not None else None,
+                iffalse=_rewrite(s.iffalse, u32_vars) if s.iffalse is not None else None,
+                coord=s.coord,
+            )
+        if isinstance(s, c.While):
+            return c.While(cond=s.cond, stmt=_rewrite(s.stmt, u32_vars), coord=s.coord)
+        if isinstance(s, c.DoWhile):
+            return c.DoWhile(cond=s.cond, stmt=_rewrite(s.stmt, u32_vars), coord=s.coord)
+        if isinstance(s, c.For):
+            return c.For(
+                init=s.init, cond=s.cond, next=s.next,
+                stmt=_rewrite(s.stmt, u32_vars), coord=s.coord,
+            )
+        if isinstance(s, c.Switch):
+            return c.Switch(cond=s.cond, stmt=_rewrite(s.stmt, u32_vars), coord=s.coord)
+        if isinstance(s, c.Case):
+            return c.Case(
+                expr=s.expr,
+                stmts=_wrap_compound(list(s.stmts or []), u32_vars),
+                coord=s.coord,
+            )
+        if isinstance(s, c.Default):
+            return c.Default(
+                stmts=_wrap_compound(list(s.stmts or []), u32_vars),
+                coord=s.coord,
+            )
+        return s
+
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        u32_vars = _collect_u32_vars_in_func(ext)
+        if not u32_vars or ext.body is None:
+            continue
+        items = list(ext.body.block_items or [])
+        ext.body.block_items = _wrap_compound(items, u32_vars)
+
+
 def _ast_needs_two_mem_partitions(ast: c.FileAST) -> bool:
     """
     `par` a due rami con call che condividono le stesse celle `__mn_mem*`
@@ -1280,6 +1452,9 @@ def compile_c_to_kairos(
     _transform_hoist_unsafe_if_conds(ast)
     # `T* p = &BASE.arr[i]; ... p->f ...` → alias inline a `BASE.arr[p].f` (int p).
     _transform_struct_array_pointer_alias(ast)
+    # u32 vars: inserisce `x &= 0xFFFFFFFF` dopo ogni assignment per emulare
+    # semantica modular C su Mnemo int64 cell.
+    _transform_u32_modular_masks(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
