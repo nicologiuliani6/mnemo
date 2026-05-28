@@ -1233,6 +1233,61 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
     return False
 
 
+def _transform_stdlib_abs(ast: c.FileAST) -> None:
+    """`abs(x)`/`labs(x)`/`llabs(x)` → `(x < 0 ? -x : x)`.
+
+    Inlined ternario, reversibile, no lib call. Param può essere espressione
+    arbitraria; per side-effect safety si valuta x una sola volta? — no,
+    ternary C ammette duplicazione (no side-effects on simple ids/consts).
+    Per side-effect-bearing expr (es. `abs(f())`), user deve usare temp.
+    """
+    abs_names = frozenset({"abs", "labs", "llabs"})
+
+    def rewrite(node: c.Node) -> c.Node:
+        if isinstance(node, c.FuncCall) and isinstance(node.name, c.ID):
+            if node.name.name in abs_names and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 1:
+                    x = rewrite_expr(exprs[0])
+                    coord = getattr(node, "coord", None)
+                    zero = c.Constant("int", "0", coord)
+                    cond = c.BinaryOp("<", x, zero, coord)
+                    neg_x = c.UnaryOp("-", x, coord)
+                    return c.TernaryOp(cond, neg_x, x, coord)
+        return node
+
+    def rewrite_expr(n: c.Node) -> c.Node:
+        n2 = rewrite(n)
+        if n2 is not n:
+            return n2
+        for fname, child in n.children():
+            if isinstance(child, c.Node):
+                new = rewrite_expr(child)
+                if new is not child:
+                    _replace_child(n, fname, new)
+        return n
+
+    def _replace_child(parent: c.Node, fname: str, new: c.Node) -> None:
+        if "[" in fname:
+            base, idx_s = fname.split("[", 1)
+            idx = int(idx_s.rstrip("]"))
+            seq = getattr(parent, base, None)
+            if seq is not None:
+                seq[idx] = new
+        else:
+            setattr(parent, fname, new)
+
+    def walk(n: c.Node) -> None:
+        for fname, child in n.children():
+            if isinstance(child, c.Node):
+                new = rewrite_expr(child)
+                if new is not child:
+                    _replace_child(n, fname, new)
+                walk(child)
+
+    walk(ast)
+
+
 def _transform_u32_modular_masks(ast: c.FileAST) -> None:
     """Inserisce `__mn_mask_u32(&x)` dopo ogni assignment ad una variabile u32.
 
@@ -1548,6 +1603,8 @@ def compile_c_to_kairos(
     # u32 vars: inserisce `__mn_mask_u32(&x)` dopo ogni assignment per emulare
     # semantica modular C. Helper lib basato su mnsplit32 (O(1) VM op).
     _transform_u32_modular_masks(ast)
+    # stdlib.h: abs/labs/llabs → ternario `(x < 0 ? -x : x)`.
+    _transform_stdlib_abs(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),

@@ -8,4 +8,9 @@
 void *malloc(size_t n);
 void  free(void *p);
 
+/* abs / labs / llabs: Mnemo lower built-in. */
+int             abs(int x);
+long            labs(long x);
+long long       llabs(long long x);
+
 #endif
