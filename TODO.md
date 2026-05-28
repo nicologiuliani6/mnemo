@@ -19,14 +19,25 @@ Causa: `__mn_putd_uint` è self-recursive. Forward stack genera frames
 frames crescenti senza release. 2 chiamate `printer()` consecutive
 accumulano depth fino a `@358`, supera `MAX_FRAMES=200`.
 
-Workaround alternativi:
-- Bump `MAX_FRAMES` ulteriormente (VM ~4GB heap a 2000 frames).
-- Reset `recursion_depth` tra cicli opt-uncall.
-- GC frames non più referenziati dopo uncall completato.
+Workaround alternativi (testati, INSUFFICIENTI):
+- Bump `MAX_FRAMES` a 1024 → overflow @982 (printf+uncall accumula
+  indefinitamente).
+- Depth cap via modulo → causa `get_findex: frame @N non trovato` per
+  call sites che lookup chiave originale.
+- ulimit -s 512MB → ancora SIGSEGV (memoria corruption, non stack OF).
 
-Fix VM corretto richiede refactor `vm_invert.h` su gestione clone
-frames durante inverse exec (frame reuse / depth tracking attraverso
-boundary opt-uncall).
+Causa profonda: `recursion_depth` mai resettato. Forward `__mn_putd_uint`
+cresce depth per digit; inverse re-entrara generando frames @1..@N
+incrementali. Tra cicli `call printer / uncall printer` consecutivi,
+depth NON azzerato → unbounded growth.
+
+Fix VM corretto richiede:
+1. Reset `recursion_depth` su rientro a main context post-uncall.
+2. O GC frames non più referenziati dopo uncall completato.
+3. O refactor `vm_invert.h` mutual recursion in iterative loop.
+
+Workaround Mnemo (`show_using_targets` exclusion) resta attivo per
+correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
 
 ## Librerie standard C implementabili in Mnemo
 
