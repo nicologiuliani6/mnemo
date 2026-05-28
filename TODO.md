@@ -37,17 +37,17 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 ### stdlib.h
 
-- **`int abs(int)` / `long labs(long)` / `long long llabs(long long)`** — `if x<0 then -x else x`. Reversibile diretto.
+- ✓ `abs/labs/llabs` (commit 6d26944) — AST rewrite a ternario.
 - **`div_t div(int, int)` / `ldiv` / `lldiv`** — struct quoziente+resto. Wrapper su `__mn_divmod_signed`.
 - **`void abort(void)`** — emit "abort\n" + halt.
-- **`int atoi(const char *)`** — compile-time su letterale (analogo `strlen` compile-time esistente).
+- ✓ `atoi(const char *)` (commit f286276) — compile-time su literal.
 
 ### string.h aggiuntivi
 
 - **`char *strcat(char *dst, const char *src)` / `strncat(dst, src, N)`** — compile-time se dst array Mnemo, src letterale o char[]. Append byte-per-byte.
 - **`char *strchr(const char *s, int c)` / `strrchr(s, c)`** — compile-time su letterale: ritorna indice/NULL.
 - **`char *strstr(const char *haystack, const char *needle)`** — compile-time su letterali. Naive search.
-- **`int memcmp(const void *a, const void *b, size_t N)`** — compile-time se entrambi array Mnemo + N const. Confronto byte-wise.
+- ✓ `memcmp(a, b, n)` (commit c6eedc7) — compile-time su 2 string literal.
 - **`size_t strspn` / `strcspn(s, accept)` / `char *strpbrk(s, accept)`** — char-class compile-time su letterali.
 - **`char *strdup(const char *s)`** (POSIX/C23) — alloca via ptr_pool + memcpy compile-time. Solo se src letterale.
 
