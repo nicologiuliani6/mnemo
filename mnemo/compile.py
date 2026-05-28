@@ -786,6 +786,108 @@ def _iter_c_nodes(node: c.Node | None) -> list[c.Node]:
     return out
 
 
+def _transform_struct_array_pointer_alias(ast: c.FileAST) -> None:
+    """Riscrittura AST: `T* p = &BASE.arr[idx]` con `BASE.arr` array di struct
+    → trattare `p` come int holding idx; sostituire `p->f` con `BASE.arr[p].f`.
+
+    Limiti correnti:
+    - `p` non può essere passato a funzioni (cross-fn fat-ptr non implementato).
+    - Alias valido fino a fine funzione (nessun reset).
+    - Solo accessi `p->f` (no `*p`, no `p[k]`).
+    """
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.FuncDef):
+            continue
+        body = ext.body
+        if body is None:
+            continue
+        # Pass 1: scan Decl nodes for fat-ptr pattern.
+        aliases: dict[str, c.Node] = {}
+        for n in _iter_c_nodes(body):
+            if not isinstance(n, c.Decl) or not n.name:
+                continue
+            if not isinstance(n.type, c.PtrDecl):
+                continue
+            init = n.init
+            if not isinstance(init, c.UnaryOp) or init.op != "&":
+                continue
+            inner = init.expr
+            if not isinstance(inner, c.ArrayRef):
+                continue
+            if not isinstance(inner.name, c.StructRef):
+                continue
+            aliases[str(n.name)] = inner.name
+        if not aliases:
+            continue
+        # Pass 2: validate — `p` must not appear as arg of a FuncCall.
+        for n in _iter_c_nodes(body):
+            if isinstance(n, c.FuncCall) and n.args is not None:
+                for arg in n.args.exprs or []:
+                    if isinstance(arg, c.ID) and arg.name in aliases:
+                        raise MnemoCompileError(
+                            f"`{arg.name}` (puntatore a elemento struct-array) "
+                            f"passato a funzione `{getattr(n.name, 'name', '?')}` — "
+                            f"cross-fn fat-pointer non supportato. "
+                            f"Inlinea manualmente l'uso o rimuovi il pattern."
+                        )
+        # Pass 3: rewrite.
+        def _rewrite(node: c.Node) -> c.Node:
+            for child_name, ch in list(node.children()):
+                if ch is None:
+                    continue
+                if isinstance(ch, list):
+                    new_list = [_rewrite(x) if x is not None else None for x in ch]
+                    setattr(node, child_name.split("[")[0]
+                            if "[" in child_name else child_name, new_list)
+                else:
+                    new_ch = _rewrite(ch)
+                    if new_ch is not ch:
+                        setattr(node, child_name, new_ch)
+            # Decl: `T* p = &BASE.arr[idx];` → `int p = idx;`.
+            if isinstance(node, c.Decl) and node.name in aliases:
+                if isinstance(node.type, c.PtrDecl):
+                    inner_td = node.type.type
+                    if isinstance(inner_td, c.TypeDecl):
+                        node.type = c.TypeDecl(
+                            declname=inner_td.declname,
+                            quals=[],
+                            align=None,
+                            type=c.IdentifierType(names=["int"]),
+                        )
+                init = node.init
+                if (
+                    isinstance(init, c.UnaryOp) and init.op == "&"
+                    and isinstance(init.expr, c.ArrayRef)
+                ):
+                    node.init = init.expr.subscript
+                return node
+            # Assignment `p = &BASE.arr[idx];` → `p = idx;`.
+            if (
+                isinstance(node, c.Assignment) and node.op == "="
+                and isinstance(node.lvalue, c.ID) and node.lvalue.name in aliases
+            ):
+                rv = node.rvalue
+                if (
+                    isinstance(rv, c.UnaryOp) and rv.op == "&"
+                    and isinstance(rv.expr, c.ArrayRef)
+                ):
+                    node.rvalue = rv.expr.subscript
+                return node
+            # `p->field` → `BASE.arr[p].field`.
+            if (
+                isinstance(node, c.StructRef) and node.type == "->"
+                and isinstance(node.name, c.ID) and node.name.name in aliases
+            ):
+                base = aliases[node.name.name]
+                node.type = "."
+                node.name = c.ArrayRef(
+                    name=base,
+                    subscript=c.ID(name=node.name.name),
+                )
+            return node
+        _rewrite(body)
+
+
 def _ast_needs_two_mem_partitions(ast: c.FileAST) -> bool:
     """
     `par` a due rami con call che condividono le stesse celle `__mn_mem*`
@@ -964,6 +1066,8 @@ def compile_c_to_kairos(
     _transform_general_early_returns(ast)
     # `if (E) S` con S che muta var di E → hoist E in fresh int (fi stabile).
     _transform_hoist_unsafe_if_conds(ast)
+    # `T* p = &BASE.arr[i]; ... p->f ...` → alias inline a `BASE.arr[p].f` (int p).
+    _transform_struct_array_pointer_alias(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
