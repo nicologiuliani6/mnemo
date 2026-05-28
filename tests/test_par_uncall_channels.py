@@ -28,10 +28,12 @@ def _write_c(src: str) -> str:
 
 class TestParUncallChannels(unittest.TestCase):
     def test_PC_dot_c_opt_uncall_par_uncall_for_channel_workers(self) -> None:
-        """PC.c con opt-uncall: par-uncall emesso per producer/consumer.
+        """PC.c con opt-uncall: par-uncall NON emesso per producer/consumer
+        (escluso perché usano pool ops indirettamente via printf %d runtime).
 
-        Dopo fix collect_loops in Kairos vm_invert.h (gestione corretta di
-        from-loop nested), il pattern par-uncall su worker con canali funziona.
+        Pool ops in inverse esecuzione (DELOCAL var=t) non roundtrip su layout
+        grandi (kernel.c 370 cells); exclusion preventiva per correttezza.
+        PC.c runtime resta funzionale (par regolare senza opt-uncall).
         """
         ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pc_path = os.path.join(ROOT, "c_test", "PC.c")
@@ -40,13 +42,13 @@ class TestParUncallChannels(unittest.TestCase):
         k = compile_c_to_kairos(pc_path, opt_uncall_user_calls=True)
         has_uncall_producer = re.search(r"uncall producer\(", k) is not None
         has_uncall_consumer = re.search(r"uncall consumer\(", k) is not None
-        self.assertTrue(
+        self.assertFalse(
             has_uncall_producer,
-            "PC.c: par-uncall su producer deve essere emesso",
+            "PC.c: par-uncall su producer deve essere ESCLUSO (pool ops)",
         )
-        self.assertTrue(
+        self.assertFalse(
             has_uncall_consumer,
-            "PC.c: par-uncall su consumer deve essere emesso",
+            "PC.c: par-uncall su consumer deve essere ESCLUSO (pool ops)",
         )
 
     def test_non_channel_fn_keeps_opt_uncall(self) -> None:

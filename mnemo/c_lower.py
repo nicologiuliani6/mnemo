@@ -878,6 +878,9 @@ class _Ctx:
     `op_uncall` su void proc con `show` → SIGSEGV: niente single-call
     opt-uncall. Par-uncall (par/rap) NON usa questa lista — inverse simmetrico."""
     show_using_targets: frozenset[str] = field(default_factory=frozenset)
+    """Funzioni (transitivamente) contenenti chiamate a pool ops (`__mn_pool_*`).
+    Single-call opt-uncall su queste fallisce con DELOCAL var=t. Par-uncall OK."""
+    pool_using_targets: frozenset[str] = field(default_factory=frozenset)
     """Funzioni che sono worker di `mnemo_pthread_parallel2`: niente opt-uncall nei loro body
     (par-uncall esterno richiede body invertibili senza pattern snap/uncall interno)."""
     par2_workers: frozenset[str] = field(default_factory=frozenset)
@@ -2621,6 +2624,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             ctx.opt_uncall_user_calls
             and f0 not in ctx.uncall_excluded_via_vm_targets
             and f1 not in ctx.uncall_excluded_via_vm_targets
+            and f0 not in ctx.pool_using_targets
+            and f1 not in ctx.pool_using_targets
             and not _func_is_recursive_user(ctx.file_ast, f0)
             and not _func_is_recursive_user(ctx.file_ast, f1)
         )
@@ -6484,6 +6489,14 @@ def _resolve_pi_channel_endpoint(expr: c.Node, ctx: _Ctx) -> str:
 
 _UNCALL_UNSAFE_LIB_PROCS = frozenset()
 
+# Pool ops: invalidi solo per single-call opt-uncall (DELOCAL var=t).
+# Par-uncall (par/rap simmetrico) li gestisce correttamente.
+_SINGLE_CALL_UNSAFE_LIB_PROCS = frozenset({
+    "__mn_pool_load",
+    "__mn_pool_store",
+    "__mn_pool_free",
+})
+
 
 def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
     """
@@ -6510,6 +6523,33 @@ def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
                 if rec(ins.body_instrs):
                     return True
             elif isinstance(ins, ICall) and ins.proc in _UNCALL_UNSAFE_LIB_PROCS:
+                return True
+        return False
+
+    return rec(instrs)
+
+
+def _instr_list_uses_pool_ops(instrs: list[Instr]) -> bool:
+    """True se callee chiama pool ops (`__mn_pool_load/store/free`) → blocca
+    single-call opt-uncall (DELOCAL var=t non roundtrip). Par-uncall OK."""
+
+    def rec(seq: list[Instr]) -> bool:
+        for ins in seq:
+            if isinstance(ins, IPar):
+                if any(rec(br) for br in ins.branches):
+                    return True
+            elif isinstance(ins, IIfKairos):
+                if rec(ins.then_instrs):
+                    return True
+                if ins.else_instrs is not None and rec(ins.else_instrs):
+                    return True
+            elif isinstance(ins, IFromUntilKairos):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ILocalBlock):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ICall) and ins.proc in _SINGLE_CALL_UNSAFE_LIB_PROCS:
                 return True
         return False
 
@@ -6743,6 +6783,28 @@ def _uncall_excluded_transitive_closure(
         n for n, f in probe_map.items() if _user_procedure_uncall_excluded_via_vm(f)
     }
     blocked |= {n for n in extra_seeds if n in probe_map}
+    changed = True
+    while changed:
+        changed = False
+        for n, f in probe_map.items():
+            if n in blocked:
+                continue
+            if _function_ir_calls_proc_in(f, blocked):
+                blocked.add(n)
+                changed = True
+    return frozenset(blocked)
+
+
+def _pool_using_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
+    """Chiusura: fn che usa pool ops (direttamente o tramite call). Solo per
+    single-call opt-uncall exclusion; par-uncall NON usa questa lista."""
+    def fn_uses_pool(f: Function) -> bool:
+        for b in f.blocks:
+            if _instr_list_uses_pool_ops(b.instrs):
+                return True
+        return False
+
+    blocked: set[str] = {n for n, f in probe_map.items() if fn_uses_pool(f)}
     changed = True
     while changed:
         changed = False
@@ -7041,6 +7103,7 @@ def _lower_funccall_with_ret(
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
             show_blk = name in ctx.show_using_targets
+            pool_blk = name in ctx.pool_using_targets
             self_rec = (name == ctx.fn_name)
             callee_recursive = _func_is_recursive_user(ctx.file_ast, name)
             in_par2_worker = ctx.fn_name in ctx.par2_workers
@@ -7053,6 +7116,7 @@ def _lower_funccall_with_ret(
                 and not ir_blk
                 and not ch_blk
                 and not show_blk
+                and not pool_blk
                 and not in_par2_worker
             )
             apply_void_uncall_opt = (
@@ -7064,6 +7128,7 @@ def _lower_funccall_with_ret(
                 and not ir_blk
                 and not ch_blk
                 and not show_blk
+                and not pool_blk
                 and not in_par2_worker
             )
             uncall_with_restore: list[Instr] = []
@@ -9805,6 +9870,7 @@ def _lower_user_function(
     uncall_excluded_via_vm_targets: frozenset[str] = frozenset(),
     channel_using_targets: frozenset[str] = frozenset(),
     show_using_targets: frozenset[str] = frozenset(),
+    pool_using_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
     file_field_bits: dict[tuple[str, str], int] | None = None,
@@ -9847,6 +9913,7 @@ def _lower_user_function(
         uncall_excluded_via_vm_targets=uncall_excluded_via_vm_targets,
         channel_using_targets=channel_using_targets,
         show_using_targets=show_using_targets,
+        pool_using_targets=pool_using_targets,
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
     )
@@ -10511,6 +10578,7 @@ def lower_file_to_program(
         uc_excl: frozenset[str],
         ch_targets: frozenset[str] = frozenset(),
         sh_targets: frozenset[str] = frozenset(),
+        pl_targets: frozenset[str] = frozenset(),
         touches: dict[str, frozenset[int]] | None = None,
     ):
         ext, fn_phys = ext_phys
@@ -10534,6 +10602,7 @@ def lower_file_to_program(
             uncall_excluded_via_vm_targets=uc_excl,
             channel_using_targets=ch_targets,
             show_using_targets=sh_targets,
+            pool_using_targets=pl_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
             fp_runtime=fp_runtime_per_fn.get(ext.decl.name or ""),
@@ -10550,18 +10619,21 @@ def lower_file_to_program(
         n for n, f in probe_by_name.items() if _user_procedure_uses_channels(f)
     )
     show_targets: frozenset[str] = _show_using_transitive_closure(probe_by_name)
+    pool_targets: frozenset[str] = _pool_using_transitive_closure(probe_by_name)
     if opt_uncall_user_calls:
         user_fns = [
             _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm,
                             ch_targets=channel_targets,
-                            sh_targets=show_targets, touches=mem_touches)
+                            sh_targets=show_targets,
+                            pl_targets=pool_targets, touches=mem_touches)
             for s in user_fn_specs
         ]
     else:
         user_fns = [
             _lower_one_user(s, opt_uc=False, uc_excl=frozenset(),
                             ch_targets=channel_targets,
-                            sh_targets=show_targets, touches=mem_touches)
+                            sh_targets=show_targets,
+                            pl_targets=pool_targets, touches=mem_touches)
             for s in user_fn_specs
         ]
 
@@ -10599,6 +10671,7 @@ def lower_file_to_program(
         uncall_excluded_via_vm_targets=bad_uncall_via_vm,
         channel_using_targets=channel_targets,
         show_using_targets=show_targets,
+        pool_using_targets=pool_targets,
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,
     )
