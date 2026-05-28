@@ -2,31 +2,6 @@
 
 ## Bug aperti
 
-### `c_test/des.c` — round-trip dec != plain
-
-Status (post-fix u32 mask compound op):
-
-- `%llx` u64 OK (MNSPLIT32 + `__mn_putx_u64`).
-- u64 rotate `(key << 5) | (key >> 59)` OK (mnhalve unsigned in `__mn_shr_into`).
-- Subkeys keyschedule OK.
-- u32 modular semantics OK: AST pass auto-inserisce `__mn_mask_u32(x)` dopo
-  ogni assignment+compound op a var u32. Compound op (`+=`/`*=`/etc.)
-  ora sempre maskato regardless di rvalue costante.
-- **`des.c` cipher MATCHA gcc 1:1**: `71deeadd14969ffc`. ✓
-- **`des.c` round-trip `dec == plain` OK** ✓.
-
-Bug residuo:
-
-1. **`--opt-uncall-user-calls` + des → hang / POP empty**:
-   `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
-   timeout >30s nessun output, exit 1.
-   Pattern shr_into / and_into nested in user fn presumibilmente non
-   riconosciuto da opt-uncall snapshot/swap. `c_test/loop.c
-   --opt-uncall-user-calls` OK; sospetto interazione con bitwise
-   helpers chiamati ripetutamente dentro F() Feistel.
-   Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
-   pattern.
-
 ### `c_test/kernel.c` multithread: layout memoria troppo grande per pthread ABI
 
 Dopo fix `init_mutexes(&K.channel)` + `&K.channel` (sub-struct) + parallel2
