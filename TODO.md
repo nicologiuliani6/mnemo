@@ -18,17 +18,14 @@ Status (post-fix u32 mask `__mn_mask_u32` lib helper):
 
 Bug aperti:
 
-1. **Local array passing con param scalar non-const**: `fill(scalar_var, array)`
-   call → array non condiviso caller↔callee se scalar arg è variabile (param o
-   local). Funziona se scalar è costante.
-   Repro: `c_test/_dbg_arr_v3.c` vs `_dbg_arr_v5.c`:
-   - v3: `void use(int key) { ... fill(key, a); ... }` → a resta 0.
-   - v5: `void use(void) { ... fill(0, a); ... }` → a popolato OK.
-   - `_dbg_arr3.c` (int+int array, no scalar param) → OK.
-   Affligge `des.c` keyschedule (passa `u64 key` + `u32 subkeys[16]`).
-   Effetto: cipher Mnemo differisce da gcc (round-trip dec=plain però OK).
-   Sospetto: arg evaluation order in `_prepare_call_arg` allocates temp che
-   collide con cells dell'array.
+1. **des.c cipher Mnemo differisce da gcc**: round-trip dec=plain OK ma
+   `encrypt(plain, key)` produce cipher diversa da gcc:
+   - gcc: `71deeadd14969ffc`
+   - Mnemo: `f91563c639203f1c`
+   Post-fix u32 mask e array-elem rename, ancora bug nel filone des:
+   Feistel rounds, F() ops, o keyschedule subkeys propagation.
+   Da indagare: confrontare subkeys runtime vs gcc step-by-step,
+   compare L/R post-round in `_dbg_enc1.c` con runtime con `--vm-stats`.
 2. **`--opt-uncall-user-calls` + arith helpers → POP empty**:
    `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
    `[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)`.
