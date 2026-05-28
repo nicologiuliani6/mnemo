@@ -1134,6 +1134,92 @@ def _collect_u32_typedefs(ast: c.FileAST) -> set[str]:
     return out
 
 
+def _collect_u64_typedefs(ast: c.FileAST) -> set[str]:
+    """Set di typedef name che risolvono a `unsigned long long`. `uint64_t`, `u64`, ecc."""
+    direct: dict[str, str | None] = {}
+    base_u64: set[str] = set()
+    u64_base_names = (
+        ("unsigned", "long", "long"),
+        ("unsigned", "long", "long", "int"),
+        ("long", "long"),
+        ("long", "long", "int"),
+    )
+    for ext in ast.ext or []:
+        if not isinstance(ext, c.Typedef):
+            continue
+        t = ext.type
+        if not isinstance(t, c.TypeDecl):
+            continue
+        inner = t.type
+        if isinstance(inner, c.IdentifierType):
+            names = tuple(inner.names)
+            if names in u64_base_names:
+                base_u64.add(ext.name)
+            elif len(names) == 1:
+                direct[ext.name] = names[0]
+    out: set[str] = set(base_u64)
+    changed = True
+    while changed:
+        changed = False
+        for n, ref in direct.items():
+            if n in out:
+                continue
+            if ref in out:
+                out.add(n)
+                changed = True
+    return out
+
+
+def _is_u64_type_node(t: c.Node | None, u64_typedefs: set[str]) -> bool:
+    """True se nodo tipo è u64 (unsigned long long o typedef equivalente)."""
+    if isinstance(t, c.TypeDecl):
+        t = t.type
+    if isinstance(t, c.IdentifierType):
+        names = tuple(t.names)
+        u64_base_names = (
+            ("unsigned", "long", "long"),
+            ("unsigned", "long", "long", "int"),
+            ("long", "long"),
+            ("long", "long", "int"),
+        )
+        if names in u64_base_names:
+            return True
+        if len(names) == 1 and names[0] in u64_typedefs:
+            return True
+    return False
+
+
+def _function_uses_u64_shift(fd: c.FuncDef, u64_typedefs: set[str]) -> bool:
+    """True se la fn ha vars/params u64 E performa shift (`<<` o `>>`) su tali vars.
+
+    Heuristica conservativa: se la fn ha qualsiasi var u64 E qualsiasi shift,
+    consideriamo opt-uncall single-call unsafe (mul/halve int64 wrap su valori
+    > 2^32 non roundtrip in inverse). Per u32-only fns gli shift sono safe.
+    """
+    has_u64_var = False
+    if fd.body is None:
+        return False
+    fdt = fd.decl.type
+    if isinstance(fdt, c.FuncDecl) and fdt.args is not None:
+        for prm in fdt.args.params or []:
+            if isinstance(prm, c.Decl) and _is_u64_type_node(prm.type, u64_typedefs):
+                has_u64_var = True
+                break
+    if not has_u64_var:
+        for n in _iter_c_nodes(fd.body):
+            if isinstance(n, c.Decl) and _is_u64_type_node(n.type, u64_typedefs):
+                has_u64_var = True
+                break
+    if not has_u64_var:
+        return False
+    for n in _iter_c_nodes(fd.body):
+        if isinstance(n, c.BinaryOp) and n.op in ("<<", ">>"):
+            return True
+        if isinstance(n, c.Assignment) and n.op in ("<<=", ">>="):
+            return True
+    return False
+
+
 def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
     """True se il nodo tipo (TypeDecl wrapping IdentifierType) è u32."""
     if isinstance(t, c.TypeDecl):
@@ -1484,6 +1570,14 @@ def compile_c_to_kairos(
         and not parse_mnemo_skip_par_shared_mutex_check(src)
     ):
         check_par_shared_mutex_discipline(ast, layout)
+    u64_typedefs = _collect_u64_typedefs(ast)
+    uncall_extra_seeds = frozenset(
+        ext.decl.name
+        for ext in (ast.ext or [])
+        if isinstance(ext, c.FuncDef)
+        and ext.decl.name
+        and _function_uses_u64_shift(ext, u64_typedefs)
+    )
     prog = lower_file_to_program(
         ast,
         main_argc=argc_use,
@@ -1491,6 +1585,7 @@ def compile_c_to_kairos(
         layout=layout,
         physical_mem_cells=physical_mem_cells,
         opt_uncall_user_calls=opt_uncall_user_calls,
+        uncall_extra_seeds=uncall_extra_seeds,
     )
     prog = maybe_inline_user_functions(
         ast, prog, total_mem_cells=layout.total_cells

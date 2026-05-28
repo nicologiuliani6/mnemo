@@ -6600,14 +6600,20 @@ def _compute_callee_mem_touches(
     return {n: frozenset(s) for n, s in touched.items()}
 
 
-def _uncall_excluded_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
+def _uncall_excluded_transitive_closure(
+    probe_map: dict[str, Function],
+    extra_seeds: frozenset[str] = frozenset(),
+) -> frozenset[str]:
     """
     Chiusura: direttamente unsafe (pool, par, …) oppure che chiama una funzione già
     esclusa. Lo XOR ottimizzato su tutte le __mn_mem* non commuta con callees esclusi.
+    `extra_seeds`: nomi forniti dal layer AST (es. fn con u64+shift, int64 wrap non
+    roundtrip in inverse). Aggiunti al seed prima della chiusura.
     """
     blocked: set[str] = {
         n for n, f in probe_map.items() if _user_procedure_uncall_excluded_via_vm(f)
     }
+    blocked |= {n for n in extra_seeds if n in probe_map}
     changed = True
     while changed:
         changed = False
@@ -10181,6 +10187,7 @@ def lower_file_to_program(
     layout: ProgramMemLayout | None = None,
     physical_mem_cells: int | None = None,
     opt_uncall_user_calls: bool = False,
+    uncall_extra_seeds: frozenset[str] = frozenset(),
 ) -> Program:
     if not (1 <= ptr_pool_size <= PTR_POOL_MAX):
         raise MnemoCompileError(
@@ -10309,7 +10316,9 @@ def lower_file_to_program(
 
     user_fns_probe = [_lower_one_user(s, opt_uc=False, uc_excl=frozenset()) for s in user_fn_specs]
     probe_by_name = {fn.name: fn for fn in user_fns_probe}
-    bad_uncall_via_vm = _uncall_excluded_transitive_closure(probe_by_name)
+    bad_uncall_via_vm = _uncall_excluded_transitive_closure(
+        probe_by_name, extra_seeds=uncall_extra_seeds
+    )
     mem_touches = _compute_callee_mem_touches(probe_by_name, layout.total_cells)
     channel_targets: frozenset[str] = frozenset(
         n for n, f in probe_by_name.items() if _user_procedure_uses_channels(f)
