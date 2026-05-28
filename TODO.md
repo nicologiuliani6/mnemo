@@ -8,10 +8,25 @@ Bug VM sotto la superficie. Workaround corrente in Mnemo:
 `show_using_targets` transitive closure esclude user fn con printf
 da single-call opt-uncall.
 
-Fix VM corretto: `vm_invert.h` / `op_uncall` deve gestire void proc con
-`show` ops senza crashare. Permette di ri-abilitare opt-uncall per fn
-con printf (perf gain). Indagare inverse di INVOP_SHOW + interaction
-con `call __mn_putd`.
+**Diagnosi (post-investigazione)**: con workaround disabilitato (Mnemo
+emette `call printer` + `uncall printer`), VM crash su 2° ciclo
+`printer(N)`. gdb trace mostra ricorsione profonda in
+`exec_branch_inverse` → `invert_op_to_line` → `clone_frame_for_depth`
+→ `memset` overflow.
+
+Causa: `__mn_putd_uint` è self-recursive. Forward stack genera frames
+`__mn_putd_uint@1, @2, @3, ...` per ogni digit. Inverse rivisita
+frames crescenti senza release. 2 chiamate `printer()` consecutive
+accumulano depth fino a `@358`, supera `MAX_FRAMES=200`.
+
+Workaround alternativi:
+- Bump `MAX_FRAMES` ulteriormente (VM ~4GB heap a 2000 frames).
+- Reset `recursion_depth` tra cicli opt-uncall.
+- GC frames non più referenziati dopo uncall completato.
+
+Fix VM corretto richiede refactor `vm_invert.h` su gestione clone
+frames durante inverse exec (frame reuse / depth tracking attraverso
+boundary opt-uncall).
 
 ## Librerie standard C implementabili in Mnemo
 
