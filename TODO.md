@@ -50,22 +50,6 @@ d. **Worker-side pool dispatch**: i workers prendono solo handle al
 
 **Lavoro non triviale; documentato per ripresa futura.**
 
-### `mnemo_pthread_parallel2` su mps.h con kloop a 2 params (1° ignorato)
-
-`c_test/kernel.c` multithread:
-```c
-void kloop(mps_t *mps, int *unused) { ... }
-void kernel_recv(mps_t *mps, int *answer) { ... }
-mnemo_pthread_parallel2(kloop, kernel_recv, &K.channel, &K.channel, &answer);
-```
-mps.h's macro accetta `void (*)(mps_t*, int)` come worker e chiama solo `fn(mps)`
-ignorando il secondo arg. Mnemo invece pretende N args dove N = numero param
-di ciascun worker (qui 2+2 = 4 worker args). User passa 3, Mnemo errore.
-
-Fix: estendere parser parallel2 per riconoscere il pattern asimmetrico mps.h
-(a: 1 arg, b: 2 args). O fornire `mnemo_pthread_parallel2_async` con ABI
-flexible. O auto-detect quando worker decl ha 2 params ma callsite ne dà 1.
-
 ### Nested array dentro struct-array element con idx runtime
 
 - Read `B.arr[i].buf[0]` (campo nested array dentro struct-array elem con i
