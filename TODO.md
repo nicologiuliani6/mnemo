@@ -40,6 +40,23 @@ Bug aperti:
    Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
    pattern.
 
+### `--opt-uncall-user-calls` su void function con printf → VM SEGFAULT
+
+Pre-existing bug (non causato da work kernel.c). Repro minimal:
+```c
+void use(int x) { printf("x=%d\n", x); }
+int main(void) { use(42); return 0; }
+```
+`mnemo run … --opt-uncall-user-calls` → exit 245 (= 256 - SIGSEGV 11).
+VM diretto: `Segmentation fault (core dumped)`.
+
+Stesso bug colpisce `c_test/kernel.c --opt-uncall-user-calls` → output vuoto
+(invece di 2 righe come gcc/no-opt). Anche `_dbg_crossfn_ptr.c`, `_dbg_opt_void2.c`.
+
+Fix probabile: VM `op_uncall` su procedura void con `show` (printf) +
+`call __mn_putd` non gestisce correttamente lo stack inverse. Indagare
+`vm_invert.h` per uncall di void proc con show ops.
+
 ### `--opt-uncall-user-calls` su `c_test/des.c` → POP stack vuoto
 
 `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →

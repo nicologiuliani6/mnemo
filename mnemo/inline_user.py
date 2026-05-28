@@ -301,7 +301,48 @@ def _expand_user_calls(
 ) -> list[Instr]:
     def expand_one(lst: list[Instr]) -> list[Instr]:
         res: list[Instr] = []
-        for ins in lst:
+        i = 0
+        while i < len(lst):
+            ins = lst[i]
+            # Strip opt-uncall wrapping around un'ICall che stiamo per inlinare:
+            #   ICall("__mn_hist_floor_snap") + ICall(proc) + [IXorEq...] +
+            #   IUncall(proc) + [IXorEq triple per ogni snap pair]
+            # Inline diretto = no opt-uncall (semantic-equiv: l'inline preserva il
+            # comportamento forward, lo snap orfano causa VM panic).
+            if (
+                isinstance(ins, ICall)
+                and ins.proc == "__mn_hist_floor_snap"
+                and i + 1 < len(lst)
+                and isinstance(lst[i + 1], ICall)
+                and lst[i + 1].proc in defined
+            ):
+                inline_proc = lst[i + 1].proc
+                # Trova l'IUncall(inline_proc) successivo (con XorEq fra mezzo).
+                j = i + 2
+                while j < len(lst) and isinstance(lst[j], IXorEq):
+                    j += 1
+                if (
+                    j < len(lst)
+                    and isinstance(lst[j], IUncall)
+                    and lst[j].proc == inline_proc
+                ):
+                    # Conta gli XorEq pre-uncall (snap_pairs N) → 3*N post-uncall.
+                    n_snaps = j - (i + 2)
+                    end = j + 1 + 3 * n_snaps
+                    # Inline solo la forward call; salta snap+xor+uncall+xor.
+                    callee = fn_by_name.get(inline_proc)
+                    if callee is None:
+                        raise MnemoCompileError(
+                            f"inline: funzione {inline_proc!r} non trovata nell'IR"
+                        )
+                    sid = counter[0]
+                    counter[0] += 1
+                    ren = lambda n, s=sid: _rename_atom(n, s)  # noqa: E731
+                    body = callee.blocks[0].instrs
+                    cloned = _rename_instrs(body, ren)
+                    res.extend(expand_one(cloned))
+                    i = end
+                    continue
             if isinstance(ins, ICall) and ins.proc in defined:
                 callee = fn_by_name.get(ins.proc)
                 if callee is None:
@@ -314,7 +355,9 @@ def _expand_user_calls(
                 body = callee.blocks[0].instrs
                 cloned = _rename_instrs(body, ren)
                 res.extend(expand_one(cloned))
-            elif isinstance(ins, IIfKairos):
+                i += 1
+                continue
+            if isinstance(ins, IIfKairos):
                 res.append(
                     IIfKairos(
                         ins.lhs,
@@ -344,6 +387,7 @@ def _expand_user_calls(
                 res.append(IPar([expand_one(br) for br in ins.branches]))
             else:
                 res.append(ins)
+            i += 1
         return res
 
     return expand_one(instrs)

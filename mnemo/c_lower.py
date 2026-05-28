@@ -873,6 +873,10 @@ class _Ctx:
     si blocca in attesa senza counterpart). Par-uncall in parallel2 OK (entrambi
     i worker inversi si parlano simmetricamente)."""
     channel_using_targets: frozenset[str] = field(default_factory=frozenset)
+    """Funzioni (transitivamente) contenenti `show` (printf/putchar). VM
+    `op_uncall` su void proc con `show` → SIGSEGV: niente single-call
+    opt-uncall. Par-uncall (par/rap) NON usa questa lista — inverse simmetrico."""
+    show_using_targets: frozenset[str] = field(default_factory=frozenset)
     """Funzioni che sono worker di `mnemo_pthread_parallel2`: niente opt-uncall nei loro body
     (par-uncall esterno richiede body invertibili senza pattern snap/uncall interno)."""
     par2_workers: frozenset[str] = field(default_factory=frozenset)
@@ -6249,6 +6253,34 @@ def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
     return rec(instrs)
 
 
+def _instr_list_uses_show(instrs: list[Instr]) -> bool:
+    """True se il callee (o nested) contiene `IShow` (printf/putchar).
+    VM `op_uncall` su void proc con `show` → SIGSEGV. Solo per single-call
+    opt-uncall; par-uncall NON usa questo (par/rap inverse è simmetrico)."""
+
+    def rec(seq: list[Instr]) -> bool:
+        for ins in seq:
+            if isinstance(ins, IPar):
+                if any(rec(br) for br in ins.branches):
+                    return True
+            elif isinstance(ins, IIfKairos):
+                if rec(ins.then_instrs):
+                    return True
+                if ins.else_instrs is not None and rec(ins.else_instrs):
+                    return True
+            elif isinstance(ins, IFromUntilKairos):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ILocalBlock):
+                if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, IShow):
+                return True
+        return False
+
+    return rec(instrs)
+
+
 def _instr_list_uses_channels(instrs: list[Instr]) -> bool:
     """True se il callee usa ssend/srecv. Compatibile con par-uncall ma non con
     single-call opt-uncall (l'inverse srecv resterebbe in attesa senza counterpart)."""
@@ -6285,6 +6317,11 @@ def _user_procedure_uncall_excluded_via_vm(fn: Function) -> bool:
     return any(
         _instr_list_uncall_unsafe_via_vm(b.instrs) for b in fn.blocks
     )
+
+
+def _user_procedure_uses_show(fn: Function) -> bool:
+    """True se la funzione (o callees nested) usa `show` (printf/putchar)."""
+    return any(_instr_list_uses_show(b.instrs) for b in fn.blocks)
 
 
 def _function_ir_calls_proc_in(fn: Function, names: set[str]) -> bool:
@@ -6436,6 +6473,25 @@ def _uncall_excluded_transitive_closure(probe_map: dict[str, Function]) -> froze
     """
     blocked: set[str] = {
         n for n, f in probe_map.items() if _user_procedure_uncall_excluded_via_vm(f)
+    }
+    changed = True
+    while changed:
+        changed = False
+        for n, f in probe_map.items():
+            if n in blocked:
+                continue
+            if _function_ir_calls_proc_in(f, blocked):
+                blocked.add(n)
+                changed = True
+    return frozenset(blocked)
+
+
+def _show_using_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
+    """Chiusura transitiva delle funzioni che usano `show` (printf/putchar) —
+    direttamente o tramite call. Solo per escludere single-call opt-uncall;
+    par-uncall NON usa questa lista."""
+    blocked: set[str] = {
+        n for n, f in probe_map.items() if _user_procedure_uses_show(f)
     }
     changed = True
     while changed:
@@ -6715,6 +6771,7 @@ def _lower_funccall_with_ret(
             stk = _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
+            show_blk = name in ctx.show_using_targets
             self_rec = (name == ctx.fn_name)
             callee_recursive = _func_is_recursive_user(ctx.file_ast, name)
             in_par2_worker = ctx.fn_name in ctx.par2_workers
@@ -6726,6 +6783,7 @@ def _lower_funccall_with_ret(
                 and not self_rec
                 and not ir_blk
                 and not ch_blk
+                and not show_blk
                 and not in_par2_worker
             )
             apply_void_uncall_opt = (
@@ -6736,6 +6794,7 @@ def _lower_funccall_with_ret(
                 and not self_rec
                 and not ir_blk
                 and not ch_blk
+                and not show_blk
                 and not in_par2_worker
             )
             uncall_with_restore: list[Instr] = []
@@ -9379,6 +9438,7 @@ def _lower_user_function(
     opt_uncall_user_calls: bool = False,
     uncall_excluded_via_vm_targets: frozenset[str] = frozenset(),
     channel_using_targets: frozenset[str] = frozenset(),
+    show_using_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
     file_field_bits: dict[tuple[str, str], int] | None = None,
@@ -9420,6 +9480,7 @@ def _lower_user_function(
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_excluded_via_vm_targets=uncall_excluded_via_vm_targets,
         channel_using_targets=channel_using_targets,
+        show_using_targets=show_using_targets,
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
     )
@@ -10082,6 +10143,7 @@ def lower_file_to_program(
         opt_uc: bool,
         uc_excl: frozenset[str],
         ch_targets: frozenset[str] = frozenset(),
+        sh_targets: frozenset[str] = frozenset(),
         touches: dict[str, frozenset[int]] | None = None,
     ):
         ext, fn_phys = ext_phys
@@ -10104,6 +10166,7 @@ def lower_file_to_program(
             opt_uncall_user_calls=opt_uc,
             uncall_excluded_via_vm_targets=uc_excl,
             channel_using_targets=ch_targets,
+            show_using_targets=sh_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
             fp_runtime=fp_runtime_per_fn.get(ext.decl.name or ""),
@@ -10117,16 +10180,19 @@ def lower_file_to_program(
     channel_targets: frozenset[str] = frozenset(
         n for n, f in probe_by_name.items() if _user_procedure_uses_channels(f)
     )
+    show_targets: frozenset[str] = _show_using_transitive_closure(probe_by_name)
     if opt_uncall_user_calls:
         user_fns = [
             _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm,
-                            ch_targets=channel_targets, touches=mem_touches)
+                            ch_targets=channel_targets,
+                            sh_targets=show_targets, touches=mem_touches)
             for s in user_fn_specs
         ]
     else:
         user_fns = [
             _lower_one_user(s, opt_uc=False, uc_excl=frozenset(),
-                            ch_targets=channel_targets, touches=mem_touches)
+                            ch_targets=channel_targets,
+                            sh_targets=show_targets, touches=mem_touches)
             for s in user_fn_specs
         ]
 
@@ -10163,6 +10229,7 @@ def lower_file_to_program(
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_excluded_via_vm_targets=bad_uncall_via_vm,
         channel_using_targets=channel_targets,
+        show_using_targets=show_targets,
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,
     )
