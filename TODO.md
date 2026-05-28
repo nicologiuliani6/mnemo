@@ -4,34 +4,26 @@
 
 ### `c_test/des.c` — round-trip dec != plain
 
-Status (post-fix u32 mask `__mn_mask_u32` lib helper):
+Status (post-fix u32 mask compound op):
 
 - `%llx` u64 OK (MNSPLIT32 + `__mn_putx_u64`).
 - u64 rotate `(key << 5) | (key >> 59)` OK (mnhalve unsigned in `__mn_shr_into`).
-- Subkeys keyschedule OK (verificato `_dbg_keysched.c`).
+- Subkeys keyschedule OK.
 - u32 modular semantics OK: AST pass auto-inserisce `__mn_mask_u32(x)` dopo
-  ogni assignment a var u32; helper basato su mnsplit32 (O(1) VM op).
-- **`des.c` round-trip `dec == plain` OK** (cipher però differisce da gcc
-  per bug local-array passing — vedi sotto).
-- **Workaround `des_global.c`**: subkeys promosso a global `g_sub[16]` →
-  cipher e dec corretti, matcha gcc esattamente.
+  ogni assignment+compound op a var u32. Compound op (`+=`/`*=`/etc.)
+  ora sempre maskato regardless di rvalue costante.
+- **`des.c` cipher MATCHA gcc 1:1**: `71deeadd14969ffc`. ✓
+- **`des.c` round-trip `dec == plain` OK** ✓.
 
-Bug aperti:
+Bug residuo:
 
-1. **des.c cipher Mnemo differisce da gcc**: round-trip dec=plain OK ma
-   `encrypt(plain, key)` produce cipher diversa da gcc:
-   - gcc: `71deeadd14969ffc`
-   - Mnemo: `f91563c639203f1c`
-   Post-fix u32 mask e array-elem rename, ancora bug nel filone des:
-   Feistel rounds, F() ops, o keyschedule subkeys propagation.
-   Da indagare: confrontare subkeys runtime vs gcc step-by-step,
-   compare L/R post-round in `_dbg_enc1.c` con runtime con `--vm-stats`.
-2. **`--opt-uncall-user-calls` + arith helpers → POP empty**:
+1. **`--opt-uncall-user-calls` + des → hang / POP empty**:
    `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
-   `[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)`.
-   Pattern shr_into (mnhalve-based) hist tracking probabile non riconosciuto
-   da opt-uncall. `c_test/loop.c --opt-uncall-user-calls` OK; sospetto
-   interazione con and_into/or_into/shr_into nested in user fn.
+   timeout >30s nessun output, exit 1.
+   Pattern shr_into / and_into nested in user fn presumibilmente non
+   riconosciuto da opt-uncall snapshot/swap. `c_test/loop.c
+   --opt-uncall-user-calls` OK; sospetto interazione con bitwise
+   helpers chiamati ripetutamente dentro F() Feistel.
    Fix: diff `.kairos` loop vs des, individuare divergenza opt-uncall snapshot
    pattern.
 
