@@ -102,6 +102,7 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_puto_width_left",
         "__mn_puto_width_zero",
         "__mn_ocount_unsigned",
+        "__mn_mask_u32",
     }
 )
 

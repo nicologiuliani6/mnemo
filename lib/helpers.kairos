@@ -6,3 +6,17 @@ procedure __mn_move_int(int dst, int src, stack __mn_hist, stack __mn_scratch)
     push(src, __mn_g)
     pop(dst, __mn_g)
     delocal stack __mn_g = nil
+
+// Mask x a 32 bit bassi: x = x & 0xFFFFFFFF. Reversibile via mnsplit32
+// (forward: x=0, hi=high32, lo=low32) + restore low32 in x. I bit alti
+// vengono salvati su __mn_hist (per la lap di inversione).
+// Costo: O(1) — MNSPLIT32 è un opcode VM singolo.
+procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
+    local int hi = 0
+    local int lo = 0
+    mnsplit32(x, hi, lo)
+    x += lo
+    push(lo, __mn_hist)
+    delocal int lo = 0
+    push(hi, __mn_hist)
+    delocal int hi = 0

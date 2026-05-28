@@ -1147,21 +1147,17 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
     return False
 
 
-_U32_MASK_LITERAL = "4294967295"  # 0xFFFFFFFF
-
-
 def _transform_u32_modular_masks(ast: c.FileAST) -> None:
-    """Inserisce `x &= 0xFFFFFFFFu;` dopo ogni assignment ad una variabile u32.
+    """Inserisce `__mn_mask_u32(&x)` dopo ogni assignment ad una variabile u32.
 
     Mnemo cell è int64; ops aritmetiche/shift/bitwise C su u32 dovrebbero
-    troncare a 32 bit ma Mnemo non lo fa automaticamente. Questa pass
-    aggiunge il mask esplicito a livello AST, lasciando il lowering esistente
-    (`&=` → `__mn_and_into` reversibile) gestire la conversione.
+    troncare a 32 bit. Mask via helper lib (`mnsplit32`-based, O(1) VM op),
+    NON via `&=` (che usa `__mn_and_into` 31-iter — overhead massivo).
 
     Limiti correnti:
     - Solo lvalue = c.ID di variabile dichiarata localmente o param u32 nel
       contesto. Struct field u32, array element u32, deref puntatori u32:
-      non gestiti (tradeoff costo/complessità).
+      non gestiti.
     - Compound ops (`+=`, `^=`, `*=`, etc.): masked dopo l'op.
     - `++`/`--`: masked dopo.
     - L'rvalue di un assignment non viene maskato (i ops intermedi in int64
@@ -1188,10 +1184,13 @@ def _transform_u32_modular_masks(ast: c.FileAST) -> None:
         return names
 
     def _mask_stmt(var_name: str, coord: object) -> c.Node:
-        return c.Assignment(
-            op="&=",
-            lvalue=c.ID(name=var_name, coord=coord),
-            rvalue=c.Constant(type="unsigned int", value=_U32_MASK_LITERAL, coord=coord),
+        # Call `__mn_mask_u32(x)` — lib helper O(1) via mnsplit32.
+        # Param `int x` Kairos: cell shared con caller (by-reference).
+        return c.FuncCall(
+            name=c.ID(name="__mn_mask_u32", coord=coord),
+            args=c.ExprList(exprs=[
+                c.ID(name=var_name, coord=coord),
+            ], coord=coord),
             coord=coord,
         )
 
@@ -1452,8 +1451,8 @@ def compile_c_to_kairos(
     _transform_hoist_unsafe_if_conds(ast)
     # `T* p = &BASE.arr[i]; ... p->f ...` → alias inline a `BASE.arr[p].f` (int p).
     _transform_struct_array_pointer_alias(ast)
-    # u32 vars: inserisce `x &= 0xFFFFFFFF` dopo ogni assignment per emulare
-    # semantica modular C su Mnemo int64 cell.
+    # u32 vars: inserisce `__mn_mask_u32(&x)` dopo ogni assignment per emulare
+    # semantica modular C. Helper lib basato su mnsplit32 (O(1) VM op).
     _transform_u32_modular_masks(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
