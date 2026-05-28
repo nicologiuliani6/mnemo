@@ -4,34 +4,29 @@
 
 ### `c_test/des.c` — round-trip dec != plain
 
-Status (post-fix VM int64 + mnhalve unsigned + MNSPLIT32 + putx_u64):
+Status (post-fix u32 mask `__mn_mask_u32` lib helper):
 
 - `%llx` u64 OK (MNSPLIT32 + `__mn_putx_u64`).
 - u64 rotate `(key << 5) | (key >> 59)` OK (mnhalve unsigned in `__mn_shr_into`).
 - Subkeys keyschedule OK (verificato `_dbg_keysched.c`).
-- F() inline in main + masks → output matcha gcc (verificato `_dbg_enc1.c`
-  16 rounds: L16=71deeadd R16=14969ffc, dec round-trip OK).
+- u32 modular semantics OK: AST pass auto-inserisce `__mn_mask_u32(x)` dopo
+  ogni assignment a var u32; helper basato su mnsplit32 (O(1) VM op).
+- **`des.c` round-trip `dec == plain` OK** (cipher però differisce da gcc
+  per bug local-array passing — vedi sotto).
 - **Workaround `des_global.c`**: subkeys promosso a global `g_sub[16]` →
-  cipher e dec corretti (matcha gcc).
-- **`des.c` originale `dec != plain`**: oltre ai sub-bugs sotto, anche output
-  non riesce. Repro: `make run FILE=c_test/des.c MAIN_ARGC=0` con o senza
-  `--native-arith`.
+  cipher e dec corretti, matcha gcc esattamente.
 
 Bug aperti:
 
-1. **u32 modular semantics**: ops in F() su u32 non mascherano a 32-bit. c_lower
-   deve tracciare tipo unsigned int e emit `& 0xFFFFFFFF` dopo ogni op
-   aritmetica/shift/xor. Senza mask, valori int64 cell crescono oltre 2^32.
-   Workaround sorgente con mask espliciti già necessario in `_dbg_enc1.c`.
-   Fix: estendere `c_lower.py` per detection u32 type e inserire IAndEq
-   con maschera dopo BinaryOp/UnaryOp che producono u32.
-2. **Local array passing**: `u32 subkeys[16]` in `encrypt()` (non-main) non è
+1. **Local array passing**: `u32 subkeys[16]` in `encrypt()` (non-main) non è
    condiviso con callee `keyschedule`. Local cells `__mn_v___mn_arr_subkeys_*`
    vivono in caller; callee scrive su mem cells diversi. Repro: `c_test/_dbg_arr3.c`
    (use() chiama fill(int a[4]); a resta 0).
    Fix: `layout_collect` deve promuovere array locali non-main passati come
    parametro a `__mn_mem*` slot, oppure inserire copia in/out al call boundary.
-3. **`--opt-uncall-user-calls` + arith helpers → POP empty**:
+   Effetto: cipher Mnemo differisce da gcc (round-trip dec=plain però OK
+   perché bug simmetrico per encrypt e decrypt).
+2. **`--opt-uncall-user-calls` + arith helpers → POP empty**:
    `mnemo run c_test/des.c --opt-uncall-user-calls --native-arith` →
    `[VM] POP: stack vuoto! (frame=__mn_shr_into dest=ph stack=__mn_hist inv=4)`.
    Pattern shr_into (mnhalve-based) hist tracking probabile non riconosciuto
