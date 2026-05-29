@@ -60,14 +60,10 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 ### string.h aggiuntivi
 
-- **`char *strcat(char *dst, const char *src)` / `strncat(dst, src, N)`** —
-  rinviato. Richiede tracking compile-time dello stato corrente di `dst`
-  (lunghezza attuale post-strcpy/post-strcat), che Mnemo non implementa.
-  Alternativa: emit Mnemo lib proc che fa scan runtime di `dst` per NUL
-  e scrive src bytes alla posizione trovata (O(N * src_len) ops per call,
-  flag reversibile per stop-at-first-match). Workaround utente: usare
-  `memcpy(dst + strlen(dst), src, strlen(src) + 1)` con strlen compile-time
-  su dst literal — funziona solo se dst tracciato come literal.
+- ✓ `strcat(dst, src_lit)` / `strncat(dst, src_lit, n)` — runtime byte append
+  con scan reversibile via flag "appended" + snap per-posizione. dst deve
+  essere array Mnemo char, src deve essere string literal. Costo O(N * M)
+  IR ops per call (N = dst.total, M = src_len + 1).
 - ✓ `strchr/strrchr(s, c)` — AST rewrite a sub-literal/NULL.
 - ✓ `strstr(h, n)` — AST rewrite a sub-literal/NULL.
 - ✓ `memcmp(a, b, n)` (commit c6eedc7) — compile-time su 2 string literal.

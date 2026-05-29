@@ -4668,6 +4668,121 @@ def _try_lower_string_h_runtime(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | No
     return None
 
 
+def _try_lower_strcat_strncat(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
+    """`strcat(dst, src_lit)` / `strncat(dst, src_lit, n)` — runtime byte append.
+
+    - `dst` deve essere array Mnemo char/unsigned char.
+    - `src` deve essere string literal (compile-time noto).
+    - `n` per strncat: const int.
+
+    Emit codice unrolled per ogni possibile posizione k del NUL terminator
+    in `dst`. Pattern reversibile per posizione k:
+        snap_k    = (dst[k] == 0) ? 1 : 0
+        snap_km1  = (k > 0) ? (dst[k-1] != 0 ? 1 : 0) : 1
+        snap_kk   = snap_k AND snap_km1   # 1 iff k è il PRIMO NUL
+        if snap_kk == 1: append src + NUL a dst[k..k+M-1]
+
+    Cleanup via push(snap_*, __mn_hist) + delocal int snap_* = 0.
+
+    Costo: O(N * M) op IR per chiamata (N = dst.total, M = src_len + 1).
+    Restituisce list[Instr] o None se non applicabile.
+    """
+    name = call.name.name
+    if name not in ("strcat", "strncat"):
+        return None
+    args = call.args.exprs if call.args is not None else []
+    if name == "strcat":
+        if len(args) != 2:
+            return None
+        dst_arg, src_arg = args[0], args[1]
+        max_n = None
+    else:
+        if len(args) != 3:
+            return None
+        dst_arg, src_arg = args[0], args[1]
+        max_n = _eval_const_int_expr(args[2], ctx)
+        if max_n is None or max_n < 0:
+            return None
+    if not isinstance(dst_arg, c.ID):
+        return None
+    dst_log = _scope_resolve(ctx, dst_arg.name)
+    dst_info = ctx.array_info.get(dst_log)
+    if dst_info is None or dst_info.elem_size != 1:
+        return None
+    sv = _string_literal_value_of(src_arg, ctx)
+    if sv is None:
+        return None
+    src_bytes = sv.encode("utf-8")
+    if max_n is not None and len(src_bytes) > max_n:
+        src_bytes = src_bytes[:max_n]
+    write_bytes = bytes(src_bytes) + b"\x00"
+    M = len(write_bytes)
+    N = dst_info.total
+    if M > N:
+        raise MnemoCompileError(
+            f"{name}: src ({M} byte con NUL) supera dst total={N}"
+        )
+
+    ctx.use_hist = True
+    appended = ctx.fresh_loop_ct()
+    inner_out: list[Instr] = []
+
+    for k in range(N - M + 1):
+        snap_k = ctx.fresh_loop_ct()
+        snap_kk = ctx.fresh_loop_ct()
+        snap_km1 = ctx.fresh_loop_ct() if k > 0 else None
+        snap_app = ctx.fresh_loop_ct()
+
+        dst_k = _phys(ctx, _array_elem_local(dst_log, k))
+        dst_km1 = _phys(ctx, _array_elem_local(dst_log, k - 1)) if k > 0 else None
+
+        innermost: list[Instr] = []
+        # snap_app = (appended == 0) ? 1 : 0  (snapshot del flag append).
+        innermost.append(IIfKairos(appended, "==", "0", [IAddEq(snap_app, Imm(1))], None))
+        # snap_k = (dst[k] == 0) ? 1 : 0
+        innermost.append(IIfKairos(dst_k, "==", "0", [IAddEq(snap_k, Imm(1))], None))
+        if k > 0:
+            # snap_km1 = (dst[k-1] != 0) ? 1 : 0
+            innermost.append(IIfKairos(dst_km1, "!=", "0", [IAddEq(snap_km1, Imm(1))], None))
+        # snap_kk = snap_app AND snap_k [AND snap_km1 se k > 0]
+        if k > 0:
+            innermost.append(IIfKairos(snap_app, "==", "1", [
+                IIfKairos(snap_k, "==", "1", [
+                    IIfKairos(snap_km1, "==", "1", [IAddEq(snap_kk, Imm(1))], None),
+                ], None),
+            ], None))
+        else:
+            innermost.append(IIfKairos(snap_app, "==", "1", [
+                IIfKairos(snap_k, "==", "1", [IAddEq(snap_kk, Imm(1))], None),
+            ], None))
+
+        write_instrs: list[Instr] = []
+        for j in range(M):
+            dst_kj = _phys(ctx, _array_elem_local(dst_log, k + j))
+            write_instrs.append(IHistPush(ctx.hist, dst_kj))
+            if write_bytes[j] != 0:
+                write_instrs.append(IAddEq(dst_kj, Imm(write_bytes[j])))
+        # Set appended = 1 quando si scrive (cond: snap_kk == 1).
+        write_instrs.append(IAddEq(appended, Imm(1)))
+        innermost.append(IIfKairos(snap_kk, "==", "1", write_instrs, None))
+
+        # Cleanup snap_kk
+        innermost.append(IHistPush(ctx.hist, snap_kk))
+
+        block_kk = ILocalBlock(snap_kk, innermost)
+        if k > 0:
+            block_km1 = ILocalBlock(snap_km1, [block_kk, IHistPush(ctx.hist, snap_km1)])
+            block_k = ILocalBlock(snap_k, [block_km1, IHistPush(ctx.hist, snap_k)])
+        else:
+            block_k = ILocalBlock(snap_k, [block_kk, IHistPush(ctx.hist, snap_k)])
+        block_app = ILocalBlock(snap_app, [block_k, IHistPush(ctx.hist, snap_app)])
+        inner_out.append(block_app)
+
+    # Outer ILocalBlock per appended (cleanup finale).
+    inner_out.append(IHistPush(ctx.hist, appended))
+    return [ILocalBlock(appended, inner_out)]
+
+
 def _try_lower_sprintf_snprintf(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
     """`sprintf(buf, fmt, ...)` / `snprintf(buf, n, fmt, ...)` compile-time.
 
@@ -9719,6 +9834,13 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             sp_ins = _try_lower_sprintf_snprintf(node, ctx)
             if sp_ins is not None:
                 return sp_ins
+        if (
+            isinstance(node.name, c.ID)
+            and node.name.name in ("strcat", "strncat")
+        ):
+            sc_ins = _try_lower_strcat_strncat(node, ctx)
+            if sc_ins is not None:
+                return sc_ins
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
             if nm == "mnemo_pthread_parallel2" and any(
