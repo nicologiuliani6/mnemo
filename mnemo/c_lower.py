@@ -4145,13 +4145,19 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     raise MnemoCompileError(
                         f"printf %s: {ex.name!r} non è un char[] (elem_size={info.elem_size})"
                     )
-                # Stampa fino a terminatore o fino a info.total-1, scegliendo
-                # info.total-1 (statico) come limite — il \0 in coda farà
-                # show(0) che è no-op visibile (Kairos VM non stampa 0).
+                # Gate show per cell: emit solo byte != 0. Necessario per buf
+                # over-sized (es. sprintf su char buf[64] con stringa breve):
+                # cell oltre NUL contengono 0 e show(0,char) stampa byte NUL
+                # → diverge da gcc che ferma a NUL. Gating skippa zero byte.
+                # Non protegge da "non-zero dopo NUL" embedded ma quel caso è
+                # unusual e gcc%s lo gestirebbe già fermando al primo NUL.
                 for i in range(info.total - 1):
-                    out.append(
-                        IShow(_phys(ctx, _array_elem_local(arr_log, i)), True)
-                    )
+                    phys_i = _phys(ctx, _array_elem_local(arr_log, i))
+                    out.append(IIfKairos(
+                        phys_i, "!=", "0",
+                        [IShow(phys_i, True)],
+                        None,
+                    ))
             elif (
                 isinstance(ex, c.StructRef)
                 and ex.type == "."
@@ -4660,6 +4666,145 @@ def _try_lower_string_h_runtime(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | No
             ctx,
         )
     return None
+
+
+def _try_lower_sprintf_snprintf(call: c.FuncCall, ctx: _Ctx) -> list[Instr] | None:
+    """`sprintf(buf, fmt, ...)` / `snprintf(buf, n, fmt, ...)` compile-time.
+
+    - `buf` deve essere un array Mnemo char/unsigned char.
+    - `fmt` deve essere un letterale stringa.
+    - Tutti gli args var devono essere costanti (no runtime values).
+    - %s richiede string literal come arg.
+    - Per snprintf, n deve essere costante; output troncato a n-1 byte + NUL.
+
+    Return value (int = byte count) NON catturato: chiamata supportata solo
+    a livello di statement (return value scartato). None se non applicabile.
+    """
+    name = call.name.name
+    if name not in ("sprintf", "snprintf"):
+        return None
+    args = call.args.exprs if call.args is not None else []
+    if name == "sprintf":
+        if len(args) < 2:
+            return None
+        buf_arg = args[0]
+        fmt_idx = 1
+        max_buf_cap = None
+    else:
+        if len(args) < 3:
+            return None
+        buf_arg = args[0]
+        n_val = _eval_const_int_expr(args[1], ctx)
+        if n_val is None or n_val < 0:
+            return None
+        fmt_idx = 2
+        max_buf_cap = n_val
+    if not isinstance(buf_arg, c.ID):
+        return None
+    dst_log = _scope_resolve(ctx, buf_arg.name)
+    dst_info = ctx.array_info.get(dst_log)
+    if dst_info is None or dst_info.elem_size != 1:
+        return None
+    fmt_ex = args[fmt_idx]
+    if not isinstance(fmt_ex, c.Constant) or fmt_ex.type != "string":
+        return None
+    fmt = _literal_c_string(fmt_ex)
+    pieces = _parse_printf_format(fmt)
+    var_args = args[fmt_idx + 1:]
+    nargs = sum(1 for p in pieces if p[0] != "lit")
+    if nargs != len(var_args):
+        return None
+    out_bytes = bytearray()
+    arg_i = 0
+    for piece in pieces:
+        k = piece[0]
+        if k == "lit":
+            out_bytes.extend(piece[1].encode("utf-8"))
+            continue
+        ex = var_args[arg_i]
+        arg_i += 1
+        if k == "c":
+            v = _int_constant_value(ex)
+            if v is None:
+                return None
+            out_bytes.append(v & 0xFF)
+        elif k in ("d", "u"):
+            v = _int_constant_value(ex)
+            if v is None:
+                return None
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
+            if k == "u":
+                s = str(v & 0xFFFFFFFF)
+            else:
+                s = str(v)
+                if v >= 0 and "+" in flags:
+                    s = "+" + s
+                elif v >= 0 and " " in flags:
+                    s = " " + s
+            s = _printf_pad(s, flags, width)
+            out_bytes.extend(s.encode("utf-8"))
+        elif k in ("x", "llx", "X"):
+            v = _int_constant_value(ex)
+            if v is None:
+                return None
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
+            if k == "llx":
+                s = format(v & 0xFFFFFFFFFFFFFFFF, "x")
+            elif k == "X":
+                s = format(v & 0xFFFFFFFF, "X")
+            else:
+                s = format(v & 0xFFFFFFFF, "x")
+            s = _printf_pad(s, flags, width)
+            out_bytes.extend(s.encode("utf-8"))
+        elif k == "o":
+            v = _int_constant_value(ex)
+            if v is None:
+                return None
+            flags = piece[1] if len(piece) > 1 else frozenset()
+            width = piece[2] if len(piece) > 2 else 0
+            s = format(v & 0xFFFFFFFF, "o")
+            s = _printf_pad(s, flags, width)
+            out_bytes.extend(s.encode("utf-8"))
+        elif k == "s":
+            sv = _string_literal_value_of(ex, ctx)
+            if sv is None:
+                return None
+            out_bytes.extend(sv.encode("utf-8"))
+        else:
+            return None
+    if max_buf_cap is not None:
+        if max_buf_cap == 0:
+            return []
+        max_payload = max_buf_cap - 1
+        if len(out_bytes) > max_payload:
+            out_bytes = out_bytes[:max_payload]
+    if len(out_bytes) + 1 > dst_info.total:
+        raise MnemoCompileError(
+            f"{name}: output ({len(out_bytes)}+1 byte) supera buf total={dst_info.total}"
+        )
+    out: list[Instr] = []
+    for i, byte in enumerate(out_bytes):
+        cell_slot = _array_elem_local(dst_log, i)
+        out.extend(
+            _lower_assign(
+                _phys(ctx, cell_slot),
+                c.Constant("int", str(int(byte)), call.coord),
+                ctx,
+            )
+        )
+    nul_pos = len(out_bytes)
+    if nul_pos < dst_info.total:
+        cell_slot = _array_elem_local(dst_log, nul_pos)
+        out.extend(
+            _lower_assign(
+                _phys(ctx, cell_slot),
+                c.Constant("int", "0", call.coord),
+                ctx,
+            )
+        )
+    return out
 
 
 def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
@@ -9529,6 +9674,13 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             str_ins = _try_lower_string_h_runtime(node, ctx)
             if str_ins is not None:
                 return str_ins
+        if (
+            isinstance(node.name, c.ID)
+            and node.name.name in ("sprintf", "snprintf")
+        ):
+            sp_ins = _try_lower_sprintf_snprintf(node, ctx)
+            if sp_ins is not None:
+                return sp_ins
         pthread_ins = _lower_pthread_mnemo_call(node, ctx)
         if pthread_ins is not None:
             if nm == "mnemo_pthread_parallel2" and any(

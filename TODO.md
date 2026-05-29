@@ -54,7 +54,14 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 ### string.h aggiuntivi
 
-- **`char *strcat(char *dst, const char *src)` / `strncat(dst, src, N)`** — compile-time se dst array Mnemo, src letterale o char[]. Append byte-per-byte.
+- **`char *strcat(char *dst, const char *src)` / `strncat(dst, src, N)`** —
+  rinviato. Richiede tracking compile-time dello stato corrente di `dst`
+  (lunghezza attuale post-strcpy/post-strcat), che Mnemo non implementa.
+  Alternativa: emit Mnemo lib proc che fa scan runtime di `dst` per NUL
+  e scrive src bytes alla posizione trovata (O(N * src_len) ops per call,
+  flag reversibile per stop-at-first-match). Workaround utente: usare
+  `memcpy(dst + strlen(dst), src, strlen(src) + 1)` con strlen compile-time
+  su dst literal — funziona solo se dst tracciato come literal.
 - ✓ `strchr/strrchr(s, c)` — AST rewrite a sub-literal/NULL.
 - ✓ `strstr(h, n)` — AST rewrite a sub-literal/NULL.
 - ✓ `memcmp(a, b, n)` (commit c6eedc7) — compile-time su 2 string literal.
@@ -64,7 +71,9 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 ### stdio.h aggiuntivi
 
-- **`int snprintf(char *buf, size_t N, const char *fmt, ...)` / `sprintf(buf, fmt, ...)`** — compile-time fmt parsing (analogo a `printf` esistente). Scrive in buf array Mnemo.
+- ✓ `sprintf(buf, fmt, ...)` / `snprintf(buf, n, fmt, ...)` — compile-time
+  fmt parsing. Supporta %d %u %x %llx %X %o %s %c %% e flag/width.
+  Args devono essere costanti (no runtime values). Return value ignorato.
 
 ---
 
