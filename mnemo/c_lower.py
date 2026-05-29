@@ -4833,6 +4833,20 @@ def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
         if ba > bb:
             return 1
         return 0
+    if name == "strnlen":
+        if len(args) != 2:
+            return None
+        try:
+            n = int(args[1].value, 0) if isinstance(args[1], c.Constant) else None
+        except (ValueError, TypeError):
+            n = None
+        if n is None or n < 0:
+            return None
+        sv = _string_literal_value_of(args[0], ctx)
+        if sv is None:
+            return None
+        real_len = len(sv.encode("utf-8"))
+        return min(real_len, n)
     if name == "strncmp":
         if len(args) != 3:
             return None
@@ -6300,7 +6314,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return pre_ix + chain_va, Var(t_v), tm_ix + [t_v]
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
-        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "strncmp", "atoi", "memcmp", "strspn", "strcspn"):
+        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strnlen", "strcmp", "strncmp", "atoi", "memcmp", "strspn", "strcspn"):
             res = _try_eval_string_builtin(expr, ctx)
             if res is not None:
                 return [], Imm(res), []

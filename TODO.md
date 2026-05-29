@@ -75,6 +75,7 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 - ✓ `strpbrk(s, accept)` — AST rewrite a sub-literal/NULL.
 - ✓ `strdup(const char *s)` (commit bdacbf2) — AST rewrite a literal.
 - ✓ `strncmp(a, b, n)` — compile-time su 2 string literal, byte-diff glibc.
+- ✓ `strnlen(s, n)` — compile-time su string literal.
 
 ### stdio.h aggiuntivi
 
