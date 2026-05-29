@@ -4833,6 +4833,30 @@ def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
         if ba > bb:
             return 1
         return 0
+    if name == "strncmp":
+        if len(args) != 3:
+            return None
+        try:
+            n = int(args[2].value, 0) if isinstance(args[2], c.Constant) else None
+        except (ValueError, TypeError):
+            n = None
+        if n is None or n < 0:
+            return None
+        a = _string_literal_value_of(args[0], ctx)
+        b = _string_literal_value_of(args[1], ctx)
+        if a is None or b is None:
+            return None
+        ba = a.encode("utf-8") + b"\x00"
+        bb = b.encode("utf-8") + b"\x00"
+        for i in range(n):
+            ca = ba[i] if i < len(ba) else 0
+            cb = bb[i] if i < len(bb) else 0
+            if ca != cb:
+                # glibc semantica: ritorna differenza byte (signed int).
+                return ca - cb
+            if ca == 0:
+                return 0
+        return 0
     if name == "atoi":
         if len(args) != 1:
             return None
@@ -6276,7 +6300,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return pre_ix + chain_va, Var(t_v), tm_ix + [t_v]
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
-        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "atoi", "memcmp", "strspn", "strcspn"):
+        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strcmp", "strncmp", "atoi", "memcmp", "strspn", "strcspn"):
             res = _try_eval_string_builtin(expr, ctx)
             if res is not None:
                 return [], Imm(res), []
