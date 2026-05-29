@@ -25,6 +25,12 @@ Workaround alternativi (testati, INSUFFICIENTI):
 - Depth cap via modulo → causa `get_findex: frame @N non trovato` per
   call sites che lookup chiave originale.
 - ulimit -s 512MB → ancora SIGSEGV (memoria corruption, non stack OF).
+- `frame_indexer_count_at_snap` save/restore + reset clone slot names
+  → libera frame *tra* cicli call+uncall consecutivi, ma depth cresce
+  fino @158 DENTRO un singolo inverse (commit ba177bf safety guard).
+- Reset `recursion_depth = 0` su base frame ad UNCALL → non aiuta:
+  la crescita @N avviene in `vm_invert.h:1212-1218` leggendo `@N` dal
+  frame_name corrente, non da `recursion_depth`.
 
 Causa profonda: `recursion_depth` mai resettato. Forward `__mn_putd_uint`
 cresce depth per digit; inverse re-entrara generando frames @1..@N
