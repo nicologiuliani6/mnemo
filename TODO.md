@@ -49,7 +49,7 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 ### stdlib.h
 
 - ✓ `abs/labs/llabs` (commit 6d26944) — AST rewrite a ternario.
-- **`div_t div(int, int)` / `ldiv` / `lldiv`** — struct quoziente+resto. Wrapper su `__mn_divmod_signed`.
+- ✓ `div/ldiv/lldiv` — AST rewrite a `(T){a/b, a%b}` compound literal.
 - ✓ `atoi(const char *)` (commit f286276) — compile-time su literal.
 
 ### string.h aggiuntivi

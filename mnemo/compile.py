@@ -1335,6 +1335,35 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                         if idx < 0:
                             return _make_null(coord)
                         return _make_lit(h[idx:], coord)
+            if node.name.name in ("div", "ldiv", "lldiv") and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 2:
+                    a = rewrite_expr(exprs[0])
+                    b = rewrite_expr(exprs[1])
+                    coord = getattr(node, "coord", None)
+                    type_map = {
+                        "div":   "div_t",
+                        "ldiv":  "ldiv_t",
+                        "lldiv": "lldiv_t",
+                    }
+                    type_name = type_map[node.name.name]
+                    quot = c.BinaryOp("/", a, b, coord)
+                    rem = c.BinaryOp("%", a, b, coord)
+                    typedecl = c.TypeDecl(
+                        declname=None,
+                        quals=[],
+                        align=[],
+                        type=c.IdentifierType([type_name]),
+                    )
+                    typename = c.Typename(
+                        name=None,
+                        quals=[],
+                        align=[],
+                        type=typedecl,
+                        coord=coord,
+                    )
+                    init_list = c.InitList([quot, rem], coord)
+                    return c.CompoundLiteral(type=typename, init=init_list, coord=coord)
             if node.name.name == "strpbrk" and node.args is not None:
                 exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
                 if len(exprs) == 2:
@@ -1672,15 +1701,16 @@ def compile_c_to_kairos(
     _convert_kr_to_ansi(ast)
     # Anonymous struct/union: `struct { ... } p;` → assegna tag sintetico.
     _name_anonymous_structs_unions(ast)
+    # stdlib abs/labs/llabs/strdup/str* AST rewrite. PRIMA di hoist_compound_literals
+    # perché div/ldiv/lldiv emettono CompoundLiteral `(div_t){a/b, a%b}` che
+    # poi viene hoisted in Decl sintetico.
+    _transform_stdlib_abs(ast)
     # CompoundLiteral hoist: `(T[]){...}` → Decl sintetico nel body della funzione
     # contenente. Deve girare PRIMA di `compute_program_mem_layout` così le celle
     # vengono allocate per gli array sintetici.
     _hoist_compound_literals_in_ast(ast)
     # `static int n = …;` → file-scope Decl rinominato. Persiste tra chiamate.
     _hoist_static_locals(ast)
-    # stdlib abs/labs/llabs/strdup AST rewrite. Prima di hoist_string_literal:
-    # strdup("lit") → "lit" così init `char *p = "lit"` resta semplice.
-    _transform_stdlib_abs(ast)
     # `f("lit")` → `char *__mn_anon_str_k = "lit"; f(__mn_anon_str_k)` (skip
     # printf-family). Materializza in pool prima del layout per allocare celle.
     _hoist_string_literal_call_args_in_ast(ast)

@@ -16,4 +16,13 @@ long long       llabs(long long x);
 /* atoi: Mnemo compile-time su string literal. */
 int             atoi(const char *s);
 
+/* div/ldiv/lldiv: Mnemo AST rewrite a compound literal `(T){a/b, a%b}`. */
+typedef struct { int       quot; int       rem; } div_t;
+typedef struct { long      quot; long      rem; } ldiv_t;
+typedef struct { long long quot; long long rem; } lldiv_t;
+
+div_t   div  (int       n, int       d);
+ldiv_t  ldiv (long      n, long      d);
+lldiv_t lldiv(long long n, long long d);
+
 #endif
