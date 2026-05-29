@@ -1236,13 +1236,59 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
 def _transform_stdlib_abs(ast: c.FileAST) -> None:
     """`abs(x)`/`labs(x)`/`llabs(x)` → `(x < 0 ? -x : x)`.
     `strdup("...")` → `"..."` (Mnemo char* da literal già malloc-like).
+    `strchr/strrchr/strstr/strpbrk` su letterali → sub-literal o NULL.
 
     Inlined ternario, reversibile, no lib call. Param può essere espressione
     arbitraria; per side-effect safety si valuta x una sola volta? — no,
     ternary C ammette duplicazione (no side-effects on simple ids/consts).
     Per side-effect-bearing expr (es. `abs(f())`), user deve usare temp.
+
+    string search: sub-string approach, evita "NULL collision" con indice 0.
+    Limitazione: `strchr(s, c) - s` (distanza) non funziona, ma boolean test,
+    `*strchr(...)`, e `strchr(...)[k]` sì.
     """
     abs_names = frozenset({"abs", "labs", "llabs"})
+
+    def _str_lit(n: c.Node) -> str | None:
+        if isinstance(n, c.Constant) and n.type == "string":
+            v = n.value
+            if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+                # Decodifica escape (pycparser non lo fa).
+                return v[1:-1].encode("utf-8").decode("unicode_escape")
+        return None
+
+    def _char_int(n: c.Node) -> int | None:
+        if isinstance(n, c.Constant):
+            if n.type == "char":
+                v = n.value.strip("'")
+                if len(v) == 1:
+                    return ord(v)
+                if v.startswith("\\") and len(v) == 2:
+                    esc = {"n": 10, "t": 9, "r": 13, "0": 0, "\\": 92, "'": 39, '"': 34}
+                    return esc.get(v[1])
+                return None
+            if n.type == "int":
+                try:
+                    s = n.value.rstrip("uUlL")
+                    if len(s) >= 2 and s[0] == "0" and s[1] not in "xXbB.":
+                        s = "0o" + s[1:]
+                    return int(s, 0)
+                except ValueError:
+                    return None
+        if isinstance(n, c.UnaryOp) and n.op in ("+", "-"):
+            inner = _char_int(n.expr)
+            if inner is None:
+                return None
+            return -inner if n.op == "-" else inner
+        return None
+
+    def _make_lit(s: str, coord: c.Coord | None) -> c.Constant:
+        # Re-encode con escape Python; pycparser-friendly.
+        escaped = s.encode("unicode_escape").decode("ascii").replace('"', '\\"')
+        return c.Constant("string", f'"{escaped}"', coord)
+
+    def _make_null(coord: c.Coord | None) -> c.Constant:
+        return c.Constant("int", "0", coord)
 
     def rewrite(node: c.Node) -> c.Node:
         if isinstance(node, c.FuncCall) and isinstance(node.name, c.ID):
@@ -1261,6 +1307,50 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                     # `strdup("lit")` → `"lit"` (Mnemo char* literal materializzato come
                     # array in __mn_ros_*; semantica free() resta no-op via ptr_pool).
                     return exprs[0]
+            if node.name.name in ("strchr", "strrchr") and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 2:
+                    s = _str_lit(exprs[0])
+                    cv = _char_int(exprs[1])
+                    if s is not None and cv is not None and 0 <= cv <= 0x10FFFF:
+                        ch = chr(cv)
+                        coord = getattr(node, "coord", None)
+                        if node.name.name == "strchr":
+                            idx = s.find(ch)
+                        else:
+                            idx = s.rfind(ch)
+                        if idx < 0:
+                            return _make_null(coord)
+                        return _make_lit(s[idx:], coord)
+            if node.name.name == "strstr" and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 2:
+                    h = _str_lit(exprs[0])
+                    n = _str_lit(exprs[1])
+                    if h is not None and n is not None:
+                        coord = getattr(node, "coord", None)
+                        if n == "":
+                            return _make_lit(h, coord)
+                        idx = h.find(n)
+                        if idx < 0:
+                            return _make_null(coord)
+                        return _make_lit(h[idx:], coord)
+            if node.name.name == "strpbrk" and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 2:
+                    s = _str_lit(exprs[0])
+                    accept = _str_lit(exprs[1])
+                    if s is not None and accept is not None:
+                        coord = getattr(node, "coord", None)
+                        accept_set = set(accept)
+                        idx = -1
+                        for i, ch in enumerate(s):
+                            if ch in accept_set:
+                                idx = i
+                                break
+                        if idx < 0:
+                            return _make_null(coord)
+                        return _make_lit(s[idx:], coord)
         return node
 
     def rewrite_expr(n: c.Node) -> c.Node:

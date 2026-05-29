@@ -50,17 +50,16 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 - ✓ `abs/labs/llabs` (commit 6d26944) — AST rewrite a ternario.
 - **`div_t div(int, int)` / `ldiv` / `lldiv`** — struct quoziente+resto. Wrapper su `__mn_divmod_signed`.
-- **`void abort(void)`** — emit "abort\n" + halt.
 - ✓ `atoi(const char *)` (commit f286276) — compile-time su literal.
 
 ### string.h aggiuntivi
 
 - **`char *strcat(char *dst, const char *src)` / `strncat(dst, src, N)`** — compile-time se dst array Mnemo, src letterale o char[]. Append byte-per-byte.
-- **`char *strchr(const char *s, int c)` / `strrchr(s, c)`** — compile-time su letterale: ritorna indice/NULL.
-- **`char *strstr(const char *haystack, const char *needle)`** — compile-time su letterali. Naive search.
+- ✓ `strchr/strrchr(s, c)` — AST rewrite a sub-literal/NULL.
+- ✓ `strstr(h, n)` — AST rewrite a sub-literal/NULL.
 - ✓ `memcmp(a, b, n)` (commit c6eedc7) — compile-time su 2 string literal.
 - ✓ `strspn/strcspn(s, accept)` (commit 7819f96) — char-class compile-time.
-- **`char *strpbrk(s, accept)`** — char-class compile-time su letterali.
+- ✓ `strpbrk(s, accept)` — AST rewrite a sub-literal/NULL.
 - ✓ `strdup(const char *s)` (commit bdacbf2) — AST rewrite a literal.
 
 ### stdio.h aggiuntivi
@@ -78,6 +77,7 @@ Features escluse strutturalmente — non saranno implementate finché Mnemo targ
 - **`goto`** — controllo di flusso non-strutturato, no inverse walk.
 - **`setjmp` / `longjmp`** — stack unwinding non reversibile.
 - **`exit(n)`** dentro funzioni — terminazione non reversibile (la VM gestisce solo return da main).
+- **`abort()`** — terminazione asincrona non reversibile. Stesso motivo di `exit`.
 - **`signal` / signal handlers** — interruzioni asincrone.
 - **Inline asm** (`__asm__`, `asm volatile`) — no IR.
 
