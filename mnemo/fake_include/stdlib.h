@@ -18,6 +18,13 @@ int             atoi (const char *s);
 long            atol (const char *s);
 long long       atoll(const char *s);
 
+/* strtol/strtoul/strtoll/strtoull: Mnemo compile-time su string literal,
+   endptr deve essere NULL, base const. */
+long              strtol  (const char *s, char **endptr, int base);
+unsigned long     strtoul (const char *s, char **endptr, int base);
+long long         strtoll (const char *s, char **endptr, int base);
+unsigned long long strtoull(const char *s, char **endptr, int base);
+
 /* div/ldiv/lldiv: Mnemo AST rewrite a compound literal `(T){a/b, a%b}`. */
 typedef struct { int       quot; int       rem; } div_t;
 typedef struct { long      quot; long      rem; } ldiv_t;

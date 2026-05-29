@@ -5009,6 +5009,65 @@ def _try_eval_string_builtin(call: c.FuncCall, ctx: _Ctx) -> int | None:
         if not digits:
             return 0
         return sign * int(digits)
+    if name in ("strtol", "strtoul", "strtoll", "strtoull"):
+        if len(args) != 3:
+            return None
+        # endptr deve essere NULL (Constant 0 o cast a NULL).
+        e_arg = args[1]
+        if not (
+            (isinstance(e_arg, c.Constant) and e_arg.value in ("0", "0L", "0LL"))
+            or (isinstance(e_arg, c.Cast)
+                and isinstance(e_arg.expr, c.Constant)
+                and e_arg.expr.value in ("0", "0L", "0LL"))
+        ):
+            return None
+        try:
+            base = int(args[2].value, 0) if isinstance(args[2], c.Constant) else None
+        except (ValueError, TypeError):
+            base = None
+        if base is None or (base != 0 and (base < 2 or base > 36)):
+            return None
+        sv = _string_literal_value_of(args[0], ctx)
+        if sv is None:
+            return None
+        s = sv.lstrip()
+        if not s:
+            return 0
+        sign = 1
+        idx = 0
+        if name in ("strtol", "strtoll") and s[0] in "+-":
+            if s[0] == "-":
+                sign = -1
+            idx = 1
+        elif name in ("strtoul", "strtoull") and s[0] == "+":
+            idx = 1
+        # Auto-detect base se base == 0
+        eff_base = base
+        if eff_base == 0:
+            if s[idx:idx+2] in ("0x", "0X"):
+                eff_base = 16
+                idx += 2
+            elif s[idx:idx+1] == "0" and len(s) > idx + 1 and s[idx+1].isdigit():
+                eff_base = 8
+                idx += 1
+            else:
+                eff_base = 10
+        elif eff_base == 16 and s[idx:idx+2] in ("0x", "0X"):
+            idx += 2
+        valid_chars = "0123456789abcdefghijklmnopqrstuvwxyz"[:eff_base]
+        digits = ""
+        while idx < len(s) and s[idx].lower() in valid_chars:
+            digits += s[idx]
+            idx += 1
+        if not digits:
+            return 0
+        try:
+            val = int(digits, eff_base)
+        except ValueError:
+            return 0
+        if name in ("strtoul", "strtoull"):
+            return val & 0xFFFFFFFFFFFFFFFF
+        return sign * val
     if name == "atol" or name == "atoll":
         if len(args) != 1:
             return None
@@ -6451,7 +6510,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return pre_ix + chain_va, Var(t_v), tm_ix + [t_v]
         if isinstance(expr.name, c.ID) and expr.name.name == "__mn_offsetof_str":
             return [], Imm(_resolve_offsetof_args(expr, ctx)), []
-        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strnlen", "strcmp", "strncmp", "atoi", "atol", "atoll", "memcmp", "strspn", "strcspn"):
+        if isinstance(expr.name, c.ID) and expr.name.name in ("strlen", "strnlen", "strcmp", "strncmp", "atoi", "atol", "atoll", "strtol", "strtoul", "strtoll", "strtoull", "memcmp", "strspn", "strcspn"):
             res = _try_eval_string_builtin(expr, ctx)
             if res is not None:
                 return [], Imm(res), []
