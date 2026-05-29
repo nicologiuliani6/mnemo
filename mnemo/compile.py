@@ -1364,6 +1364,27 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                     )
                     init_list = c.InitList([quot, rem], coord)
                     return c.CompoundLiteral(type=typename, init=init_list, coord=coord)
+            if node.name.name == "memchr" and node.args is not None:
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 3:
+                    s = _str_lit(exprs[0])
+                    cv = _char_int(exprs[1])
+                    nv = _char_int(exprs[2])
+                    if s is not None and cv is not None and nv is not None and nv >= 0:
+                        coord = getattr(node, "coord", None)
+                        ba_full = s.encode("utf-8")
+                        target = cv & 0xFF
+                        idx = -1
+                        for i in range(min(nv, len(ba_full))):
+                            if ba_full[i] == target:
+                                idx = i
+                                break
+                        if idx < 0:
+                            return _make_null(coord)
+                        # Sub-string from match offset to end of original (printf %s
+                        # legge fino al NUL del buffer originale, non bounded da n).
+                        sub = ba_full[idx:].decode("utf-8", errors="replace")
+                        return _make_lit(sub, coord)
             if node.name.name == "strpbrk" and node.args is not None:
                 exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
                 if len(exprs) == 2:
