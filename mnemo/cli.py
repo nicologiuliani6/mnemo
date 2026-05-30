@@ -86,9 +86,9 @@ def main(argv: list[str] | None = None) -> None:
     p_c.add_argument(
         "--ptr-pool-size",
         type=int,
-        default=4,
+        default=0,
         metavar="N",
-        help="celle pool malloc/free (__mn_mem0..__mn_mem{N-1}); default 4, max 256",
+        help="celle pool malloc/free (__mn_mem0..__mn_mem{N-1}); default 0 = auto-inferito da numero di malloc/calloc nel sorgente; override solo verso l'alto se serve più capacità",
     )
     p_c.add_argument(
         "--arr-max",

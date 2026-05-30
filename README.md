@@ -47,7 +47,7 @@ mnemo emit-kairos src.c            # solo .kairos su stdout
 | Flag                       | Default | Effetto                                                                                      |
 | -------------------------- | ------- | -------------------------------------------------------------------------------------------- |
 | `--main-argc N`            | 0       | `argc` iniziale per `main` (override `// mnemo-main-argc:`)                                  |
-| `--ptr-pool-size N`        | auto    | Celle pool malloc/free. Default: auto-inferito dal numero di `malloc`/`calloc` nel sorgente. Flag = minimo (override solo verso l'alto). Max 2048; banked pools se serve. |
+| `--ptr-pool-size N`        | 0 = auto | Celle pool malloc/free. Senza flag, Mnemo conta `malloc`/`calloc` nel sorgente e alloca esattamente quanto serve (no manual tuning). Flag > 0 = minimo (override solo verso l'alto, utile per malloc in loop runtime non inferibili staticamente). Max 2048; banked pools sopra 998. |
 | `--arr-max N`              | 1024    | Limite elementi per array (max 65536)                                                        |
 | `--opt-uncall-user-calls`  | off     | Per ogni `call f(...)` eligible: snapshot XOR + uncall + swap (frees Kairos stacks)          |
 | `--check-invertibility`    | off     | Wrappa `main` in proc + `call __main__ ; uncall __main__` per verificare reversibilità 100%  |

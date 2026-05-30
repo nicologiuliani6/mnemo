@@ -1942,7 +1942,7 @@ def compile_c_to_kairos(
     path: str,
     *,
     main_argc: int | None = None,
-    ptr_pool_size: int = 4,
+    ptr_pool_size: int = 0,
     opt_uncall_user_calls: bool = False,
     check_invertibility: bool = False,
     arr_max: int | None = None,
@@ -2009,11 +2009,18 @@ def compile_c_to_kairos(
         raise MnemoCompileError("main_argc deve essere >= 0")
     # Auto-sizing del pool puntatori: conta call site di malloc/calloc nel
     # programma (upper bound conservativo: assume tutte vivanti simultanee +
-    # nessuna free intermedia). Il flag --ptr-pool-size diventa minimo:
-    # user can override verso l'alto se serve più capacità di quella inferita.
+    # nessuna free intermedia). Default `--ptr-pool-size 0` = auto puro;
+    # flag user > 0 funziona come MIN (override solo verso l'alto se serve
+    # più capacità di quella inferita, es. malloc in loop runtime).
     inferred_pool = _infer_ptr_pool_size(ast)
     if inferred_pool > ptr_pool_size:
         ptr_pool_size = inferred_pool
+    # Fallback: ogni programma deve avere almeno 1 cella pool per `int *p =
+    # NULL` (slot 0 = sentinel). Auto-infer ritorna 0 se non c'è nessun
+    # malloc/calloc; serve almeno 1 perché `compute_program_mem_layout`
+    # alloca cells = heap_base + ptr_pool_size con heap_base>=1.
+    if ptr_pool_size < 1:
+        ptr_pool_size = 1
     layout = compute_program_mem_layout(ast, ptr_pool_size)
     mem_units = 2 if _ast_needs_two_mem_partitions(ast) else 1
     physical_mem_cells = layout.total_cells * mem_units
