@@ -1,448 +1,176 @@
 # Mnemo
 
-**Mnemo** è una toolchain che compila un **subset reversibile di C** in programmi **Kairos** (`.kairos`), eseguibili sulla **VM reversibile** del repository **[Kairos](https://github.com/nicologiuliani6/kairos)** (clone separato accanto a questo repo, oppure path impostato con `KAIROS_ROOT`). Non è un compilatore C generico: è un ponte tra un linguaggio familiare (C ristretto) e un modello di calcolo dove ogni passo può essere invertito — variabili intere, stack di storia, `if`/`fi`, `from`/`until`, `par`/`rap`, canali e vincoli descritti nel README Kairos.
+Compilatore da un **subset reversibile di C** a **Kairos** (`.kairos`), il
+linguaggio sorgente della VM reversibile [Kairos](https://github.com/nicologiuliani6/kairos).
+
+Mnemo **non** vendora Kairos. Il repo Kairos deve esistere in `$KAIROS_ROOT`
+(default `../kairos`), buildato con `make build-release`.
 
 ---
 
-## Indice
-
-1. [Struttura del progetto](#struttura-del-progetto)
-2. [Installazione e compilazione](#installazione-e-compilazione)
-   - [Requisiti](#requisiti)
-   - [Setup da zero](#setup-da-zero)
-   - [Posizione del repository Kairos](#posizione-del-repository-kairos)
-3. [Toolchain — Makefile e CLI](#toolchain--makefile-e-cli)
-4. [Architettura interna](#architettura-interna)
-5. [Relazione con Kairos (runner, VM, uscita)](#relazione-con-kairos-runner-vm-uscita)
-6. [Librerie `lib/*.kairos` e inclusione automatica](#librerie-libkairos-e-inclusione-automatica)
-7. [Memoria unificata, pool e limiti](#memoria-unificata-pool-e-limiti)
-8. [Parallelismo e ABI pthread](#parallelismo-e-abi-pthread)
-9. [Esempi di header: `mps.h`, `mnemo_sync_print.h`](#esempi-di-header-mpsh-mnemo_sync_printh)
-10. [Direttive nel sorgente C](#direttive-nel-sorgente-c)
-11. [Mnemo rispetto al C standard](#mnemo-rispetto-al-c-standard)
-12. [Subset C — dettaglio](#subset-c--dettaglio)
-13. [Formato IR](#formato-ir)
-14. [Test](#test)
-15. [Errori comuni](#errori-comuni)
-16. [Licenza e progetto](#licenza-e-progetto)
-
----
-
-## Struttura del progetto
-
-```
-mnemo/
-├── Makefile
-├── README.md
-├── pyproject.toml
-├── mps.h                      ← API producer/consumer sincrona (POSIX + ramo MNEMO per VM)
-├── mnemo_sync_print.h         ← printf serializzato tra thread (opzionale)
-├── PC.c                       ← esempio dimostrativo parallelo
-├── mnemo/
-│   ├── __init__.py
-│   ├── __main__.py            ← entry point pacchetto
-│   ├── cli.py                 ← comandi compile / run / dump-ir
-│   ├── compile.py             ← orchestrazione parse → layout → lower → emit
-│   ├── c_parse.py             ← preprocess (gcc -E) + pycparser
-│   ├── c_lower.py             ← AST C → IR (Program, Function, …)
-│   ├── layout_collect.py      ← celle __mn_mem*, partizioni PAR, slot condivisi
-│   ├── emit_kairos.py         ← IR → testo Kairos
-│   ├── ir.py                  ← definizione istruzioni IR
-│   ├── prelude.py             ← preambolo e fusione librerie
-│   ├── ptr_pool_kairos.py     ← generazione procedure __mn_pool_* (N celle)
-│   ├── inline_user.py         ← inline funzioni utente se serve rispettare limiti call
-│   ├── par_shared_mutex_check.py
-│   ├── kairos_limits.py       ← tetto argomenti/parametri VM
-│   ├── errors.py
-│   └── ir_dump.py
-├── lib/
-│   ├── helpers.kairos
-│   ├── mul.kairos
-│   ├── divmod.kairos
-│   ├── mod.kairos
-│   ├── bits.kairos
-│   ├── putd.kairos            ← stampa decimale per printf %d non costante
-│   └── ptr_pool.kairos        ← stub; __mn_pool_* generate a compile-time
-├── c_examples/
-│   └── ex00_*.c … ex35_*.c    ← esempi per make test
-├── tests/
-│   ├── test_parallel_partition.py
-│   └── test_par_shared_mutex.py
-└── runtime/
-    └── README.md
-```
-
-Il repository **Kairos** (VM, frontend `src/kairos.py`, `build/libvm.so`) va tenuto separato; Mnemo non lo vendorizza.
-
----
-
-## Installazione e compilazione
-
-### Requisiti
-
-| Componente | Note |
-|------------|------|
-| Python | ≥ 3.10 |
-| gcc | Nel `PATH`; usato come preprocessore (`gcc -E`) per pycparser |
-| pycparser | Dipendenza del pacchetto (`pip install -e .`) |
-| Repo Kairos | Per `mnemo run` / `make test`: venv, `make build-release` → `build/libvm.so` |
-
-### Setup da zero
+## Installazione
 
 ```bash
-# 1. Clone Mnemo (e accanto, clone Kairos — vedi sotto)
-git clone <URL-del-repo-mnemo>
-cd mnemo
-
-# 2. Virtualenv e installazione editabile
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-# 3. Nel repo Kairos: compila la VM
-cd ../kairos
-make install-deps    # se usi il makefile Kairos
-make build-release
-
-# 4. Torna in Mnemo e prova
-cd ../mnemo
-mnemo compile c_examples/ex00_add_simple.c   # eseguibile + libvm.so (serve gcc)
-mnemo dump-kairos c_examples/ex00_add_simple.c   # solo .kairos
-mnemo run c_examples/ex00_add_simple.c
+git clone https://github.com/nicologiuliani6/mnemo.git
+git clone https://github.com/nicologiuliani6/kairos.git   # accanto a mnemo
+cd kairos && make build-release && cd ../mnemo
+make venv        # crea .venv + pip install -e .
 ```
 
-### Posizione del repository Kairos
+Richiede: Python 3.10+, `gcc`, `make`. La VM Kairos viene compilata da C.
 
-Layout consigliato (stessa directory padre):
+Variabili d'ambiente:
 
-```text
-.../mnemo/
-.../kairos/          ← venv, build/libvm.so
-```
+| Variabile               | Default        | Effetto                                                |
+| ----------------------- | -------------- | ------------------------------------------------------ |
+| `KAIROS_ROOT`           | `../kairos`    | Path repo Kairos                                       |
+| `MNEMO_KAIROS_ROOT`     | =`KAIROS_ROOT` | Alias                                                  |
+| `MNEMO_KAIROSAPP`       | `kairosapp`    | Override eseguibile runner                             |
+| `KAIROS_NATIVE_ARITH=1` | off            | mul/div/mod/bitwise O(1) in C (anche `--native-arith`) |
 
-Se Kairos non è in `../kairos`:
+---
+
+## CLI
+
+Dopo `pip install -e .` (o via `make venv`):
 
 ```bash
-export KAIROS_ROOT=/percorso/al/repo/kairos
-# oppure
-export MNEMO_KAIROS_ROOT=/percorso/al/repo/kairos
+mnemo compile src.c [opzioni]      # → eseguibile nativo (bytecode + libvm.so)
+mnemo dump-kairos src.c [-o out.kairos] [--stdout]
+mnemo run src.c [opzioni]          # compila ed esegue
+mnemo dump-ir src.c                # IR umano-leggibile
+mnemo emit-kairos src.c            # solo .kairos su stdout
 ```
 
-Il **Makefile** di Mnemo usa `KAIROS_ROOT` con default `$(pwd)/../kairos`.
+### Flag (validi per `compile`, `dump-kairos`, `run`)
+
+| Flag                       | Default | Effetto                                                                                      |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------- |
+| `--main-argc N`            | 0       | `argc` iniziale per `main` (override `// mnemo-main-argc:`)                                  |
+| `--ptr-pool-size N`        | 4       | Celle pool malloc/free (max 256). Fallback banked pools se serve.                            |
+| `--arr-max N`              | 1024    | Limite elementi per array (max 65536)                                                        |
+| `--opt-uncall-user-calls`  | off     | Per ogni `call f(...)` eligible: snapshot XOR + uncall + swap (frees Kairos stacks)          |
+| `--check-invertibility`    | off     | Wrappa `main` in proc + `call __main__ ; uncall __main__` per verificare reversibilità 100%  |
+| `--keep-kairos`            | off     | (solo `compile`) Scrive anche `stem.kairos` accanto al `.c`                                  |
+| `-v`/`--verbose`           | off     | Log su stderr                                                                                |
+
+### Flag solo `run`
+
+| Flag             | Effetto                                                              |
+| ---------------- | -------------------------------------------------------------------- |
+| `--kairosapp P`  | Override runner (default `$MNEMO_KAIROSAPP` o `kairosapp`)           |
+| `--native-arith` | `KAIROS_NATIVE_ARITH=1` nella VM                                     |
+| `--vm-dump`      | Stampa anche il blocco dump della VM (default off)                   |
+| `--vm-stats`     | Stampa `mean_abs` + `max_abs` dei cell int post-execution            |
 
 ---
 
-## Toolchain — Makefile e CLI
+## Subset C supportato
 
-### Makefile (root Mnemo)
+**Tipi scalari**: `int`, `unsigned`, `bool`/`_Bool`, `char` (variabile +
+literal), `short`/`long`/`long long` (alias a `int`), `size_t`,
+`int*_t`/`uint*_t` (via `mnemo/fake_include/`).
 
-| Comando | Descrizione |
-|---------|-------------|
-| `make` / `make help` | Riepilogo target |
-| `make venv` | Crea `.venv` ed esegue `pip install -e .` |
-| `make compile` | `mnemo dump-kairos` su tutti `c_examples/*.c` → `.kairos` |
-| `make test-unit` | `pytest` / unittest in `tests/` **senza** eseguire la VM |
-| `make test` | Compila esempi, richiede Kairos in `KAIROS_ROOT`, `make build-release`, esegue ogni `.kairos` con timeout |
-| `make test-gcc-compat` | Confronta `mnemo run` vs `gcc` su `c_examples/gcc_compat/generic_*.c` (stdout + exit code + warning gcc = fail) |
-| `make test-gcc-compat-stop` | Come sopra, ma si ferma al primo failure |
-| `make run FILE=c_examples/ex00_add_simple.c` | Compila ed esegue un singolo `.c` |
-| `make run FILE=… MAIN_ARGC=N` | Equivale a `--main-argc N` (senza spazi strani dopo `FILE=`) |
-| `make clean-kairos` | Rimuove `c_examples/*.kairos` generati |
+**No** floating-point (`float`/`double`/`_Complex`/`<math.h>`).
 
-Note rapide per `test-gcc-compat`:
+**Puntatori**: indici in pool. `void *`, multi-level `int **p`, aritmetica
+`p+i`, `p++`, `*(p+i)`, `q-p` su array. `&id` e `&struct.field` ammessi.
 
-- puoi passare argomenti al runner con `COMPAT_ARGS`, es.:
-  - `make test-gcc-compat COMPAT_ARGS='--stop-on-first-fail'`
-  - `make test-gcc-compat COMPAT_ARGS='--category control'`
-- categorie macro disponibili: `types`, `expr`, `control`, `ptr`, `struct_union`, `runtime`
-- artifact dei mismatch: `c_examples/gcc_compat/artifacts/*.json`
+**Strutture**: `struct`, `union`, `enum`, bit-field NO, `__attribute__` NO.
 
-### CLI `mnemo`
+**Controllo**: `if`/`else`, `switch`/`case` (body `{...}`), `while`, `do`,
+`for`. **No** `goto`, `setjmp`/`longjmp`, `_Atomic`, inline asm, VLA.
 
-```bash
-mnemo compile sorgente.c                    # → eseguibile nativo (stem) + libvm.so (stessa dir); niente dump VM
-mnemo compile sorgente.c -o mioapp         # nome eseguibile; copia libvm.so accanto
-mnemo compile sorgente.c --keep-kairos      # emette anche sorgente.kairos per ispezione
-mnemo dump-kairos sorgente.c                # solo testo .kairos accanto al .c
-mnemo dump-kairos sorgente.c -o out.kairos
-mnemo dump-kairos sorgente.c --stdout
-mnemo compile sorgente.c -v                 # stampa comando gcc e path
-mnemo compile sorgente.c --main-argc N
-mnemo compile sorgente.c --ptr-pool-size N  # default 4; tetto in kairos_limits.py
-mnemo compile sorgente.c --opt-uncall-user-calls  # main→f (f non ricorsiva): XOR risultato + uncall dopo call
+**Funzioni**: function pointer solo compile-time-resolved (`p = f`,
+`&f`, `f` stesso file). No variadic user-defined. `main` accetta `void`,
+`int argc`, o `int argc, char **argv` (argv stub sintattico).
 
-mnemo run sorgente.c
-mnemo run sorgente.c --main-argc N --ptr-pool-size N -v
-mnemo run sorgente.c --opt-uncall-user-calls
-mnemo run sorgente.c --kairosapp /percorso/kairosapp
+**Parallelismo**: `mnemo_pthread_parallel2(a, b)` con 2 worker distinti
+emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
+π-calcolo. Vedi `mps.h` per pattern producer/consumer.
 
-mnemo dump-ir
-mnemo emit-kairos
-```
+### Librerie standard supportate
 
-Variabili d’ambiente:
+#### `<stdlib.h>`
+- `malloc(n)` / `free(p)` — ptr_pool reversibile.
+- `abs` / `labs` / `llabs` — AST rewrite a ternario.
+- `div` / `ldiv` / `lldiv` — AST rewrite a compound literal `(T){a/b, a%b}`.
+- `atoi` / `atol` / `atoll` — compile-time su string literal.
+- `strtol` / `strtoul` / `strtoll` / `strtoull` — compile-time, supporta
+  base 0/8/10/16 e prefissi `0x`/`0`.
 
-| Variabile | Uso |
-|-----------|-----|
-| `KAIROS_ROOT`, `MNEMO_KAIROS_ROOT` | Root del repo Kairos per il runner |
-| `MNEMO_KAIROSAPP` | Eseguibile alternativo a `python -m src.kairos` |
+#### `<string.h>`
+- `strlen` / `strnlen` — compile-time su literal.
+- `strcmp` / `strncmp` / `memcmp` — compile-time, byte-diff glibc semantics.
+- `strcasecmp` / `strncasecmp` — compile-time case-insensitive.
+- `strchr` / `strrchr` / `strstr` / `strpbrk` — AST rewrite a sub-literal/NULL.
+- `strspn` / `strcspn` — char-class compile-time.
+- `strdup` — AST rewrite a literal.
+- `memchr` — AST rewrite a sub-literal/NULL.
+- `memcpy` / `memset` / `memmove` — compile-time su dst array Mnemo.
+- `strcpy` / `strncpy` — compile-time.
+- `strcat` / `strncat` — runtime byte append reversibile (dst char[] Mnemo,
+  src string literal).
 
-Se modifichi i sorgenti C della VM Kairos, esegui di nuovo `make build-release` nel repo Kairos prima di `mnemo run`, altrimenti resta in uso un `libvm.so` obsoleto (il frontend Kairos segnala avvisi simili su *stderr*).
+#### `<strings.h>` (POSIX legacy)
+- `bzero` → `memset(p, 0, n)`.
+- `bcopy(src, dst, n)` → `memmove(dst, src, n)`.
+- `index` / `rindex` → alias di `strchr` / `strrchr`.
 
----
+#### `<stdio.h>`
+- `printf` / `putchar` / `puts` — runtime (auto-include `putd.kairos` per `%d`).
+- `sprintf` / `snprintf` — compile-time fmt parsing. Supporta
+  `%d %u %x %llx %X %o %s %c %%` + flag/width. Args costanti.
 
-## Architettura interna
+#### `<pthread.h>` (subset Mnemo)
+- `mnemo_pthread_parallel2(a, b)` — 2 worker → `par`/`rap`.
+- `pthread_mutex_t` / `pthread_mutex_lock` / `_unlock` — channel π-calcolo.
 
-```text
-file.c
-    │
-    ▼
-[ gcc -E -DMNEMO ]  ──  preprocessore (no stdio completo nel parse)
-    │
-    ▼
-[ pycparser ]  ──  AST C (`c_ast`)
-    │
-    ▼
-[ layout_collect.py ]  ──  ProgramMemLayout: slot __mn_mem*, partizione 2·S per PAR, slot condivisi
-    │
-    ▼
-[ c_lower.py ]  ──  AST → IR (`Program`, `Function`, ICall, IPar, ISsend, …)
-    │
-    ▼  (opzionale)
-[ inline_user.py ]  ──  se troppe celle / troppi argomenti per le `call` Kairos
-    │
-    ▼
-[ prelude.py + lib/*.kairos + ptr_pool_kairos(N) ]  ──  preambolo unico
-    │
-    ▼
-[ emit_kairos.py ]  ──  testo sorgente `.kairos`
-    │
-    ▼
-[ python -m src.kairos ]  ──  frontend Kairos → bytecode → libvm.so
-```
+#### `<stdarg.h>`
+- `va_list` / `va_start` / `va_arg` / `va_end` — runtime variadic.
 
-L’**IR** è definito in `mnemo/ir.py` (costanti, `+=`/`-=`, `IHistPush`, `IIfKairos`, `IFromUntilKairos`, `ILocalBlock`, `IPar`, `IUncall`, canali, ecc.). Opzione **`--opt-uncall-user-calls`**: ogni **`call`** idoneo a una procedura **`f`** nel medesimo file (`f` **non ricorsiva**, **`f`** senza **`par`** / **`ssend`/`srecv`** / esclusioni VM) viene seguito da snapshot XOR di **tutte** le celle **`__mn_mem*`** (`uncall` le riporta al pre‑`call`; poi XOR‑swap ripristina i valori post‑`call`); gli **stack Kairos** del chiamante restano affidati alla coppia `call`/`uncall`. Per **`void f()`** ⇒ `call` + quel blocco + `uncall`; per **`int f()`** ⇒ dopo il ripristino memorie si leggono gli slot di ritorno sul frame piatto. Compilazione a **due passaggi** sulle funzioni utente quando il flag è attivo (serve per calcolare le esclusioni). Ricorsione diretta o `parallel2(f, f, …)` sempre escluse ([`fib`](c_test/fib.c)). [`c_test/encrypt.c`](c_test/encrypt.c) è tutto dentro **`main`** (nessuna chiamata a user proc): il flag non cambia quel programma.
+### Direttive sorgente
 
-- `mnemo_pthread_parallel2`: con **due worker distinti nel file** viene emesso Kairos **`par`** e la memoria viene raddoppiata a **`2·S`** celle (`compile.py`). Con **`parallel2(f, f, …)` dentro lo stesso `f`**, ogni ricorsione che entrasse davvero in `par` richiederebbe altre partizioni sulla metà disponibile ⇒ in generale **`O(2^profondità)`** celle; allochiamo solo **`2·S`**, quindi quel caso resta **sequenziale** (due `call` in serie) così risultati restano corretti (`c_test/fib.c`).
+| Direttiva                                  | Effetto                                                |
+| ------------------------------------------ | ------------------------------------------------------ |
+| `// mnemo-main-argc: N`                    | `argc` iniziale (default 0)                            |
+| `// mnemo-skip-par-shared-mutex-check`     | Disabilita check statico mutex condivisi tra par      |
+| `// KAIROS_ALLOW_PAR_SHARED_INT`           | Permette int condiviso tra par branches                |
 
 ---
 
-## Relazione con Kairos (runner, VM, uscita)
+## Make targets
 
-- Il bytecode viene prodotto dal **frontend Python di Kairos** e passato a **`libvm.so`** (`vm_run_from_string`).
-- **`mnemo run`** risolve il runner in ordine:
-  1. `venv/bin/python -m src.kairos` sotto `KAIROS_ROOT` / `MNEMO_KAIROS_ROOT` / `../kairos`;
-  2. oppure `kairosapp` o `MNEMO_KAIROSAPP` / `--kairosapp`.
-- Il runner stampa anche il **dump VM** (`=== VM dump ===`). Il valore di ritorno di `main` è emesso come `show` su `__mn_exit`; **`mnemo run`** tenta di usare `__mn_exit: N` come **codice di uscita** del processo se la VM termina con successo.
+| Target                                  | Cosa fa                                                 |
+| --------------------------------------- | ------------------------------------------------------- |
+| `make venv`                             | Crea `.venv` + `pip install -e .`                       |
+| `make compile`                          | Compila tutti gli esempi a `.kairos`                    |
+| `make run FILE=c_test/loop.c`           | End-to-end single file                                  |
+| `make test-unit`                        | Unit Python (no VM)                                     |
+| `make test`                             | Compile + run di ogni esempio (timeout 5s)              |
+| `make test-gcc-compat`                  | Diff comportamentale gcc-vs-Mnemo                       |
+| `make test-gcc-compat-stop`             | Fail-fast version                                       |
+| `make clean-kairos`                     | Rimuove `.kairos` generati                              |
 
-Programmi con **`par`** e variabili `int` condivise tra rami possono richiedere (Mnemo la inserisce quando serve):
-
-```text
-// KAIROS_ALLOW_PAR_SHARED_INT
-```
-
-Per il **linguaggio Kairos** (reversibilità, `push`/`pop`, `if`/`fi`, canali, `par`, controlli statici) fare riferimento al **README del repository Kairos** (nel clone locale, di solito nella directory accanto a Mnemo) o alla documentazione installata con il pacchetto Kairos.
-
----
-
-## Librerie `lib/*.kairos` e inclusione automatica
-
-Mnemo **non** richiede `#include` verso i `.kairos`: le procedure vengono aggiunte automaticamente.
-
-1. **Operatori:** compaiono `*`, `/`, `%` → `mul.kairos`, `divmod.kairos` / `mod.kairos`, `helpers.kairos`; per bitwise → `bits.kairos` (che dipende da mul/divmod/helpers).
-2. **`printf`** con `%d` e argomenti non costanti → anche `putd.kairos` (e dipendenze già citate).
-3. **Chiamate:** `f(...)` definita nel `.c` → lowering coerente; `f` solo dichiarata e non built-in → ricerca `procedure f(` in `lib/*.kairos`.
-4. **`malloc` / `free`** → pool (`ptr_pool.kairos` + emissione `emit_ptr_pool_kairos` con `N` dal layout).
-
-Se due file in `lib/` definiscono la stessa `procedure`, la compilazione fallisce con errore esplicito.
-
-| File | Ruolo tipico |
-|------|----------------|
-| `helpers.kairos` | Movimenti e helper reversibili base. |
-| `mul.kairos` | `__mn_mul_into`. |
-| `divmod.kairos` | `__mn_divmod_nonneg`. |
-| `mod.kairos` | `__mn_mod_nonneg`. |
-| `bits.kairos` | AND/OR, shift via aritmetica. |
-| `putd.kairos` | `__mn_putd` / `__mn_putd_uint` per `%d` dinamico. |
-| `ptr_pool.kairos` | Riferimento; le `__mn_pool_*` sono generate con `N` celle. |
+`make test-gcc-compat COMPAT_ARGS='--category control'` per filtrare.
 
 ---
 
-## Memoria unificata, pool e limiti
+## Esclusioni note
 
-- Le celle del programma sono **`__mn_mem0` … `__mn_mem{N-1}`** con `N` derivato dal **layout** (variabili, `malloc`, partizione parallela, ecc.).
-- **`--ptr-pool-size`** influenza il layout quando applicabile (default **4** nel CLI). Esiste un tetto **`PTR_POOL_MAX`** in `mnemo/kairos_limits.py`.
-- La VM Kairos ha limiti su **numero di argomenti per `call`** e **parametri per procedura** (ordine di grandezza documentato in `kairos_limits.py`). Oltre quella soglia Mnemo usa pool **bancati** (`__mn_pool_store_b0`, …) e, per funzioni utente nello stesso file se necessario, **`inline_user`** — l’inline **non** è compatibile con l’ABI `mnemo_pthread_parallel2` a due worker sullo stesso file se servono entrambe le cose: vedi messaggi di compilazione.
+Vedi `TODO.md` per dettagli. Esclusi strutturalmente:
 
----
-
-## Parallelismo e ABI pthread
-
-Mnemo abbassa questi costrutti a **`par … and … rap`** (due thread Kairos):
-
-| ABI | Uso |
-|-----|-----|
-| `mnemo_pthread_parallel2(a, b)` | Due worker `void (*)(void)` (firma generica in VM). |
-| `mnemo_pthread_parallel2(a, b, …)` | Argomenti nell’ordine della firma C: prima tutti i parametri di `a`, poi di `b`. |
-| `mnemo_pthread_parallel_with(w, c)` | Worker + continuazione. |
-| `mnemo_pthread_parallel_with1(w, arg, c)` | Worker con un argomento scalare. |
-| `mnemo_pthread_start` / `mnemo_pthread_start1` | Un solo ramo par/rap. |
-
-**Due finestre di memoria:** il ramo sinistro usa `__mn_mem0…S-1`, il destro `__mn_memS…2S-1`; gli indici in `parallel_file_shared_slots` usano lo **stesso** actual `__mn_mem{i}` in entrambi i rami (es. un campo struct condiviso).
-
-**`pthread_mutex_t`** nel modello Mnemo diventa **canale** Kairos (token stile π-calcolo). Per controlli statici aggiuntivi: `mnemo/par_shared_mutex_check.py` e `// mnemo-skip-par-shared-mutex-check` (commento nelle prime righe del `.c`).
-
-**`mps.h`:** in **POSIX** la sincronizzazione producer/consumer usa due semafori (`g_slot_free`, `g_data_ready`) per un buffer implicito da un elemento. Nel ramo **`#ifdef MNEMO`** la stessa logica è replicata con **due** mutex-canale (non basta un solo `g_xfer`: con `par` reale i token possono accumularsi e i valori letti saltano). In `destroy_mutexes` (MNEMO) è necessario un `pthread_mutex_unlock` su `g_data_ready` prima dei `destroy`, perché il lowering di `pthread_mutex_destroy` esegue un `srecv` che si aspetta un token residuo.
+- Floating-point (`float`/`double`/`<math.h>`).
+- I/O reale (`scanf`, `fopen`, `fread`, ...).
+- `goto`, `setjmp`/`longjmp`, `_Atomic`, inline asm.
+- Multi-TU / linker.
+- `__attribute__`, `__builtin_*`.
+- VLA (array runtime-sized).
+- `signal`/handlers, `exit`/`abort` dentro funzioni.
+- `errno`, `argv` POSIX reali (solo stub).
 
 ---
 
-## Esempi di header: `mps.h`, `mnemo_sync_print.h`
+## Licenza
 
-- **`mps.h`**: struct `mps_t`, `init_mutexes` / `destroy_mutexes`, `ssend` / `srecv`, e sotto `#ifndef MNEMO` il wrapper `mnemo_pthread_parallel2` per **gcc** + pthread reale.
-- **`mnemo_sync_print.h`**: mutex globale dedicato alla stampa; dopo l’include, **`printf`** è ridefinito come stampa serializzata (`(printf)(…)` evita ricorsione di macro). Richiede `MNEMO_SYNC_PRINT_DEFINE_MUTEX` in **una** unità di traduzione, più `mnemo_sync_print_setup` / `teardown` attorno ai thread. Con **`-DMNEMO`** non si include `<stdio.h>` (evita `stdarg.h` nel parse).
-
----
-
-## Direttive nel sorgente C
-
-| Direttiva | Effetto |
-|-----------|---------|
-| `// mnemo-main-argc: N` | Valore iniziale di `argc` per `int main(int argc, …)` (≥ 0). Default **0** se assente. Sovrascrivibile con `--main-argc` / `MAIN_ARGC=`. |
-| `// mnemo-skip-par-shared-mutex-check` | Disattiva il controllo statico su slot condivisi + mutex nel PAR (casi avanzati). |
-
----
-
-## Mnemo rispetto al C standard
-
-Mnemo **non** implementa il C di ISO/IEC: il preprocessore è quello di **gcc -E**, ma l’AST viene interpretato da un **subset** pensato per abbassare a **Kairos**. Qui: cosa puoi ragionevolmente aspettarti come in C, e cosa **manca** o **è diverso**. **Backlog e limiti aggiornati**: file [`TODO.md`](TODO.md) nella root del repo; dettaglio regole Cursor in [`.cursor/rules/mnemo-c-subset.mdc`](.cursor/rules/mnemo-c-subset.mdc).
-
-### C’è (in sintesi, come nel C “di tutti i giorni”)
-
-| Area | Cosa è previsto |
-|------|------------------|
-| **Struttura del programma** | Funzioni, parametri, variabili locali/globali/file-scope, blocchi `{ }`, visibilità di base. |
-| **Tipi scalari** | `int`, `unsigned` / `unsigned int`, `_Bool` / `bool`, `char` (incl. letterali carattere dove supportato). |
-| **Tipi derivati** | `typedef`, `struct` (campi scalari e sotto-struct anonime), `union` (solo membri scalari), `enum`. |
-| **Puntatori** | `int *`, `void *`, ecc.; dereferenziazione `*p`, assegnamento `*p = …`; subset di `malloc` / `free` sul **pool** Mnemo. |
-| **Array** | Array statici e multidimensionali row-major; array parametro con decay a puntatore; inizializzatori in molti casi. |
-| **Operatori** | `+ - * / %`, unario `-`, confronti, AND/OR/NOT logici, `sizeof`, cast verso tipi supportati, `?:`, virgola `,`, `^` / `^=`. |
-| **Assegnamenti** | `=`, `+=`, `-=`, …, `++` / `--` su lvalue supportati (`x`, `*p`, `a[i]`, campi struct / `->`). |
-| **Controllo** | `if` / `else`, `while`, `do` / `while`, `for`, `break`, `continue`; `switch` con fall-through lineare e vincoli su `break` annidato (vedi subset rule). |
-| **Funzioni** | `void`, `int`, tipi scalari come sopra; chiamate e ricorsione; **puntatore a funzione** solo se risolto a compile-time (`p = f` / `&f`); `main` come in C (con `argc` / `argv` **limitati**, vedi sotto). |
-| **I/O minimo** | `putchar`, `printf` con **sottoinsieme** di formati (es. `%d`, `%c`, `%s` in scenari supportati); niente libc completa. |
-| **Concorrenza (astratta)** | ABI stile `pthread` / `mnemo_pthread_*` abbassate a `par` Kairos; mutex come **canali** nella VM. |
-
-### Non c’è (o non è il C “vero”)
-
-| Cosa manca o è diverso | Nota |
-|-------------------------|------|
-| **C standard completo** | Nessuna garanzia di conformità ISO; molte regole e UB del C pieno **non** si applicano: vale il modello Kairos / IR. |
-| **Virgola mobile** | Nessun `float` / `double`. |
-| **VLA** | Array a lunghezza variabile (`int a[n]` con `n` runtime) non supportati. |
-| **Variadiche C** | Nessuna **definizione** utente con `...`; dichiarazioni built-in (es. `printf`) sì. Nessun `va_list` / `stdarg`. |
-| **`goto`**, **`setjmp`**, inline assembly | Non supportati. |
-| **Bit-field** | Non supportati. |
-| **`&` (indirizzo) generico** | Solo nel **subset** documentato (es. `&x`, `&struct.campo` dove il lowering lo ammette); non tutti gli indirizzi del C. |
-| **Aritmetica puntatori** | `p+i`, `p++`, `*(p+i)`, `q-p` supportati su array; oltre il subset pool il comportamento non è quello del C. |
-| **Libreria C standard** | Non c’è `stdio` / `string` / `stdlib` **POSIX** nel senso di linking: ciò che usi deve essere **built-in** Mnemo (`printf` limitato, `malloc`/`free` pool) o **tuo** codice / header minimi. Mnemo fornisce header fake (`mnemo/fake_include/`) con typedef per `size_t`, `int*_t`, `uint*_t` (aliasati a `int`/`unsigned int`). |
-| **`#include`** | Il preprocessore gira con `-nostdinc` + `-I<mnemo/fake_include>`: gli header standard usati (`stddef.h`, `stdint.h`, `stdio.h`, `stdlib.h`, `string.h`) sono **fake**. Header utente possono essere inclusi liberamente. |
-| **`argv` / ambiente OS** | `argv` è uno **stub** sintattico; non è un array di stringhe reali come su POSIX. |
-| **`main` e uscita** | Il valore di ritorno è propagato come `__mn_exit` nella VM, non sempre identico a `exit()` POSIX. |
-| **Thread** | Con **`mnemo run`** i “pthread” sono **thread Kairos** (`par`), non pthread del kernel; con **gcc** su `mps.h` senza `MNEMO` sono pthread reali **solo** dove l’header lo definisce. |
-| **Memoria** | Heap = **pool** a indici; puntatori sono **indici** nel modello, non indirizzi macchina. |
-| **Passaggio struct per valore** | Supportato (flatten campi) dove il layout lo prevede; vedi test `c_examples/gcc_compat/`. |
-
-Per il dettaglio sintattico e i limiti pratici vedi la sezione seguente e i messaggi del compilatore (`mnemo compile`).
-
----
-
-## Subset C — dettaglio
-
-### Tipi e funzioni
-
-| Elemento | Supporto |
-|----------|----------|
-| `main` | `int main(void)` o `int main(int argc, char **argv)` |
-| Altri ritorni | `void`, `int`, `unsigned`, `_Bool`/`bool`, puntatori scalari |
-| Tipi compositi | `typedef`, `struct`, `union`, `enum` |
-| Parametri | Scalari; array parametro `int a[N]` → decay a puntatore |
-| Struct / union | Campi scalari, annidamento, `sizeof`; union solo scalari |
-| Ritorno `int` | Convenzione Kairos: ultimo parametro `int __mn_ret` nella procedura emessa |
-
-### Puntatori, `malloc`, `sizeof`
-
-- Puntatori nel subset sono **indici** nel pool; `*p` e assegnamento supportati; aritmetica puntatori limitata.
-- **`malloc`/`free`** con `sizeof` costante a compile-time; modello dimensioni stile LP32-like nel lowering (scalari/puntatori 4 byte, `char` 1).
-- **`argv`**: stub sintattico, non è un vero array di stringhe POSIX.
-
-### Espressioni e controllo
-
-- Aritmetica `+ - * / %`, unario `-`, `sizeof`, cast, `?:`, `,`, `^` / `^=`.
-- Assegnamenti `=`, `+=`, …, `++`/`--` su lvalue ammessi dal lowering.
-- `if`/`else`, `while`, `do`/`while`, `for`, `break`, `continue`.
-- `switch`/`case`/`default` (fall-through lineare; `break` annidato in `if` verso lo stesso switch → errore).
-- Inizializzatori designati C99:
-  - 1D array: `int a[5] = {[2]=42, [4]=99};`
-  - Multi-D array: `int m[3][3] = {[0][0]=1, [2][2]=9};`
-  - Struct: `struct P p = {.x=1, .y=2};` (mix posizionale + named ok).
-
-### Non supportato (estratti)
-
-Vedi anche [Mnemo rispetto al C standard](#mnemo-rispetto-al-c-standard).
-
-- VLA, **funzioni variadiche C**, `goto`, floating point, bit-field, `&` oltre il modello pool, molte estensioni GCC.
-- **`static` locali**: non accumulano stato tra chiamate (trattati come locali ordinarie).
-- **Nested struct**: `p.a.x` su `struct Outer { struct Inner a; };` ora funziona (flattening ricorsivo). Inizializzatori list annidati `Outer o = {{1,2},3}` ancora limitati: usa assegnamenti separati.
-- **Nested struct initializer**: `{{1,2},{3,4}}` non supportato; usa assegnamenti separati.
-- Inizializzatori struct/union `{…}` oltre i casi implementati; parità ABI/padding con GCC; semantica UB del C pieno — valgono i vincoli delle procedure Kairos (es. divisori positivi dove richiesto).
-
----
-
-## Formato IR
-
-Definito in **`mnemo/ir.py`**: costanti, add/sub/xor in-place, swap, storia (`IHistPush`, `IStoreRev`), chiamate, costrutti Kairos (`IIfKairos`, `IFromUntilKairos`, `ILocalBlock`, `IPar`), canali (`ISsend`/`ISrecv`), ecc.
-
----
-
-## Test
-
-```bash
-make test-unit    # rapido, senza VM
-make test         # richiede Kairos in KAIROS_ROOT, build-release, timeout sugli esempi
-```
-
-I sorgenti di esempio sono in **`c_examples/`** (`ex00` … `ex35`). In root possono esserci anche `PC.c`, `test.c` dimostrativi.
-
----
-
-## Errori comuni
-
-### Runner Kairos non trovato
-
-Impostare `KAIROS_ROOT` o `MNEMO_KAIROS_ROOT`, oppure usare `--kairosapp`. Verificare `venv` e `python -m src.kairos` nel repo Kairos.
-
-### `cannot open shared object file: libvm.so` / VM obsoleta
-
-Nel repo Kairos: `make build-release`. Eseguire di nuovo `mnemo run` dopo aver ricompilato la VM.
-
-### Errori VM su `LOCAL` / `DELOCAL` / ordine `delocal`
-
-Il Kairos emesso deve bilanciare `local`/`delocal` su ogni percorso; le librerie in `lib/` e il lowering in `c_lower.py` devono rispettare la VM in uso.
-
-### `Troppi argomenti in call`
-
-Ridurre celle di layout, `--ptr-pool-size`, spezzare il programma; verificare se l’inline può applicarsi (non compatibile con alcuni schemi pthread sullo stesso file).
-
-### `[STATIC]` / race PAR / mutex (Mnemo)
-
-Seguire i messaggi di `par_shared_mutex_check.py`; usare canali coerenti per handshake; per producer/consumer a buffer 1 elemento usare due semafori (POSIX) o due canali (MNEMO), come in `mps.h`.
-
-### `printf %d` solo costanti
-
-Servono argomenti interi non costanti supportati tramite `putd.kairos` e inclusione automatica quando il sorgente usa `printf`.
-
----
-
-## Licenza e progetto
-
-Versione pacchetto: vedi **`pyproject.toml`**. Per contribuire, mantenere allineamento con le convenzioni del codice esistente (`mnemo/c_lower.py`, `emit_kairos.py`, ecc.) e con i vincoli della **VM Kairos** in uso.
+Vedi `LICENSE` nel repo.
