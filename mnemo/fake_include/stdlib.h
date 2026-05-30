@@ -34,4 +34,10 @@ div_t   div  (int       n, int       d);
 ldiv_t  ldiv (long      n, long      d);
 lldiv_t lldiv(long long n, long long d);
 
+/* exit: Mnemo AST rewrite a `return N` (solo dentro main). */
+void exit(int status);
+
+/* getenv: VM no env, Mnemo AST rewrite a NULL. */
+char *getenv(const char *name);
+
 #endif

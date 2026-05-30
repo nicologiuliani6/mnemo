@@ -94,6 +94,7 @@ emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
 #### `<stdlib.h>`
 - `malloc(n)` / `free(p)` — ptr_pool reversibile.
 - `exit(N)` — solo dentro `main`, AST rewrite a `return N`.
+- `getenv(X)` — AST rewrite a `NULL` (VM no env).
 - `abs` / `labs` / `llabs` — AST rewrite a ternario.
 - `div` / `ldiv` / `lldiv` — AST rewrite a compound literal `(T){a/b, a%b}`.
 - `atoi` / `atol` / `atoll` — compile-time su string literal.

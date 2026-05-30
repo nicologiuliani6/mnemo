@@ -128,7 +128,7 @@ VM non ha syscalls oltre `printf`/`putchar`/`puts` (output testuale gestita dal 
 - **`fopen`, `fprintf`, `fclose`, `fread`/`fwrite`** — niente filesystem.
 - **`<time.h>`** — niente clock/timer.
 - **`<unistd.h>`, `<sys/*>`** — niente syscalls POSIX.
-- **`<stdlib.h>` non-mem**: `atoi`, `getenv`, `system`. Solo `malloc`/`free` via ptr_pool.
+- **`<stdlib.h>` `system`** — exec di processo esterno. Solo `malloc`/`free` via ptr_pool. (atoi e getenv supportati: atoi compile-time, getenv ritorna NULL.)
 - **`calloc`, `realloc`** — semantica re-alloc difficile da invertire.
 - **`errno`** — global mutabile non-modellata.
 - **`argv` POSIX reali** — stringhe da OS non disponibili (stub sintattico).

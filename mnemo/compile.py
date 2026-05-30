@@ -1384,6 +1384,10 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                         coord=node.coord,
                     )
                     return rewrite(new_call)
+            if node.name.name == "getenv" and node.args is not None:
+                # VM Mnemo non ha environment: getenv ritorna sempre NULL.
+                # Pattern comune: if (getenv("DEBUG")) { ... } → ramo dead.
+                return _make_null(getattr(node, "coord", None))
             if node.name.name == "bzero" and node.args is not None:
                 # POSIX legacy: bzero(p, n) = memset(p, 0, n).
                 exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
