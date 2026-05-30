@@ -81,6 +81,60 @@ variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
 
 ---
 
+## Lavori grossi futuri
+
+### 1. VM Kairos: allocazione dinamica strutture interne
+
+Oggi la VM ha caps statici hard-coded su quasi tutte le strutture runtime:
+
+- `MAX_VARS` (var per procedura).
+- `MAX_LABEL` (label per procedura).
+- `MAX_NESTED` (annidamento blocchi).
+- `MAX_FRAMES` (totale frame attivi nello stato VM).
+- `MAX_PROC_PARAMS` (param per procedura).
+- `MAX_CALL_ARGS` (arg per `call`/`uncall`).
+- Stack di hist/branch a size fissa.
+- Channel buffer fissi.
+
+Conseguenze: programmi grossi o ricorsioni profonde abortano con errori
+opachi (es. `frame indexer overflow`, `MAX_FRAMES exceeded`); Mnemo deve
+inserire fallback (banked pools, `inline_user`) per stare sotto le soglie.
+
+**Obiettivo**: portare tutte le strutture a allocazione dinamica
+(`malloc`/`realloc` o arena growable con doubling). Caps spariscono, la
+VM cresce on-demand finché c'è RAM host. Richiede:
+
+- Refactor `vm_types.h` + tutte le `init_*`/`destroy_*`.
+- `frame_indexer` da array statico a hashmap/dynarray.
+- Hist/branch/loop stack growable (path con copia su realloc, attenzione
+  a puntatori salvati).
+- Channel queue growable.
+- Update `kairos_limits.py` lato Mnemo: rimuove i guard check, lascia
+  solo i fallback opzionali su user request.
+
+### 2. Mnemo: pointer pool dinamico
+
+Oggi `--ptr-pool-size N` fissa la dimensione di `__mn_pool_store_*` a
+compile-time. Se il programma supera N malloc concorrenti vivi, errore
+runtime. Quando N supera `MAX_PROC_PARAMS` Mnemo emette banked pools
+multipli (`__mn_pool_store_b0/_b1/…`) per stare sotto i caps VM.
+
+**Obiettivo**: pool a numero di slot dinamico, allocato/grown a runtime
+dalla VM. Il programma chiede pagine di pool e la VM le serve finché c'è
+RAM. Richiede:
+
+- Lato VM: primitiva `pool_grow N` reversibile (push N slot → uncall
+  rimuove gli ultimi N se ancora liberi).
+- Lato Mnemo: `ptr_pool_kairos.py` emette pool minimale + chiamate
+  `pool_grow` quando l'analisi statica vede malloc burst > capacity
+  corrente.
+- Rimuove `--ptr-pool-size` come hard cap, diventa hint iniziale.
+- Banked pools fallback diventa obsoleto (un singolo pool growable basta).
+
+Dipende da #1 (VM dynamic alloc) per backing storage.
+
+---
+
 ## Non fattibile per modello reversibile / VM Kairos
 
 Features escluse strutturalmente — non saranno implementate finché Mnemo target una VM reversibile a interi.

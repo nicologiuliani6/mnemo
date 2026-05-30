@@ -1307,6 +1307,38 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                     # `strdup("lit")` → `"lit"` (Mnemo char* literal materializzato come
                     # array in __mn_ros_*; semantica free() resta no-op via ptr_pool).
                     return exprs[0]
+            if node.name.name in ("index", "rindex") and node.args is not None:
+                # POSIX legacy: alias strchr/strrchr.
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 2:
+                    alias = "strchr" if node.name.name == "index" else "strrchr"
+                    new_call = c.FuncCall(
+                        name=c.ID(alias, node.coord),
+                        args=node.args,
+                        coord=node.coord,
+                    )
+                    return rewrite(new_call)
+            if node.name.name == "bzero" and node.args is not None:
+                # POSIX legacy: bzero(p, n) = memset(p, 0, n).
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 2:
+                    coord = getattr(node, "coord", None)
+                    return c.FuncCall(
+                        name=c.ID("memset", coord),
+                        args=c.ExprList([exprs[0], c.Constant("int", "0", coord), exprs[1]], coord),
+                        coord=coord,
+                    )
+            if node.name.name == "bcopy" and node.args is not None:
+                # POSIX legacy: bcopy(src, dst, n) = memmove(dst, src, n).
+                # Note: bcopy args order is REVERSED compared to memcpy/memmove.
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                if len(exprs) == 3:
+                    coord = getattr(node, "coord", None)
+                    return c.FuncCall(
+                        name=c.ID("memmove", coord),
+                        args=c.ExprList([exprs[1], exprs[0], exprs[2]], coord),
+                        coord=coord,
+                    )
             if node.name.name in ("strchr", "strrchr") and node.args is not None:
                 exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
                 if len(exprs) == 2:
