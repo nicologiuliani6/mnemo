@@ -1234,13 +1234,13 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
 
 
 def _transform_exit_in_main(ast: c.FileAST) -> None:
-    """`exit(N)` dentro main → `return N`.
+    """`exit(N)` / `abort()` dentro main → `return N` / `return 134`.
 
-    Limitazione: solo dentro main e solo `exit` come statement (FuncCall
-    figlio diretto di un Compound). Fuori main = MnemoCompileError.
+    Limitazione: solo dentro main e solo come statement (FuncCall figlio
+    diretto di un Compound). Fuori main = MnemoCompileError.
 
-    `exit` in expression position (es. `int x = exit(0) + 1`) non ha senso
-    pratico (mai raggiunto post-exit), comunque rejected.
+    `abort()` mappa a `return 134` (128 + SIGABRT=6, exit code POSIX).
+    `exit` in expression position non ha senso pratico, rejected.
     """
     main_def = None
     for ext in ast.ext:
@@ -1252,8 +1252,19 @@ def _transform_exit_in_main(ast: c.FileAST) -> None:
         return (
             isinstance(n, c.FuncCall)
             and isinstance(n.name, c.ID)
-            and n.name.name == "exit"
+            and n.name.name in ("exit", "abort")
         )
+
+    def _exit_to_return(call: c.FuncCall) -> c.Return:
+        fname = call.name.name
+        if fname == "abort":
+            return c.Return(c.Constant("int", "134", call.coord), call.coord)
+        exprs = call.args.exprs if call.args is not None else []
+        if len(exprs) != 1:
+            raise MnemoCompileError(
+                f"exit: serve esattamente 1 argomento (riga {call.coord})"
+            )
+        return c.Return(exprs[0], call.coord)
 
     def _rewrite_compound(comp: c.Compound) -> None:
         if comp.block_items is None:
@@ -1261,12 +1272,7 @@ def _transform_exit_in_main(ast: c.FileAST) -> None:
         new_items: list[c.Node] = []
         for stmt in comp.block_items:
             if _is_exit_call(stmt):
-                exprs = stmt.args.exprs if stmt.args is not None else []
-                if len(exprs) != 1:
-                    raise MnemoCompileError(
-                        f"exit: serve esattamente 1 argomento (riga {stmt.coord})"
-                    )
-                new_items.append(c.Return(exprs[0], stmt.coord))
+                new_items.append(_exit_to_return(stmt))
             else:
                 _walk_for_exit(stmt)
                 new_items.append(stmt)
@@ -1276,6 +1282,12 @@ def _transform_exit_in_main(ast: c.FileAST) -> None:
         if isinstance(n, c.Compound):
             _rewrite_compound(n)
             return
+        # `if (c) exit(N);` (no braces): iftrue/iffalse è direttamente FuncCall.
+        # Stesso per while/for/do body. Rewrite in-place.
+        for attr in ("iftrue", "iffalse", "stmt"):
+            child = getattr(n, attr, None)
+            if _is_exit_call(child):
+                setattr(n, attr, _exit_to_return(child))
         for child_name, child in n.children():
             _walk_for_exit(child)
 
@@ -1286,7 +1298,7 @@ def _transform_exit_in_main(ast: c.FileAST) -> None:
     def _scan(n: c.Node) -> None:
         if _is_exit_call(n):
             raise MnemoCompileError(
-                f"exit: supportato solo dentro main (riga {n.coord})"
+                f"{n.name.name}: supportato solo dentro main (riga {n.coord})"
             )
         for _, child in n.children():
             _scan(child)

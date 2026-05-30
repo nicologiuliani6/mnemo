@@ -108,7 +108,7 @@ Features escluse strutturalmente — non saranno implementate finché Mnemo targ
 - **`goto`** — controllo di flusso non-strutturato, no inverse walk.
 - **`setjmp` / `longjmp`** — stack unwinding non reversibile.
 - **`exit(n)` fuori da main** — terminazione non reversibile dalla profondità di stack arbitraria. (`exit(n)` DENTRO main è supportato via AST rewrite a `return n`.)
-- **`abort()`** — terminazione asincrona non reversibile. Stesso motivo di `exit`.
+- **`abort()` fuori da main** — terminazione asincrona non reversibile. (Dentro main supportato come `return 134`.)
 - **`signal` / signal handlers** — interruzioni asincrone.
 - **Inline asm** (`__asm__`, `asm volatile`) — no IR.
 
