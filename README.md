@@ -113,6 +113,7 @@ emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
 - `strcpy` / `strncpy` — compile-time.
 - `strcat` / `strncat` — runtime byte append reversibile (dst char[] Mnemo,
   src string literal).
+- `strerror(N)` — compile-time lookup → string literal glibc.
 
 #### `<strings.h>` (POSIX legacy)
 - `bzero` → `memset(p, 0, n)`.

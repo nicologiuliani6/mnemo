@@ -27,5 +27,6 @@ char *strncpy(char *dst, const char *src, size_t n);
 char *strcat(char *dst, const char *src);
 char *strncat(char *dst, const char *src, size_t n);
 void *memmove(void *dst, const void *src, size_t n);
+char *strerror(int errnum);
 
 #endif
