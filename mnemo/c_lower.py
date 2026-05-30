@@ -10087,6 +10087,15 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         _scope_exit(ctx)
         return out
 
+    if isinstance(node, c.EmptyStatement):
+        return []
+
+    if isinstance(node, c.Constant):
+        # Bare constant as statement is a no-op (`0;`, `42;`). Emette da
+        # AST rewrite quando un FuncCall side-effect-free (es. fflush(...),
+        # getenv discarded) viene rimpiazzato a Constant.
+        return []
+
     raise MnemoCompileError(f"istruzione non supportata: {type(node).__name__}")
 
 

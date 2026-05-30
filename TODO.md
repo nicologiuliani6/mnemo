@@ -125,8 +125,8 @@ VM Kairos opera solo su interi. Esclusi:
 VM non ha syscalls oltre `printf`/`putchar`/`puts` (output testuale gestita dal frontend Python).
 
 - **`scanf`, `getchar`, `fgets`** — niente input.
-- **`fopen`, `fprintf`, `fclose`, `fread`/`fwrite`** — niente filesystem.
-- **`<time.h>`** — niente clock/timer.
+- **`fopen`, `fprintf`, `fclose`, `fread`/`fwrite`** — niente filesystem. (`fflush`/`feof`/`ferror`/`clearerr`/`setvbuf`/`fileno` ritornano 0 via AST rewrite per compatibilità sintattica.)
+- **`<time.h>`** — niente clock/timer reali. (`time()`/`clock()` ritornano 0 via AST rewrite per compatibilità sintattica.)
 - **`<unistd.h>`, `<sys/*>`** — niente syscalls POSIX.
 - **`<stdlib.h>` `system`** — exec di processo esterno. Solo `malloc`/`free` via ptr_pool. (atoi e getenv supportati: atoi compile-time, getenv ritorna NULL.)
 - **`calloc`, `realloc`** — semantica re-alloc difficile da invertire.

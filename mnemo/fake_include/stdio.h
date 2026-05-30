@@ -8,4 +8,20 @@ int printf(const char *fmt, ...);
 int sprintf(char *buf, const char *fmt, ...);
 int snprintf(char *buf, unsigned long n, const char *fmt, ...);
 
+/* I/O stubs: VM no filesystem, Mnemo AST rewrite a 0. stdout/stderr
+   sono puntatori opachi (non dereferenziabili) ma valid come arg
+   sintattici. */
+typedef struct __mn_FILE FILE;
+extern FILE *stdout;
+extern FILE *stderr;
+extern FILE *stdin;
+
+int fflush  (FILE *stream);
+int setvbuf (FILE *stream, char *buf, int mode, unsigned long size);
+void setbuf (FILE *stream, char *buf);
+int feof    (FILE *stream);
+int ferror  (FILE *stream);
+void clearerr(FILE *stream);
+int fileno  (FILE *stream);
+
 #endif

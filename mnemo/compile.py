@@ -1388,6 +1388,14 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                 # VM Mnemo non ha environment: getenv ritorna sempre NULL.
                 # Pattern comune: if (getenv("DEBUG")) { ... } → ramo dead.
                 return _make_null(getattr(node, "coord", None))
+            if node.name.name in (
+                "fflush", "setvbuf", "setbuf", "feof", "ferror", "clearerr",
+                "time", "clock", "fileno",
+            ) and node.args is not None:
+                # I/O stubs: VM Mnemo no filesystem/time. Rewrite a 0 (NULL
+                # per puntatori, 0 per int, 0 per time_t/clock_t). Permette
+                # codice difensivo tipo `fflush(stdout); time(NULL); …`.
+                return _make_null(getattr(node, "coord", None))
             if node.name.name == "bzero" and node.args is not None:
                 # POSIX legacy: bzero(p, n) = memset(p, 0, n).
                 exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
