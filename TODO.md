@@ -130,7 +130,7 @@ VM non ha syscalls oltre `printf`/`putchar`/`puts` (output testuale gestita dal 
 - **`<unistd.h>`, `<sys/*>`** — niente syscalls POSIX.
 - **`<stdlib.h>` `system`** — exec di processo esterno. Solo `malloc`/`free` via ptr_pool. (atoi e getenv supportati: atoi compile-time, getenv ritorna NULL.)
 - **`calloc`, `realloc`** — semantica re-alloc difficile da invertire.
-- **`errno`** — global mutabile non-modellata.
+- **`errno` set/mutate** — global mutabile non-modellata. Solo *lettura* di errno supportata: `<errno.h>` fake_include espone `errno` come int 0 (no syscall ⇒ nessun errore mai). Costanti E* definite.
 - **`argv` POSIX reali** — stringhe da OS non disponibili (stub sintattico).
 
 ### Concorrenza non-π
