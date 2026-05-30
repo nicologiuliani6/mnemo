@@ -1233,6 +1233,72 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
     return False
 
 
+def _transform_exit_in_main(ast: c.FileAST) -> None:
+    """`exit(N)` dentro main → `return N`.
+
+    Limitazione: solo dentro main e solo `exit` come statement (FuncCall
+    figlio diretto di un Compound). Fuori main = MnemoCompileError.
+
+    `exit` in expression position (es. `int x = exit(0) + 1`) non ha senso
+    pratico (mai raggiunto post-exit), comunque rejected.
+    """
+    main_def = None
+    for ext in ast.ext:
+        if isinstance(ext, c.FuncDef) and ext.decl.name == "main":
+            main_def = ext
+            break
+
+    def _is_exit_call(n: c.Node) -> bool:
+        return (
+            isinstance(n, c.FuncCall)
+            and isinstance(n.name, c.ID)
+            and n.name.name == "exit"
+        )
+
+    def _rewrite_compound(comp: c.Compound) -> None:
+        if comp.block_items is None:
+            return
+        new_items: list[c.Node] = []
+        for stmt in comp.block_items:
+            if _is_exit_call(stmt):
+                exprs = stmt.args.exprs if stmt.args is not None else []
+                if len(exprs) != 1:
+                    raise MnemoCompileError(
+                        f"exit: serve esattamente 1 argomento (riga {stmt.coord})"
+                    )
+                new_items.append(c.Return(exprs[0], stmt.coord))
+            else:
+                _walk_for_exit(stmt)
+                new_items.append(stmt)
+        comp.block_items = new_items
+
+    def _walk_for_exit(n: c.Node) -> None:
+        if isinstance(n, c.Compound):
+            _rewrite_compound(n)
+            return
+        for child_name, child in n.children():
+            _walk_for_exit(child)
+
+    def _check_no_exit_outside_main(fd: c.FuncDef) -> None:
+        for _, child in fd.body.children():
+            _scan(child)
+
+    def _scan(n: c.Node) -> None:
+        if _is_exit_call(n):
+            raise MnemoCompileError(
+                f"exit: supportato solo dentro main (riga {n.coord})"
+            )
+        for _, child in n.children():
+            _scan(child)
+
+    for ext in ast.ext:
+        if isinstance(ext, c.FuncDef) and ext.decl.name != "main":
+            _check_no_exit_outside_main(ext)
+
+    if main_def is not None and main_def.body is not None:
+        _rewrite_compound(main_def.body)
+
+
 def _transform_stdlib_abs(ast: c.FileAST) -> None:
     """`abs(x)`/`labs(x)`/`llabs(x)` → `(x < 0 ? -x : x)`.
     `strdup("...")` → `"..."` (Mnemo char* da literal già malloc-like).
@@ -1754,6 +1820,9 @@ def compile_c_to_kairos(
     _convert_kr_to_ansi(ast)
     # Anonymous struct/union: `struct { ... } p;` → assegna tag sintetico.
     _name_anonymous_structs_unions(ast)
+    # `exit(N)` dentro main → `return N`. Fuori main = errore. Eseguito
+    # PRIMA di tutti gli altri transform per permettere early-return logic.
+    _transform_exit_in_main(ast)
     # stdlib abs/labs/llabs/strdup/str* AST rewrite. PRIMA di hoist_compound_literals
     # perché div/ldiv/lldiv emettono CompoundLiteral `(div_t){a/b, a%b}` che
     # poi viene hoisted in Decl sintetico.
