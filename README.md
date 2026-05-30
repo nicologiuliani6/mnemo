@@ -59,7 +59,7 @@ mnemo emit-kairos src.c            # solo .kairos su stdout
 | Flag             | Effetto                                                              |
 | ---------------- | -------------------------------------------------------------------- |
 | `--kairosapp P`  | Override runner (default `$MNEMO_KAIROSAPP` o `kairosapp`)           |
-| `--native-arith` | `KAIROS_NATIVE_ARITH=1` nella VM                                     |
+| `--native-arith` | `KAIROS_NATIVE_ARITH=1`: mul/div/mod/bitwise O(1) in C invece di loop reversibili Kairos. **Speedup ~100×** su programmi mul/div-heavy (es. DES: 1.3s vs >180s). Uncall preservato. |
 | `--vm-dump`      | Stampa anche il blocco dump della VM (default off)                   |
 | `--vm-stats`     | Stampa `mean_abs` + `max_abs` dei cell int post-execution            |
 
