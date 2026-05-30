@@ -97,8 +97,9 @@ def main(argv: list[str] | None = None) -> None:
         metavar="N",
         help=(
             "limite elementi totali per array (prodotto delle dimensioni); "
-            "default 1024, max 65536. NB: indicizzazione runtime emette "
-            "O(N) operazioni per accesso"
+            "default: auto-inferito dal max array decl statico nel sorgente "
+            "(minimo 1024 per decay-array params). Flag = override solo verso "
+            "l'alto. NB: indicizzazione runtime emette O(N) op per accesso."
         ),
     )
     p_c.add_argument(

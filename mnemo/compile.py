@@ -38,6 +38,7 @@ from mnemo.prelude import (
     parse_mnemo_skip_par_shared_mutex_check,
 )
 from mnemo.ptr_pool_kairos import PTR_POOL_MAX
+import sys
 import pycparser.c_ast as c
 
 
@@ -1914,6 +1915,42 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
     prog.functions.append(wrapper)
 
 
+def _infer_arr_max(ast: c.FileAST) -> int:
+    """Walk AST: trova max array decl `int a[N]` (anche multi-dim, prodotto
+    delle dimensioni costanti). Ritorna max(prodotti). Usato come default
+    di ARR_MAX se l'utente non specifica `--arr-max`. Niente hard cap.
+    """
+    max_total = 0
+    def _const_int(n: c.Node) -> int | None:
+        if isinstance(n, c.Constant) and n.type in ("int", "char"):
+            try:
+                return int(n.value.rstrip("uUlL"), 0)
+            except ValueError:
+                return None
+        return None
+    def visit(n: c.Node) -> None:
+        nonlocal max_total
+        if isinstance(n, c.ArrayDecl):
+            # Walk per dimensions: ArrayDecl può essere annidato.
+            cur = n
+            total = 1
+            ok = True
+            while isinstance(cur, c.ArrayDecl):
+                v = _const_int(cur.dim) if cur.dim is not None else None
+                if v is None or v <= 0:
+                    ok = False
+                    break
+                total *= v
+                cur = cur.type
+            if ok and total > max_total:
+                max_total = total
+        for _, child in n.children():
+            visit(child)
+    for ext in ast.ext or []:
+        visit(ext)
+    return max_total
+
+
 def _infer_ptr_pool_size(ast: c.FileAST) -> int:
     """Conta call site di `malloc`/`calloc` nell'AST. Upper bound conservativo
     per dimensionare auto il pool. Assume tutte le alloc concorrenti e nessuna
@@ -1947,19 +1984,30 @@ def compile_c_to_kairos(
     check_invertibility: bool = False,
     arr_max: int | None = None,
 ) -> str:
-    if arr_max is not None:
-        if arr_max < 1 or arr_max > 65536:
-            raise MnemoCompileError(
-                f"arr_max fuori intervallo (1..65536): {arr_max}"
-            )
-        import mnemo.c_lower as _cl
-        _cl.ARR_MAX = arr_max
+    if arr_max is not None and arr_max < 1:
+        raise MnemoCompileError(f"arr_max deve essere >= 1: {arr_max}")
     try:
         with open(path, encoding="utf-8") as f:
             src = f.read()
     except OSError as e:
         raise MnemoCompileError(f"file non trovato o non leggibile: {path}") from e
     ast = parse_c(path)
+    # Auto-sizing ARR_MAX: walk AST per max array decl statico.
+    # `--arr-max N` user override SOLO se > inferred (per array runtime / decay
+    # ptr che non si possono dimensionare staticamente). Nessun hard cap.
+    import mnemo.c_lower as _cl
+    inferred_arr = _infer_arr_max(ast)
+    if arr_max is not None:
+        eff_arr = max(arr_max, inferred_arr, 1)
+    else:
+        eff_arr = max(inferred_arr, 1024)  # 1024 minimo per decay-array params
+    _cl.ARR_MAX = eff_arr
+    # Array grandi → lowering ricorsivo Python può eccedere default 1000.
+    # Scala recursion limit conservativamente: ~50x array size copre lowering
+    # + emit + ast walks ricorsivi.
+    needed_recursion = max(5000, eff_arr * 50)
+    if sys.getrecursionlimit() < needed_recursion:
+        sys.setrecursionlimit(needed_recursion)
     # K&R: convert `int foo(a, b) int a; int b; { … }` → ANSI param form.
     _convert_kr_to_ansi(ast)
     # Anonymous struct/union: `struct { ... } p;` → assegna tag sintetico.

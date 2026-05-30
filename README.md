@@ -48,7 +48,7 @@ mnemo emit-kairos src.c            # solo .kairos su stdout
 | -------------------------- | ------- | -------------------------------------------------------------------------------------------- |
 | `--main-argc N`            | 0       | `argc` iniziale per `main` (override `// mnemo-main-argc:`)                                  |
 | `--ptr-pool-size N`        | 0 = auto | Celle pool malloc/free. Senza flag, Mnemo conta `malloc`/`calloc` nel sorgente e alloca esattamente quanto serve (no manual tuning). Flag > 0 = minimo (override solo verso l'alto, utile per malloc in loop runtime non inferibili staticamente). Max 2048; banked pools sopra 998. |
-| `--arr-max N`              | 1024    | Limite elementi per array (max 65536)                                                        |
+| `--arr-max N`              | auto    | Limite elementi per array. Default: auto-inferito dal max array decl statico nel sorgente (minimo 1024 per decay-ptr params). Flag > 0 = override solo verso l'alto. Nessun hard cap. Array > ~1000 con loop runtime sono O(N²) (dispatch chain). |
 | `--opt-uncall-user-calls`  | off     | Per ogni `call f(...)` eligible: snapshot XOR + uncall + swap (frees Kairos stacks)          |
 | `--check-invertibility`    | off     | Wrappa `main` in proc + `call __main__ ; uncall __main__` per verificare reversibilità 100%  |
 | `--keep-kairos`            | off     | (solo `compile`) Scrive anche `stem.kairos` accanto al `.c`                                  |
