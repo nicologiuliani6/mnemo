@@ -30,4 +30,7 @@ int fputs   (const char *s, FILE *stream);
 int fputc   (int c, FILE *stream);
 int fprintf (FILE *stream, const char *fmt, ...);
 
+/* perror: stderr no-op in Mnemo. */
+void perror (const char *s);
+
 #endif

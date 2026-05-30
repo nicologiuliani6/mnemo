@@ -1473,6 +1473,11 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                         )
                     if stream == "stderr":
                         return _make_null(coord)
+            if node.name.name == "perror" and node.args is not None:
+                # perror(s) → stampa "s: errstr\n" su stderr.
+                # Mnemo: stderr no-op. errno sempre 0 ⇒ message vuoto.
+                # Rewrite a no-op (0).
+                return _make_null(getattr(node, "coord", None))
             if node.name.name in (
                 "fflush", "setvbuf", "setbuf", "feof", "ferror", "clearerr",
                 "time", "clock", "fileno",
