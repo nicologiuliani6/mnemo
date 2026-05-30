@@ -59,6 +59,20 @@ Fix VM corretto richiede:
 2. O GC frames non più referenziati dopo uncall completato.
 3. O refactor `vm_invert.h` mutual recursion in iterative loop.
 
+**Tentativo 2026-05-30 (FALLITO)**: cap globale `VM_MAX_SAFE_DEPTH=256`
+in `clone_frame_for_depth`. Evita CHAR_ID_MAP overflow ma causa infinite
+loop perché branch replay logic in `invert_op_to_line:1129-1149` continua
+a riapplicare ELSE+THEN su stesso frame riusato senza terminazione.
+
+Il branch replay si basa su `vm->frames[fi].recursion_depth` per sapere
+quante ELSE iter ricreare. Per frame creati SOLO in inverse, `.rd=0`
+default → fallback a `do_eval_if_entry` → eval cond → pick branch
+(potenzialmente THEN sbagliato → ricorsione infinita).
+
+Fix corretto richiede tracciare quanti livelli forward sono stati
+effettivamente eseguiti per OGNI frame, non solo il base. Lavoro non
+banale; defer.
+
 Workaround Mnemo (`show_using_targets` exclusion) resta attivo per
 correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
 
