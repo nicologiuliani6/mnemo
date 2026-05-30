@@ -45,42 +45,6 @@ Fix VM corretto richiede:
 Workaround Mnemo (`show_using_targets` exclusion) resta attivo per
 correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
 
-## Librerie standard C implementabili in Mnemo
-
-Funzioni C standard compatibili modello reversibile, realizzabili dato che
-già abbiamo `malloc`/`free`, `printf`/`putchar`/`puts`, `memcpy`/`memset`/
-`strcpy`/`strncpy`/`memmove` compile-time, `strlen`/`strcmp` compile-time,
-variadic via `<stdarg.h>`, ptr_pool, struct/union, int64 cell.
-
-### stdlib.h
-
-- ✓ `abs/labs/llabs` (commit 6d26944) — AST rewrite a ternario.
-- ✓ `div/ldiv/lldiv` — AST rewrite a `(T){a/b, a%b}` compound literal.
-- ✓ `atoi(const char *)` (commit f286276) — compile-time su literal.
-
-### string.h aggiuntivi
-
-- ✓ `strcat(dst, src_lit)` / `strncat(dst, src_lit, n)` — runtime byte append
-  con scan reversibile via flag "appended" + snap per-posizione. dst deve
-  essere array Mnemo char, src deve essere string literal. Costo O(N * M)
-  IR ops per call (N = dst.total, M = src_len + 1).
-- ✓ `strchr/strrchr(s, c)` — AST rewrite a sub-literal/NULL.
-- ✓ `strstr(h, n)` — AST rewrite a sub-literal/NULL.
-- ✓ `memcmp(a, b, n)` (commit c6eedc7) — compile-time su 2 string literal.
-- ✓ `strspn/strcspn(s, accept)` (commit 7819f96) — char-class compile-time.
-- ✓ `strpbrk(s, accept)` — AST rewrite a sub-literal/NULL.
-- ✓ `strdup(const char *s)` (commit bdacbf2) — AST rewrite a literal.
-- ✓ `strncmp(a, b, n)` — compile-time su 2 string literal, byte-diff glibc.
-- ✓ `strnlen(s, n)` — compile-time su string literal.
-
-### stdio.h aggiuntivi
-
-- ✓ `sprintf(buf, fmt, ...)` / `snprintf(buf, n, fmt, ...)` — compile-time
-  fmt parsing. Supporta %d %u %x %llx %X %o %s %c %% e flag/width.
-  Args devono essere costanti (no runtime values). Return value ignorato.
-
----
-
 ## Lavori grossi futuri
 
 ### 1. VM Kairos: allocazione dinamica strutture interne
