@@ -78,34 +78,36 @@ correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
 
 ## Lavori grossi futuri
 
-### 1. VM Kairos: allocazione dinamica strutture interne
+### 1. VM Kairos: allocazione dinamica strutture interne (parziale)
 
-Oggi la VM ha caps statici hard-coded su quasi tutte le strutture runtime:
+**Già dinamici** (commit Kairos 2026-05-30):
+- `vm->frames` (era `[MAX_FRAMES=200]`) → heap, cresce on-demand
+  via `vm_ensure_frame_cap` (init=256, raddoppia).
+- `CallRecord *cs` in vm_run_BT cresce dinamicamente.
+- `vm->branch_trace` (era `[VM_BRANCH_TRACE_MAX=131072]`) → heap,
+  raddoppia in op_jmpf.
+- `IF_BRANCH_STACK_MAX` bumped 256→65536 (thread-local stack).
 
-- `MAX_VARS` (var per procedura).
-- `MAX_LABEL` (label per procedura).
-- `MAX_NESTED` (annidamento blocchi).
-- `MAX_FRAMES` (totale frame attivi nello stato VM).
-- `MAX_PROC_PARAMS` (param per procedura).
-- `MAX_CALL_ARGS` (arg per `call`/`uncall`).
-- Stack di hist/branch a size fissa.
-- Channel buffer fissi.
+**Open — limiti Frame statici** (in struct, non triviali da rendere dyn):
+- `MAX_VARS=2048`, `MAX_LABEL=8192`, `MAX_NESTED=1024`, `MAX_PROC_PARAMS=1024`.
+- Bump > 1024 di MAX_NESTED causa Frame size > 600KB → realloc di
+  `vm->frames` (pointer array) sposta i Frame objects → invalida
+  pointer-into-frame held da operazioni cross-call (ex33 parallel2_fib
+  SIGSEGV).
+- **Fix corretto**: refactor `vm->frames` da `Frame *frames` a
+  `Frame **frames` (array di pointer a Frame heap-alloc separati). Così
+  realloc del pointer array non sposta i Frame individuali. Richiede
+  cambiare ~288 access site `vm->frames[i].x` → `vm->frames[i]->x` (sed
+  bulk fattibile ma rischioso).
 
-Conseguenze: programmi grossi o ricorsioni profonde abortano con errori
-opachi (es. `frame indexer overflow`, `MAX_FRAMES exceeded`); Mnemo deve
-inserire fallback (banked pools, `inline_user`) per stare sotto le soglie.
+**Open — non ancora toccati**:
+- Hist/scratch stack size (VAR_STACK_MAX_SIZE=512) per Var stack.
+- Channel buffer (VAR_CHANNEL_MAX_SIZE=128).
+- VM_TRACE_WIN_STACK_MAX=4096 (per Frame).
+- MNEMO_HIST_SNAP_DEPTH=384 (in VM).
+- DBG_MAX_BREAKPOINTS, DBG_MAX_HISTORY, etc.
 
-**Obiettivo**: portare tutte le strutture a allocazione dinamica
-(`malloc`/`realloc` o arena growable con doubling). Caps spariscono, la
-VM cresce on-demand finché c'è RAM host. Richiede:
-
-- Refactor `vm_types.h` + tutte le `init_*`/`destroy_*`.
-- `frame_indexer` da array statico a hashmap/dynarray.
-- Hist/branch/loop stack growable (path con copia su realloc, attenzione
-  a puntatori salvati).
-- Channel queue growable.
-- Update `kairos_limits.py` lato Mnemo: rimuove i guard check, lascia
-  solo i fallback opzionali su user request.
+Update `kairos_limits.py` lato Mnemo per allinearsi a quanto cambia.
 
 ### 2. Mnemo: pointer pool runtime growable (auto-sizing già fatto)
 
