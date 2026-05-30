@@ -1485,6 +1485,12 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                         )
                     if stream == "stderr":
                         return _make_null(coord)
+            if node.name.name == "setlocale" and node.args is not None:
+                # locale stub: ritorna NULL (= fail) o stringa "C"? glibc
+                # ritorna "C" all'init. Per ora NULL così if(setlocale)
+                # entra in fallback. Pattern comune `setlocale(LC_ALL, "");`
+                # ignora il return e va avanti.
+                return _make_null(getattr(node, "coord", None))
             if node.name.name == "perror" and node.args is not None:
                 # perror(s) → stampa "s: errstr\n" su stderr.
                 # Mnemo: stderr no-op. errno sempre 0 ⇒ message vuoto.

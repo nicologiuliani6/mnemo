@@ -135,6 +135,10 @@ emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
 #### `<time.h>`
 - `time(t)` / `clock()` — AST rewrite a `0` (VM no clock).
 
+#### `<locale.h>`
+- `setlocale(cat, name)` — AST rewrite a `NULL` (VM no locale).
+- Costanti `LC_ALL`/`LC_COLLATE`/`LC_CTYPE`/etc. definite.
+
 #### `<pthread.h>` (subset Mnemo)
 - `mnemo_pthread_parallel2(a, b)` — 2 worker → `par`/`rap`.
 - `pthread_mutex_t` / `pthread_mutex_lock` / `_unlock` — channel π-calcolo.
