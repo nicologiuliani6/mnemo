@@ -3665,6 +3665,12 @@ def _parse_printf_format(fmt: str) -> list[tuple]:
             elif spec == "x":
                 # Distinguiamo %llx (u64) da %x (u32) nel piece tag.
                 out.append(("llx" if is_ll else "x", frozenset(flags), width))
+            elif spec == "X":
+                # %X / %llX: hex uppercase. Compile-time costanti always.
+                # Runtime Var: usa __mn_putx + Mnemo applica uppercase nel
+                # tag piece (emit_kairos non distingue putx vs putX runtime,
+                # quindi solo costanti per ora).
+                out.append(("llX" if is_ll else "X", frozenset(flags), width))
             elif spec == "o":
                 out.append(("o", frozenset(flags), width))
             elif spec == "p":
@@ -3921,18 +3927,22 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tm)
                 else:
                     raise MnemoCompileError(f"printf %{k}: espressione non valida")
-        elif k == "x" or k == "llx":
+        elif k in ("x", "llx", "X", "llX"):
             ex = exprs[arg_i]
             arg_i += 1
             flags = piece[1] if len(piece) > 1 else frozenset()
             width = piece[2] if len(piece) > 2 else 0
-            is_u64 = (k == "llx")
+            is_u64 = k in ("llx", "llX")
+            is_upper = k in ("X", "llX")
+            def _hex_fmt(v: int) -> str:
+                s = (
+                    format(v & 0xFFFFFFFFFFFFFFFF, "x") if is_u64
+                    else _format_hex_u32(v)
+                )
+                return s.upper() if is_upper else s
             if isinstance(ex, c.Constant):
                 val = _literal_int_widen(ex)
-                fmt_v = (
-                    format(val & 0xFFFFFFFFFFFFFFFF, "x") if is_u64
-                    else _format_hex_u32(val)
-                )
+                fmt_v = _hex_fmt(val)
                 s = _printf_pad(fmt_v, flags, width)
                 for ch in s:
                     ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
@@ -3942,10 +3952,7 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 ei, op, tm = _eval_expr(ex, ctx)
                 out.extend(ei)
                 if isinstance(op, Imm):
-                    fmt_v = (
-                        format(op.value & 0xFFFFFFFFFFFFFFFF, "x") if is_u64
-                        else _format_hex_u32(op.value)
-                    )
+                    fmt_v = _hex_fmt(op.value)
                     s = _printf_pad(fmt_v, flags, width)
                     for ch in s:
                         ins, tt = _ir_emit_byte_as_show_char(ctx, ord(ch))
@@ -3953,6 +3960,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
+                    if is_upper:
+                        raise MnemoCompileError(
+                            "printf %X: solo costanti supportate per runtime "
+                            "(usa %x e converti manualmente in uppercase)"
+                        )
                     if (
                         width > 0
                         and "+" not in flags

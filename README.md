@@ -121,6 +121,7 @@ emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
 - `printf` / `putchar` / `puts` — runtime (auto-include `putd.kairos` per `%d`).
 - `sprintf` / `snprintf` — compile-time fmt parsing. Supporta
   `%d %u %x %llx %X %o %s %c %%` + flag/width. Args costanti.
+- `printf` `%X` / `%llX` — uppercase hex, solo argomenti costanti.
 
 #### `<pthread.h>` (subset Mnemo)
 - `mnemo_pthread_parallel2(a, b)` — 2 worker → `par`/`rap`.
