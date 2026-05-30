@@ -2,6 +2,23 @@
 
 ## Bug aperti
 
+### opt-uncall su programmi con struct global + printf condizionale fallisce
+
+File: `c_test/_dbg_kernel_sched.c`. Senza `--opt-uncall-user-calls`
+match perfetto con gcc (3× `p0`). Con il flag:
+`[VM] POP: __mn_hist sotto il pavimento mnemo (manca __mn_hist_floor_snap?)`
+e nessun output.
+
+Pattern: struct global `K` con field array di struct + printf condizionale
+dentro fn user `worker(proc_t *p)` chiamata da main. show_using_targets
+DOVREBBE escludere worker (transitive printf use), ma evidentemente non
+sta funzionando o lo snap floor pattern non si chiude correttamente.
+
+Workaround: omettere `--opt-uncall-user-calls` per programmi con questo
+pattern.
+
+
+
 ### VM `op_uncall` su void proc con `show` → SIGSEGV (workaroundato Mnemo)
 
 Bug VM sotto la superficie. Workaround corrente in Mnemo:
