@@ -126,6 +126,9 @@ emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
 - `printf` `%X` / `%llX` — uppercase hex, solo argomenti costanti.
 - `fflush` / `setvbuf` / `setbuf` / `feof` / `ferror` / `clearerr` /
   `fileno` — AST rewrite a `0` (VM no FS).
+- `fputs(s, stdout)` → `printf("%s", s)`, `fputc(c, stdout)` →
+  `putchar(c)`, `fprintf(stdout, fmt, ...)` → `printf(fmt, ...)`.
+  Su `stderr` diventano no-op (output silente).
 
 #### `<time.h>`
 - `time(t)` / `clock()` — AST rewrite a `0` (VM no clock).

@@ -24,4 +24,10 @@ int ferror  (FILE *stream);
 void clearerr(FILE *stream);
 int fileno  (FILE *stream);
 
+/* fputs/fputc/fprintf: Mnemo AST rewrite a printf/putchar se stream==stdout,
+   no-op se stream==stderr. */
+int fputs   (const char *s, FILE *stream);
+int fputc   (int c, FILE *stream);
+int fprintf (FILE *stream, const char *fmt, ...);
+
 #endif

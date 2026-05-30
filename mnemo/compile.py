@@ -1388,6 +1388,46 @@ def _transform_stdlib_abs(ast: c.FileAST) -> None:
                 # VM Mnemo non ha environment: getenv ritorna sempre NULL.
                 # Pattern comune: if (getenv("DEBUG")) { ... } → ramo dead.
                 return _make_null(getattr(node, "coord", None))
+            if node.name.name in ("fputs", "fputc", "fprintf") and node.args is not None:
+                # fputs(s, stream) / fputc(c, stream) / fprintf(stream, fmt, ...).
+                # Mnemo: rewrite a printf/putchar se stream==stdout, no-op se
+                # stream==stderr (output silente, no FS).
+                exprs = node.args.exprs if isinstance(node.args, c.ExprList) else [node.args]
+                coord = getattr(node, "coord", None)
+                if node.name.name == "fputs" and len(exprs) == 2 and isinstance(exprs[1], c.ID):
+                    stream = exprs[1].name
+                    if stream == "stdout":
+                        # fputs non aggiunge \n (puts sì). Usa printf("%s", s).
+                        return c.FuncCall(
+                            name=c.ID("printf", coord),
+                            args=c.ExprList(
+                                [c.Constant("string", '"%s"', coord), exprs[0]],
+                                coord,
+                            ),
+                            coord=coord,
+                        )
+                    if stream == "stderr":
+                        return _make_null(coord)
+                if node.name.name == "fputc" and len(exprs) == 2 and isinstance(exprs[1], c.ID):
+                    stream = exprs[1].name
+                    if stream == "stdout":
+                        return c.FuncCall(
+                            name=c.ID("putchar", coord),
+                            args=c.ExprList([exprs[0]], coord),
+                            coord=coord,
+                        )
+                    if stream == "stderr":
+                        return _make_null(coord)
+                if node.name.name == "fprintf" and len(exprs) >= 2 and isinstance(exprs[0], c.ID):
+                    stream = exprs[0].name
+                    if stream == "stdout":
+                        return c.FuncCall(
+                            name=c.ID("printf", coord),
+                            args=c.ExprList(exprs[1:], coord),
+                            coord=coord,
+                        )
+                    if stream == "stderr":
+                        return _make_null(coord)
             if node.name.name in (
                 "fflush", "setvbuf", "setbuf", "feof", "ferror", "clearerr",
                 "time", "clock", "fileno",
