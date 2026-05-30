@@ -76,26 +76,18 @@ VM cresce on-demand finché c'è RAM host. Richiede:
 - Update `kairos_limits.py` lato Mnemo: rimuove i guard check, lascia
   solo i fallback opzionali su user request.
 
-### 2. Mnemo: pointer pool dinamico
+### 2. Mnemo: pointer pool runtime growable (auto-sizing già fatto)
 
-Oggi `--ptr-pool-size N` fissa la dimensione di `__mn_pool_store_*` a
-compile-time. Se il programma supera N malloc concorrenti vivi, errore
-runtime. Quando N supera `MAX_PROC_PARAMS` Mnemo emette banked pools
-multipli (`__mn_pool_store_b0/_b1/…`) per stare sotto i caps VM.
+**Già fatto**: pool size auto-inferito da `_infer_ptr_pool_size` che
+conta call site di `malloc`/`calloc` nel sorgente. Default `--ptr-pool-size 4`
+è ora un *minimo*; auto-cresce verso l'alto se servono più slot. Banked
+pools scattano sopra `MONOLITHIC_POOL_MEM_MAX`.
 
-**Obiettivo**: pool a numero di slot dinamico, allocato/grown a runtime
-dalla VM. Il programma chiede pagine di pool e la VM le serve finché c'è
-RAM. Richiede:
-
-- Lato VM: primitiva `pool_grow N` reversibile (push N slot → uncall
-  rimuove gli ultimi N se ancora liberi).
-- Lato Mnemo: `ptr_pool_kairos.py` emette pool minimale + chiamate
-  `pool_grow` quando l'analisi statica vede malloc burst > capacity
-  corrente.
-- Rimuove `--ptr-pool-size` come hard cap, diventa hint iniziale.
-- Banked pools fallback diventa obsoleto (un singolo pool growable basta).
-
-Dipende da #1 (VM dynamic alloc) per backing storage.
+**Open**: pool runtime growable (non statico al compile-time). Programmi
+con `malloc` dentro un loop con N iterazioni runtime non sono inferibili
+staticamente; oggi richiedono `--ptr-pool-size N_max`. Una primitiva VM
+`pool_grow N` reversibile permetterebbe crescita on-demand. Dipende da
+[[1. VM Kairos: allocazione dinamica strutture interne]].
 
 ---
 

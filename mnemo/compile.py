@@ -1914,6 +1914,30 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
     prog.functions.append(wrapper)
 
 
+def _infer_ptr_pool_size(ast: c.FileAST) -> int:
+    """Conta call site di `malloc`/`calloc` nell'AST. Upper bound conservativo
+    per dimensionare auto il pool. Assume tutte le alloc concorrenti e nessuna
+    free intermedia. Loop con malloc dentro contati 1 sola volta (statico)
+    quindi se il programma ha un loop che malloc N volte va comunque dato
+    --ptr-pool-size manuale.
+    """
+    count = 0
+    def visit(n: c.Node) -> None:
+        nonlocal count
+        if (
+            isinstance(n, c.FuncCall)
+            and isinstance(n.name, c.ID)
+            and n.name.name in ("malloc", "calloc")
+        ):
+            count += 1
+        for _, child in n.children():
+            visit(child)
+    for ext in ast.ext or []:
+        visit(ext)
+    # +1 slot sentinel (NULL = slot 0 già riservato dal layout).
+    return count + 1 if count > 0 else 0
+
+
 def compile_c_to_kairos(
     path: str,
     *,
@@ -1983,6 +2007,13 @@ def compile_c_to_kairos(
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")
+    # Auto-sizing del pool puntatori: conta call site di malloc/calloc nel
+    # programma (upper bound conservativo: assume tutte vivanti simultanee +
+    # nessuna free intermedia). Il flag --ptr-pool-size diventa minimo:
+    # user can override verso l'alto se serve più capacità di quella inferita.
+    inferred_pool = _infer_ptr_pool_size(ast)
+    if inferred_pool > ptr_pool_size:
+        ptr_pool_size = inferred_pool
     layout = compute_program_mem_layout(ast, ptr_pool_size)
     mem_units = 2 if _ast_needs_two_mem_partitions(ast) else 1
     physical_mem_cells = layout.total_cells * mem_units
