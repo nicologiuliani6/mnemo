@@ -1,0 +1,7 @@
+{
+  "file": "generic_ctype.c",
+  "reason": "mnemo_run_fail",
+  "mnemo_rc": 1,
+  "mnemo_stdout": "",
+  "mnemo_stderr": "mnemo: &&/||: usa _lower_if_from_expr / _build_truth_incr_lc\n"
+}

@@ -1,0 +1,10 @@
+{
+  "file": "generic_abort.c",
+  "reason": "output_mismatch",
+  "mnemo_rc": 134,
+  "gcc_rc": -6,
+  "mnemo_stdout": "hello\nabort\n",
+  "gcc_stdout": "",
+  "mnemo_stderr": "",
+  "gcc_stderr": ""
+}

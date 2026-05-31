@@ -77,23 +77,25 @@ di programmi con loop non banali.
   `c_test/inv_multi_disjchain_compound.c` (ora inverte). Limite residuo
   noto: `collect_ifs` `stack_idx[64]` capa la *profondità* di nesting a
   64 → indice runtime su array più lunghi di 64 ancora rotto.
-- **FAIL loop annidato** `while(i<4){while(j<4){g[i]^=j;j++;}i++;}` →
-  `SIGSEGV` (exit -11). Indipendente da array/disj-chain: anche
-  `while{while{s+=j}}` SENZA array crasha (repro
-  `c_test/inv_nested_loop_segfault.c`). **Root cause (valgrind)**:
-  use-after-free in `exec_branch_inverse` (vm_invert.h). Il path
-  `branch_span_has_from_loop` salva `Var*` raw in `saved[]`, poi la
-  recursion annidata `exec_branch_inverse → invert_op_to_line →
-  exec_branch_inverse` esegue `op_local` (inverse di `delocal lc`) che
-  fa `delete_var`+`malloc` → libera il puntatore tmp che l'outer aveva
-  in `saved[]`; il cleanup inner `memcpy(vars, saved)` reinstaura il
-  puntatore liberato → il prossimo `op_local` legge/free dangling →
-  crash. Fix corretto = ripensare il contratto save/restore dei `Var*`
-  in `exec_branch_inverse` (op_local cambia il pointer del Var via
-  free+realloc, lo snapshot raw si invalida). Path condiviso con
-  divmod/encrypt/DES inverse → richiede validazione ampia, non blind.
+- OK (RISOLTO 2026-05-31): loop annidato
+  `while(i<4){while(j<4){g[i]^=j;j++;}i++;}` → era `SIGSEGV` (exit -11).
+  Indipendente da array/disj-chain: anche `while{while{s+=j}}` crashava.
+  **Root cause (valgrind)**: use-after-free in `exec_branch_inverse`
+  (vm_invert.h). Lo snapshot `saved[] = vars[]` veniva reinstaurato a fine
+  branch con `memcpy(vars, saved)` *intero*; ma `op_local`/`op_delocal`
+  fanno `free`+`realloc` del Var, quindi i puntatori che il branch
+  liberava (es. `delocal lc` di un loop counter) restavano dangling in
+  `saved[]`. Sotto la recursion annidata `exec_branch_inverse →
+  invert_op_to_line → exec_branch_inverse` il livello interno salvava il
+  tmp Var dell'outer, lo liberava via op_local, e il blanket restore lo
+  reinstaurava → UAF al successivo op_local. Fix Kairos commit 79ab8fe:
+  lo snapshot serve solo a sganciare gli slot **param** (relink temporaneo
+  al caller); restore SOLO quelli, lascia agli altri slot l'esito reale
+  del branch. Valgrind clean. Regression guard `c_test/inv_nested_loop.c`.
 Il forward + run normale di questi pattern funziona; solo
-`--check-invertibility` (uncall whole-program) li espone.
+`--check-invertibility` (uncall whole-program) li espone. **Tutti i
+reproducer minimi noti ora invertono** (resta il limite di profondità
+disj-chain >64 sopra).
 
 **Workaround** (c_lower.py:loop_hoist_targets): hoist transform
 ritorna set di fn dove ha sparato dentro un loop body. Queste fn
