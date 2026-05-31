@@ -115,29 +115,41 @@ Resta escluso solo il self-mut (es. `touch_idx_loop` in
 `generic_if_arr_self_mut.c`): sotto opt-uncall dà ancora `DELOCAL
 __mn_lc1 atteso=0 trovato=1` (loop-counter, vedi sotto).
 
-**TARGET ATTIVO — loop-counter UNCALL-path** (ultima esclusione opt-uncall).
-Pattern: fn con `for/while { if(E self-mut) BODY }`, es. `touch_idx_loop`
-in `generic_if_arr_self_mut.c`. Sotto `--opt-uncall-user-calls` l'`uncall`
-per-fn della callee fallisce con `DELOCAL frame=touch_idx_loop var=__mn_lc1
-atteso=0 trovato=1`.
+**opt-uncall: loop con IF body data-variante (P3 branch_trace replay)**.
+Ultima esclusione `loop_hoist_targets`. Pattern: fn con
+`for/while { if(E) BODY }` SOTTO `--opt-uncall-user-calls`, es.
+`touch_idx_loop` in `generic_if_arr_self_mut.c`. Fallisce
+`DELOCAL frame=touch_idx_loop var=__mn_lc1 atteso=0 trovato=1`.
 
-Stato (2026-05-31): lo STESSO loop sotto `--check-invertibility`
-whole-program (uncall __main__) INVERTE pulito — i fix VM di oggi
-(nested-IF dispatch, MAX_IFS, UAF) coprono il path inverse "plain". Il
-per-fn `uncall` invece usa un path diverso (CALL/UNCALL clone-frame /
-recursion_depth-replay) che non ripristina `e0` (loop-guard truth) al
-valore d'ingresso: `lc1 += e0` in forward, ma l'inverse fa `lc1 -= 0`
-invece di `lc1 -= 1` → lc1 resta 1 al DELOCAL.
+**Diagnosi precisa (2026-05-31, NON è loop-counter né contamination)**:
+data-dependent. Il fallimento avviene SOLO quando la decisione dell'IF nel
+body **varia tra iterazioni**:
+- loop con tutte le iterazioni che prendono lo stesso ramo (es. G tutti 0,
+  `if(G[i]==0)` sempre true) → INVERTE ok;
+- una iterazione diversa (es. `G[0]=5` → i=0 false, i=1/2 true), o tutte
+  false → DELOCAL lc1.
+Lo si espone facilmente perché basta una opt-uncall'd fn PRIMA che scriva
+memoria (es. `bump(){G[0]+=5}`): il suo XOR-swap lascia G[0]=5, quindi
+`touch_idx_loop` vede l'IF variabile. Un prologo che NON tocca memoria
+(fn vuota) non rompe.
 
-Root: `_build_counter_loop_instrs` (c_lower.py) snapshotta `g(=lc1) +=
-init_lc` dove `init_lc = lc = e0`, e il body del loop ricomputa `e0`
-(push(e0,hist) + reset + truth). L'inverse del per-fn uncall non riporta
-e0 a 1 prima di `lc1 -= e0`. Due strade: (a) Mnemo — snapshot della
-guard-truth in un fresh int STABILE che il loop non muta, usato per
-`g +=`/`g -=`; (b) Kairos — far sì che il path CALL/UNCALL ripristini e0
-come fa il path plain. Path condiviso con encrypt/DES uncall → validare
-ampio. Quando risolto: rimuovere l'esclusione self-mut residua in
-`loop_hoist_targets` (compile.py) → opt-uncall completo.
+**Root**: il meccanismo "Fix P3" branch_trace (Janus.c op_jmpf push +
+vm_invert.h JMPF_ELSE replay). Forward, dentro il pattern opt-uncall,
+`op_jmpf` registra ogni decisione IF in `vm->branch_trace` (in ordine di
+esecuzione). L'inverse legge la finestra `[trace_window_start, top)` in
+**FIFO** (`trace_idx = win_start + cursor++`). Per decisioni uniformi
+funziona; quando variano tra iterazioni il replay associa la decisione
+SBAGLIATA a una iterazione → ramo invertito errato → hist pop sbilanciato
+→ `e0` (loop-guard) non ripristinato → `lc1 -= 0` invece di `lc1 -= 1`.
+Verificato con dump trace reads (h2 all-true: idx 0→13 ok; h1 mixed:
+fallisce a idx12). Tentativo di consumo LIFO (leggere dalla cima)
+ROMPE il caso uniforme → l'ordine corretto non è il semplice reverse:
+il from-loop inverse + peel interagisce col cursor in modo non banale.
+Serve capire l'ordine di encounter degli IF nell'inverse del from-loop
+(peel) per mappare correttamente il cursor alle iterazioni. Path
+condiviso encrypt/DES → validare ampio, NON blind. Quando risolto:
+rimuovere l'esclusione `loop_hoist_targets` (compile.py) → opt-uncall
+completo su loop con IF body.
 
 ## Lavori grossi futuri
 
