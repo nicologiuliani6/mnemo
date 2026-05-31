@@ -97,16 +97,23 @@ e0 cross-iter quando il body esegue push(e0,hist) + ricomputa e0.
 
 ### 1. VM Kairos: allocazione dinamica strutture interne (parziale)
 
-**Già dinamici** (commit Kairos 2026-05-30):
+**Già dinamici**:
 - `vm->frames` (era `[MAX_FRAMES=200]`) → heap, cresce on-demand
   via `vm_ensure_frame_cap` (init=256, raddoppia).
 - `CallRecord *cs` in vm_run_BT cresce dinamicamente.
 - `vm->branch_trace` (era `[VM_BRANCH_TRACE_MAX=131072]`) → heap,
   raddoppia in op_jmpf.
 - `IF_BRANCH_STACK_MAX` bumped 256→65536 (thread-local stack).
+- `vm->mn_hist_floor_snaps` (era `[MNEMO_HIST_SNAP_DEPTH=384]`) → heap,
+  raddoppia in CALL __mn_hist_floor_snap (commit 2026-05-31).
+- `Var.value` (TYPE_STACK) e `Channel.buf`: `VAR_STACK_MAX_SIZE=512` e
+  `VAR_CHANNEL_MAX_SIZE=128` sono solo alloc INIZIALE; tutti i push
+  fanno `realloc(stack_len+1)` per-elemento (no hard cap, però perf
+  subottimale: refactor a doubling amortizzato è auspicabile).
 
 **Open — limiti Frame statici** (in struct, non triviali da rendere dyn):
-- `MAX_VARS=2048`, `MAX_LABEL=8192`, `MAX_NESTED=1024`, `MAX_PROC_PARAMS=1024`.
+- `MAX_VARS=2048`, `MAX_LABEL=8192`, `MAX_NESTED=1024`, `MAX_PROC_PARAMS=1024`,
+  `VM_TRACE_WIN_STACK_MAX=4096`.
 - Bump > 1024 di MAX_NESTED causa Frame size > 600KB → realloc di
   `vm->frames` (pointer array) sposta i Frame objects → invalida
   pointer-into-frame held da operazioni cross-call (ex33 parallel2_fib
@@ -118,11 +125,7 @@ e0 cross-iter quando il body esegue push(e0,hist) + ricomputa e0.
   bulk fattibile ma rischioso).
 
 **Open — non ancora toccati**:
-- Hist/scratch stack size (VAR_STACK_MAX_SIZE=512) per Var stack.
-- Channel buffer (VAR_CHANNEL_MAX_SIZE=128).
-- VM_TRACE_WIN_STACK_MAX=4096 (per Frame).
-- MNEMO_HIST_SNAP_DEPTH=384 (in VM).
-- DBG_MAX_BREAKPOINTS, DBG_MAX_HISTORY, etc.
+- DBG_MAX_BREAKPOINTS=256, DBG_MAX_HISTORY=4096 (debug only, low priority).
 
 Update `kairos_limits.py` lato Mnemo per allinearsi a quanto cambia.
 
