@@ -115,13 +115,29 @@ Resta escluso solo il self-mut (es. `touch_idx_loop` in
 `generic_if_arr_self_mut.c`): sotto opt-uncall dà ancora `DELOCAL
 __mn_lc1 atteso=0 trovato=1` (loop-counter, vedi sotto).
 
-**Fix corretto** (opt-uncall loop-counter, ancora aperto) richiede
-investigare l'interazione tra inverse di `from cond loop body until cond2`
-(kairos) e la riallocazione di e0 cross-iter quando il body esegue
-push(e0,hist) + ricomputa e0. Nota: il sotto-caso disj-chain runtime-index
-NON era questo — era il bug Kairos `exec_branch_inverse` (else-if chain
-double-dispatch), risolto in commit Kairos 5098d1f. Restano aperti i due
-FAIL residui sopra (multi-disjchain compound-read, nested-loop SIGSEGV).
+**TARGET ATTIVO — loop-counter UNCALL-path** (ultima esclusione opt-uncall).
+Pattern: fn con `for/while { if(E self-mut) BODY }`, es. `touch_idx_loop`
+in `generic_if_arr_self_mut.c`. Sotto `--opt-uncall-user-calls` l'`uncall`
+per-fn della callee fallisce con `DELOCAL frame=touch_idx_loop var=__mn_lc1
+atteso=0 trovato=1`.
+
+Stato (2026-05-31): lo STESSO loop sotto `--check-invertibility`
+whole-program (uncall __main__) INVERTE pulito — i fix VM di oggi
+(nested-IF dispatch, MAX_IFS, UAF) coprono il path inverse "plain". Il
+per-fn `uncall` invece usa un path diverso (CALL/UNCALL clone-frame /
+recursion_depth-replay) che non ripristina `e0` (loop-guard truth) al
+valore d'ingresso: `lc1 += e0` in forward, ma l'inverse fa `lc1 -= 0`
+invece di `lc1 -= 1` → lc1 resta 1 al DELOCAL.
+
+Root: `_build_counter_loop_instrs` (c_lower.py) snapshotta `g(=lc1) +=
+init_lc` dove `init_lc = lc = e0`, e il body del loop ricomputa `e0`
+(push(e0,hist) + reset + truth). L'inverse del per-fn uncall non riporta
+e0 a 1 prima di `lc1 -= e0`. Due strade: (a) Mnemo — snapshot della
+guard-truth in un fresh int STABILE che il loop non muta, usato per
+`g +=`/`g -=`; (b) Kairos — far sì che il path CALL/UNCALL ripristini e0
+come fa il path plain. Path condiviso con encrypt/DES uncall → validare
+ampio. Quando risolto: rimuovere l'esclusione self-mut residua in
+`loop_hoist_targets` (compile.py) → opt-uncall completo.
 
 ## Lavori grossi futuri
 
