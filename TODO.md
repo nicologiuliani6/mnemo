@@ -29,110 +29,15 @@ native-arith.
 
 
 
-### VM `op_uncall` su void proc con `show` → divergenza inverse putd/putx (RISOLTO 2026-05-31)
+### Follow-up: rilassare workaround `show_using_targets` (post put-skip)
 
-**RISOLTO** (commit Kairos put-skip): l'inverse di `call __mn_put*`
-(putd/putx/puto + varianti) è ora un no-op (`vm_invert.h` INVOP_CALL:
-`if (strncmp(pn,"__mn_put",8)==0) skip`). Corretto perché i printer sono
-identità sullo stato (divmod self-uncalled, show no-op, locali delocal'd →
-net `__mn_hist`=0). Elimina la ricorsione inversa non-terminante. Verificato:
-`--check-invertibility` su printf-in-loop ora inverte (exit 0), prima hang.
-Il cap `MN_CLONE_MAX_DEPTH=512` resta come safety-net per altri runaway.
-
-**Da investigare (follow-up)**: ora che l'inverse di putd è no-op, il
-workaround Mnemo `show_using_targets` (esclusione fn-con-printf da opt-uncall
-dentro loop) potrebbe essere rilassabile/rimovibile — verificare se le
-call printer-in-loop opt-uncall ora invertono pulite.
-
---- diagnosi storica (pre-fix) ---
-
-Bug VM sotto la superficie. Workaround corrente in Mnemo:
-`show_using_targets` transitive closure esclude user fn con printf
-da single-call opt-uncall.
-
-**Diagnosi (post-investigazione)**: con workaround disabilitato (Mnemo
-emette `call printer` + `uncall printer`), VM crash su 2° ciclo
-`printer(N)`. gdb trace mostra ricorsione profonda in
-`exec_branch_inverse` → `invert_op_to_line` → `clone_frame_for_depth`
-→ `memset` overflow.
-
-Causa: `__mn_putd_uint` è self-recursive. Forward stack genera frames
-`__mn_putd_uint@1, @2, @3, ...` per ogni digit. Inverse rivisita
-frames crescenti senza release. 2 chiamate `printer()` consecutive
-accumulano depth fino a `@358`, supera `MAX_FRAMES=200`.
-
-Workaround alternativi (testati, INSUFFICIENTI):
-- Bump `MAX_FRAMES` a 1024 → overflow @982 (printf+uncall accumula
-  indefinitamente).
-- Depth cap via modulo → causa `get_findex: frame @N non trovato` per
-  call sites che lookup chiave originale.
-- ulimit -s 512MB → ancora SIGSEGV (memoria corruption, non stack OF).
-- `frame_indexer_count_at_snap` save/restore + reset clone slot names
-  → libera frame *tra* cicli call+uncall consecutivi, ma depth cresce
-  fino @158 DENTRO un singolo inverse (commit ba177bf safety guard).
-- Reset `recursion_depth = 0` su base frame ad UNCALL → non aiuta:
-  la crescita @N avviene in `vm_invert.h:1212-1218` leggendo `@N` dal
-  frame_name corrente, non da `recursion_depth`.
-
-Causa profonda: `recursion_depth` mai resettato. Forward `__mn_putd_uint`
-cresce depth per digit; inverse re-entrara generando frames @1..@N
-incrementali. Tra cicli `call printer / uncall printer` consecutivi,
-depth NON azzerato → unbounded growth.
-
-Fix VM corretto richiede:
-1. Reset `recursion_depth` su rientro a main context post-uncall.
-2. O GC frames non più referenziati dopo uncall completato.
-3. O refactor `vm_invert.h` mutual recursion in iterative loop.
-
-**Tentativo 2026-05-30 (FALLITO)**: cap globale `VM_MAX_SAFE_DEPTH=256`
-in `clone_frame_for_depth`. Evita CHAR_ID_MAP overflow ma causa infinite
-loop perché branch replay logic in `invert_op_to_line:1129-1149` continua
-a riapplicare ELSE+THEN su stesso frame riusato senza terminazione.
-
-Il branch replay si basa su `vm->frames[fi].recursion_depth` per sapere
-quante ELSE iter ricreare. Per frame creati SOLO in inverse, `.rd=0`
-default → fallback a `do_eval_if_entry` → eval cond → pick branch
-(potenzialmente THEN sbagliato → ricorsione infinita).
-
-Fix corretto richiede tracciare quanti livelli forward sono stati
-effettivamente eseguiti per OGNI frame, non solo il base. Lavoro non
-banale; defer.
-
-Workaround Mnemo (`show_using_targets` exclusion) **ristretto** alle
-call-site dentro loop (2026-05-31). Le call sequenziali fuori loop ora
-ricevono opt-uncall: il `frame_indexer_floor_to_restore` (VM, Janus.c)
-libera i frame `__mn_putd_uint@N` tra cicli call+uncall consecutivi.
-Solo dentro un loop la depth si accumula cross-iter → hang; quelle
-restano escluse.
-
-Implementazione: `show_blk = name in show_using_targets and bool(ctx.loop_stack)`
-(c_lower.py ~7595). Verificato byte-per-byte no-opt == opt su
-kernel/des/encrypt/PC/_dbg_kernel_sched.
-
-**Diagnosi strutturale (2026-05-31)**: il fallback recursion_depth-replay
-(`vm_invert.h` ~1130) assume struttura ricorsiva "N×ELSE poi 1×THEN"
-(divmod-like: il caso base è il THEN). `__mn_putd_uint` / `__mn_putx_uint`
-hanno struttura OPPOSTA: "1×THEN (con `call` ricorsivo) per livello, poi
-base ELSE". Il replay quindi forza il ramo THEN ad ogni livello → l'inverse
-clona `__mn_putd_uint@1,@2,@3,…` senza mai raggiungere il base case →
-crescita illimitata (verificato: depth incrementa 1,2,3,… linearmente,
-RSS +350 MB/s). Il branch_trace preciso (corretto) è attivo SOLO per
-opt-uncall di una singola proc, non per la `uncall __main__` plain del
-`--check-invertibility`.
-
-**Mitigazione (2026-05-31, commit cap)**: `MN_CLONE_MAX_DEPTH=512` in
-`clone_frame_for_depth` → `vm_debug_panic` (exit 1) se la profondità
-supera 512. NB: diverso dal tentativo modulo-256 fallito (che RIUSAVA i
-frame → loop infinito); questo ABORTISCE pulito. Profondità reale forward
-≪ 512 (cifre ≤ 19, divmod mnhalve ≤ 64) → mai falsi positivi (199 test
-verdi). Effetto su `--check-invertibility` di programmi con printf:
-dump+stats+output forward escono (stampati PRIMA dell'uncall), poi
-l'uncall abortisce con messaggio chiaro invece di hang/OOM. DES passa da
-hang-infinito a 4 s + errore diagnostico.
-
-**Risolto** dal put-skip (vedi banner in cima alla sezione): non serve più
-né branch_trace whole-program né rewrite non-ricorsivo di putd. Il cap
-resta come safety-net.
+Ora che l'inverse di `call __mn_put*` è no-op (put-skip in `vm_invert.h`),
+il workaround Mnemo `show_using_targets` — che esclude le fn-con-printf da
+opt-uncall **dentro loop** (`show_blk = name in show_using_targets and
+bool(ctx.loop_stack)`, c_lower.py ~7595) — potrebbe non servire più.
+Verificare se le call printer-in-loop opt-uncall ora invertono pulite; se
+sì, rimuovere l'esclusione. Safety-net residuo: cap `MN_CLONE_MAX_DEPTH=512`
+in `clone_frame_for_depth`.
 
 ### opt-uncall + loop + if con self-mut → DELOCAL/POP error (WORKAROUND 2026-05-31)
 
