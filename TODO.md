@@ -104,11 +104,16 @@ reproducer minimi noti ora invertono** (resta il limite di profondità
 disj-chain >64 sopra).
 
 **Workaround** (c_lower.py:loop_hoist_targets): hoist transform
-ritorna set di fn dove ha sparato dentro un loop body. Queste fn
-escluse da `apply_uncall_opt` / `apply_void_uncall_opt`. Stesso set
-copre anche le fn con cond-hoisted contenente TernaryOp (il `?:` genera
-un IF interno con push/pop hist → inverse sbilancia anche fuori loop;
-vedi regression generic_if_ternary_index.c).
+ritorna set di fn dove ha sparato un cond-hoist **self-mut dentro un loop**
+(`for/while { if(E legge X) ... scrive X }`). Queste fn escluse da
+`apply_uncall_opt` / `apply_void_uncall_opt`. Ristretto 2026-05-31: il
+sotto-caso TernaryOp-in-cond-hoisted NON è più escluso (il bug era il
+dispatch nested-IF della VM, Kairos 5098d1f, ora risolto;
+`generic_if_ternary_index.c` passa opt-uncall). Verificato: sweep
+base-vs-opt su tutte le 163 generic = 163 MATCH con l'esclusione ristretta.
+Resta escluso solo il self-mut (es. `touch_idx_loop` in
+`generic_if_arr_self_mut.c`): sotto opt-uncall dà ancora `DELOCAL
+__mn_lc1 atteso=0 trovato=1` (loop-counter, vedi sotto).
 
 **Fix corretto** (opt-uncall loop-counter, ancora aperto) richiede
 investigare l'interazione tra inverse di `from cond loop body until cond2`

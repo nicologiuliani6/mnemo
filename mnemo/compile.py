@@ -365,14 +365,12 @@ def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
                 g_name = _fresh()
                 if in_loop_depth[0] > 0 and cur_fn[0]:
                     hoisted_in_loop.add(cur_fn[0])
-                # Ternary dentro la cond hoisted: il `?:` genera un IF interno
-                # con push/pop su __mn_hist (TernaryOp lowering). Combinato con
-                # disj-chain (array index runtime) l'inverse di opt-uncall non
-                # bilancia i push → "POP sotto pavimento". Marca la fn unsafe.
-                if cur_fn[0] and any(
-                    isinstance(n, c.TernaryOp) for n in _iter_c_nodes(s.cond)
-                ):
-                    hoisted_in_loop.add(cur_fn[0])
+                # NB: il sotto-caso ternary-in-cond-hoisted (il `?:` genera un IF
+                # interno con push/pop su __mn_hist, combinato con disj-chain
+                # sbilanciava l'inverse di opt-uncall) NON è più escluso: il bug
+                # era nel dispatch nested-IF della VM (Kairos 5098d1f, else-if
+                # chain double-dispatch) ed è risolto. generic_if_ternary_index
+                # ora passa opt-uncall. Resta escluso solo il self-mut in loop.
                 g_decl = c.Decl(
                     name=g_name,
                     quals=[], align=[], storage=[], funcspec=[],
