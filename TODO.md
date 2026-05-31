@@ -29,16 +29,6 @@ native-arith.
 
 
 
-### Follow-up: rilassare workaround `show_using_targets` (post put-skip)
-
-Ora che l'inverse di `call __mn_put*` è no-op (put-skip in `vm_invert.h`),
-il workaround Mnemo `show_using_targets` — che esclude le fn-con-printf da
-opt-uncall **dentro loop** (`show_blk = name in show_using_targets and
-bool(ctx.loop_stack)`, c_lower.py ~7595) — potrebbe non servire più.
-Verificare se le call printer-in-loop opt-uncall ora invertono pulite; se
-sì, rimuovere l'esclusione. Safety-net residuo: cap `MN_CLONE_MAX_DEPTH=512`
-in `clone_frame_for_depth`.
-
 ### opt-uncall + loop + if con self-mut → DELOCAL/POP error (WORKAROUND 2026-05-31)
 
 Pattern: fn con `for/while/do { if (E_self_mut) BODY_self_mut }`.
