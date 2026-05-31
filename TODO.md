@@ -110,19 +110,18 @@ e0 cross-iter quando il body esegue push(e0,hist) + ricomputa e0.
   `VAR_CHANNEL_MAX_SIZE=128` sono solo alloc INIZIALE; tutti i push
   fanno `realloc(stack_len+1)` per-elemento (no hard cap, però perf
   subottimale: refactor a doubling amortizzato è auspicabile).
+- **`vm->frames` ora `Frame **`** (commit Kairos 3036648, 2026-05-31):
+  Frame allocati individualmente sull'heap → realloc del pointer array
+  non sposta Frame. Sblocca bump safe di MAX_NESTED/MAX_VARS senza
+  rompere ex33 parallel2_fib.
 
-**Open — limiti Frame statici** (in struct, non triviali da rendere dyn):
-- `MAX_VARS=2048`, `MAX_LABEL=8192`, `MAX_NESTED=1024`, `MAX_PROC_PARAMS=1024`,
-  `VM_TRACE_WIN_STACK_MAX=4096`.
-- Bump > 1024 di MAX_NESTED causa Frame size > 600KB → realloc di
-  `vm->frames` (pointer array) sposta i Frame objects → invalida
-  pointer-into-frame held da operazioni cross-call (ex33 parallel2_fib
-  SIGSEGV).
-- **Fix corretto**: refactor `vm->frames` da `Frame *frames` a
-  `Frame **frames` (array di pointer a Frame heap-alloc separati). Così
-  realloc del pointer array non sposta i Frame individuali. Richiede
-  cambiare ~288 access site `vm->frames[i].x` → `vm->frames[i]->x` (sed
-  bulk fattibile ma rischioso).
+**Open — Frame fields statici**: bumping ora safe (no Frame movement),
+ma richiede per-Frame realloc inline + sed dei field access:
+- `MAX_VARS=2048` (Var *vars[]), `MAX_LABEL=8192` (uint label[]),
+  `MAX_NESTED=1024` (loop_restart_i/loop_bottom_i),
+  `MAX_PROC_PARAMS=1024` (param_indices[]),
+  `VM_TRACE_WIN_STACK_MAX=4096` (trace_window_stack[]).
+- Bump statico ora possibile senza crash; dyn alloc per future-proof.
 
 **Open — non ancora toccati**:
 - DBG_MAX_BREAKPOINTS=256, DBG_MAX_HISTORY=4096 (debug only, low priority).
