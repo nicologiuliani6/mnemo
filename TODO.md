@@ -123,18 +123,6 @@ hang-infinito a 4 s + errore diagnostico.
    reversibile su stack di cifre) → niente ricorsione da invertire.
 Entrambe non banali; il cap tiene il tool usabile nel frattempo.
 
-### IF/FI reversibilità rotta per `if (arr[k]==x) arr[k]=y;` con k costante (FIXATO 2026-05-31)
-
-**Root cause**: `_transform_hoist_unsafe_if_conds` rilevava solo
-assegnazioni con lvalue `c.ID`. Pattern `arr[k] = v` con lvalue
-ArrayRef veniva ignorato → cond `arr[k] == c` con body che muta
-`arr[k]` non veniva hoisted → IF/FI guard sulla cella `__mn_memX`
-direttamente → VM error "IF/FI non reversibile".
-
-**Fix** (compile.py:_lvalue_base_ids): estrae ID base anche da
-ArrayRef/StructRef/UnaryOp deref. Body writes ora include `arr` per
-`arr[k] = v`, `p->field = v`, `*p = v`, `s.f = v`. Hoist scatta.
-
 ### opt-uncall + loop + if con self-mut → DELOCAL/POP error (WORKAROUND 2026-05-31)
 
 Pattern: fn con `for/while/do { if (E_self_mut) BODY_self_mut }`.
@@ -205,6 +193,21 @@ con `malloc` dentro un loop con N iterazioni runtime non sono inferibili
 staticamente; oggi richiedono `--ptr-pool-size N_max`. Una primitiva VM
 `pool_grow N` reversibile permetterebbe crescita on-demand. Dipende da
 [[1. VM Kairos: allocazione dinamica strutture interne]].
+
+### 3. C-subset: `arr[i].campo` su array-di-struct top-level (non supportato)
+
+`_structref_base_and_path` (c_lower.py:~2879) esige che la base di `.campo`
+sia un `c.ID`. Per `P arr[3]; arr[i].x = v;` la base è un `c.ArrayRef` →
+errore `la base di .campo deve essere un identificatore`. Fallisce anche
+con indice **costante** (`arr[0].x`). Esiste già infra per array-di-struct
+annidati (`struct_array_info`, synth tag `__elem` in `_resolve_struct_array_meta`),
+ma il path StructRef→ArrayRef base non è agganciato.
+
+Fix: in `_structref_base_and_path` accettare base `ArrayRef`; calcolare la
+cella `base + idx*sizeof(elem) + field_offset`. Indice costante = cella
+diretta (`arr__N__campo`); indice runtime = riusare la disj-chain / pointer
+arith come per `arr[i]` scalare. Repro: stress s9 (`/tmp/s9.c`), atteso
+gcc `0 20 20`. Non bloccante (pattern raro, scoperto in stress interno).
 
 ---
 
