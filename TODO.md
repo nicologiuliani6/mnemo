@@ -163,13 +163,12 @@ completo su loop con IF body.
   non sposta Frame. Sblocca bump safe di MAX_NESTED/MAX_VARS senza
   rompere ex33 parallel2_fib.
 
-**Open — Frame fields statici**: bumping ora safe (no Frame movement),
-ma richiede per-Frame realloc inline + sed dei field access:
-- `MAX_VARS=2048` (Var *vars[]), `MAX_LABEL=8192` (uint label[]),
-  `MAX_NESTED=1024` (loop_restart_i/loop_bottom_i),
-  `MAX_PROC_PARAMS=1024` (param_indices[]),
-  `VM_TRACE_WIN_STACK_MAX=4096` (trace_window_stack[]).
-- Bump statico ora possibile senza crash; dyn alloc per future-proof.
+**Frame fields statici — bumpati (FATTO)**: valori correnti in
+`vm_types.h` già oltre i vecchi target: `MAX_VARS=4096`, `MAX_LABEL=16384`,
+`MAX_NESTED=4096`, `MAX_PROC_PARAMS=1024`, `VM_TRACE_WIN_STACK_MAX=4096`,
+`IF_BRANCH_STACK_MAX=65536`. `kairos_limits.py` allineato
+(`KAIROS_MAX_PROC_PARAMS=1000 ≤ 1024`). Resta come future-proof la dyn
+alloc per-Frame (realloc inline) al posto del bump statico, ma non urgente.
 
 **Open — non ancora toccati**:
 - DBG_MAX_BREAKPOINTS=256, DBG_MAX_HISTORY=4096 (debug only, low priority).
