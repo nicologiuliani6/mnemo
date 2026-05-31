@@ -75,8 +75,14 @@ di programmi con loop non banali.
   stack vuoto`. Fix Kairos commit c5b56ae: MAX_IFS→256 + heap-alloc del
   local `ifs[]` in `exec_branch_inverse`. Regression guard
   `c_test/inv_multi_disjchain_compound.c` (ora inverte). Limite residuo
-  noto: `collect_ifs` `stack_idx[64]` capa la *profondità* di nesting a
-  64 → indice runtime su array più lunghi di 64 ancora rotto.
+  noto: indice runtime `g[i]` su array > ~64 elementi fallisce **pulito**
+  (exit 1, no crash) sotto --check-invertibility. La disj-chain è profonda
+  quanto l'array; `collect_ifs` `stack_idx[64]` la tronca. NON bumpabile
+  in isolamento: alzare quel cap fa ricorrere `exec_branch_inverse` più in
+  profondità e sbatte sui cap successivi (`MAX_LINES=1024`, MAX_IFS, stack
+  di ricorsione) trasformando il fail pulito in SIGSEGV (verificato). Serve
+  rendere dinamici/coerenti tutti i cap insieme — vedi «Lavori grossi
+  futuri §1». Pattern raro (forward+run normale OK a qualsiasi N).
 - OK (RISOLTO 2026-05-31): loop annidato
   `while(i<4){while(j<4){g[i]^=j;j++;}i++;}` → era `SIGSEGV` (exit -11).
   Indipendente da array/disj-chain: anche `while{while{s+=j}}` crashava.
