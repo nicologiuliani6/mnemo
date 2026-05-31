@@ -364,6 +364,14 @@ def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
                 g_name = _fresh()
                 if in_loop_depth[0] > 0 and cur_fn[0]:
                     hoisted_in_loop.add(cur_fn[0])
+                # Ternary dentro la cond hoisted: il `?:` genera un IF interno
+                # con push/pop su __mn_hist (TernaryOp lowering). Combinato con
+                # disj-chain (array index runtime) l'inverse di opt-uncall non
+                # bilancia i push → "POP sotto pavimento". Marca la fn unsafe.
+                if cur_fn[0] and any(
+                    isinstance(n, c.TernaryOp) for n in _iter_c_nodes(s.cond)
+                ):
+                    hoisted_in_loop.add(cur_fn[0])
                 g_decl = c.Decl(
                     name=g_name,
                     quals=[], align=[], storage=[], funcspec=[],

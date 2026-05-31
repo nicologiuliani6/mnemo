@@ -99,7 +99,10 @@ inverse rompe lifecycle di `__mn_lc1` (loop counter local):
 
 **Workaround** (c_lower.py:loop_hoist_targets): hoist transform
 ritorna set di fn dove ha sparato dentro un loop body. Queste fn
-escluse da `apply_uncall_opt` / `apply_void_uncall_opt`.
+escluse da `apply_uncall_opt` / `apply_void_uncall_opt`. Stesso set
+copre anche le fn con cond-hoisted contenente TernaryOp (il `?:` genera
+un IF interno con push/pop hist → inverse sbilancia anche fuori loop;
+vedi regression generic_if_ternary_index.c).
 
 **Fix corretto** richiede investigare l'interazione tra inverse di
 `from cond loop body until cond2` (kairos) e la riallocazione di
