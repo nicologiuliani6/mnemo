@@ -94,9 +94,34 @@ Implementazione: `show_blk = name in show_using_targets and bool(ctx.loop_stack)
 (c_lower.py ~7595). Verificato byte-per-byte no-opt == opt su
 kernel/des/encrypt/PC/_dbg_kernel_sched.
 
-**Open (fix VM definitivo)**: per sbloccare anche le call in loop serve
-resettare `recursion_depth` dei frame auto-ricorsivi a fine UNCALL, o GC
-dei frame `@N` non più referenziati. Vedere note "Causa profonda" sopra.
+**Diagnosi strutturale (2026-05-31)**: il fallback recursion_depth-replay
+(`vm_invert.h` ~1130) assume struttura ricorsiva "N×ELSE poi 1×THEN"
+(divmod-like: il caso base è il THEN). `__mn_putd_uint` / `__mn_putx_uint`
+hanno struttura OPPOSTA: "1×THEN (con `call` ricorsivo) per livello, poi
+base ELSE". Il replay quindi forza il ramo THEN ad ogni livello → l'inverse
+clona `__mn_putd_uint@1,@2,@3,…` senza mai raggiungere il base case →
+crescita illimitata (verificato: depth incrementa 1,2,3,… linearmente,
+RSS +350 MB/s). Il branch_trace preciso (corretto) è attivo SOLO per
+opt-uncall di una singola proc, non per la `uncall __main__` plain del
+`--check-invertibility`.
+
+**Mitigazione (2026-05-31, commit cap)**: `MN_CLONE_MAX_DEPTH=512` in
+`clone_frame_for_depth` → `vm_debug_panic` (exit 1) se la profondità
+supera 512. NB: diverso dal tentativo modulo-256 fallito (che RIUSAVA i
+frame → loop infinito); questo ABORTISCE pulito. Profondità reale forward
+≪ 512 (cifre ≤ 19, divmod mnhalve ≤ 64) → mai falsi positivi (199 test
+verdi). Effetto su `--check-invertibility` di programmi con printf:
+dump+stats+output forward escono (stampati PRIMA dell'uncall), poi
+l'uncall abortisce con messaggio chiaro invece di hang/OOM. DES passa da
+hang-infinito a 4 s + errore diagnostico.
+
+**Open (fix VM definitivo)**: due strade —
+1. Estendere branch_trace al whole-program (replay esatto dei rami per
+   ogni proc, non solo la singola opt-uncall) così la `uncall __main__`
+   inverte correttamente putd/putx.
+2. Riscrivere `__mn_putd_uint`/`__mn_putx_uint` non-ricorsivi (loop
+   reversibile su stack di cifre) → niente ricorsione da invertire.
+Entrambe non banali; il cap tiene il tool usabile nel frattempo.
 
 ### IF/FI reversibilità rotta per `if (arr[k]==x) arr[k]=y;` con k costante (FIXATO 2026-05-31)
 
