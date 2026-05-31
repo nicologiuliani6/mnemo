@@ -152,6 +152,19 @@ DES supera putd ma fallisce su `DELOCAL: __mn_lc0 atteso=0 trovato=-1`
 __main__` plain). È ora il prossimo blocker per la verifica reversibilità
 di programmi con loop non banali.
 
+**Reproducer minimi (2026-05-31, plain uncall __main__)** — falliscono
+puliti (exit 1, no hang):
+- OK: loop semplice accumulo `for(i=10;i>0;i--) s+=i;` → inverte (exit 0).
+- OK: `while(i<N){ emit(i); i++; }` con printf → inverte (post put-skip).
+- FAIL `g[i]=i*i` in loop (indice=counter): `POP: stack vuoto dest=__mn_mem8`
+  — disj-chain runtime-index spinge hist solo nel ramo che matcha; l'inverse
+  pop sbilanciato sotto uncall plain.
+- FAIL loop annidato `while(i<4){while(j<4){g[i]^=j;j++;}i++;}`:
+  `DELOCAL __mn_lc1 atteso=0 trovato=-2`.
+Bug distinti del plain-uncall inverse (loop counter lifecycle + disj-chain
+hist balance). Il forward + run normale di questi pattern funziona; solo
+`--check-invertibility` (uncall whole-program) li espone.
+
 **Workaround** (c_lower.py:loop_hoist_targets): hoist transform
 ritorna set di fn dove ha sparato dentro un loop body. Queste fn
 escluse da `apply_uncall_opt` / `apply_void_uncall_opt`. Stesso set
