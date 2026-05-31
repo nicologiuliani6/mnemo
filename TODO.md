@@ -57,17 +57,30 @@ DES supera putd ma fallisce su `DELOCAL: __mn_lc0 atteso=0 trovato=-1`
 __main__` plain). È ora il prossimo blocker per la verifica reversibilità
 di programmi con loop non banali.
 
-**Reproducer minimi (2026-05-31, plain uncall __main__)** — falliscono
-puliti (exit 1, no hang):
+**Reproducer minimi (2026-05-31, plain uncall __main__)**:
 - OK: loop semplice accumulo `for(i=10;i>0;i--) s+=i;` → inverte (exit 0).
 - OK: `while(i<N){ emit(i); i++; }` con printf → inverte (post put-skip).
-- FAIL `g[i]=i*i` in loop (indice=counter): `POP: stack vuoto dest=__mn_mem8`
-  — disj-chain runtime-index spinge hist solo nel ramo che matcha; l'inverse
-  pop sbilanciato sotto uncall plain.
-- FAIL loop annidato `while(i<4){while(j<4){g[i]^=j;j++;}i++;}`:
-  `DELOCAL __mn_lc1 atteso=0 trovato=-2`.
-Bug distinti del plain-uncall inverse (loop counter lifecycle + disj-chain
-hist balance). Il forward + run normale di questi pattern funziona; solo
+- OK (RISOLTO 2026-05-31): `g[i]=...` store runtime-index (disj-chain
+  `if i==0 .. else if i==1 ..`), singolo o in loop `for(i) g[i]=i*i`.
+  Root cause era **Kairos** `exec_branch_inverse` (vm_invert.h): la
+  else-if chain annida ogni IF nell'ELSE del precedente; lo scan reverse
+  dispatchava OGNI nested IF nello span (non solo il figlio immediato) →
+  C2,C3,… invertiti sia al top-level sia via recursion del parent →
+  doppia inversione → `POP: stack vuoto` su `__mn_hist`. Fix Kairos
+  commit 5098d1f: skip candidate enclosed da un altro nested IF dello span.
+- **FAIL RESIDUO** multi-disj-chain + compound-read: ≥3 store `g[k]=v`
+  seguiti da compound `g[a]+=g[b]` (che legge g[a],g[b] + scrive g[a]) →
+  `POP: stack vuoto dest=__mn_memX inv=1`. Indipendente dal nesting
+  (fallisce anche con tutti gli indici 0/1, array g[6]); `3 store no-cmp`
+  e `2 store + cmp` invertono OK. Repro `c_test/inv_multi_disjchain_compound.c`.
+  Sbilancio hist
+  cumulativo tra disj-chain di READ e WRITE — bug separato, non-nesting.
+- **FAIL loop annidato** `while(i<4){while(j<4){g[i]^=j;j++;}i++;}` →
+  ora `SIGSEGV` (exit -11). Pre-esistente e indipendente dal disj-chain:
+  anche `while{while{s+=j}}` SENZA array crasha uguale
+  (repro `c_test/inv_nested_loop_segfault.c`).
+  Bug nested-loop inverse (from/until annidati), distinto.
+Il forward + run normale di questi pattern funziona; solo
 `--check-invertibility` (uncall whole-program) li espone.
 
 **Workaround** (c_lower.py:loop_hoist_targets): hoist transform
@@ -77,9 +90,13 @@ copre anche le fn con cond-hoisted contenente TernaryOp (il `?:` genera
 un IF interno con push/pop hist → inverse sbilancia anche fuori loop;
 vedi regression generic_if_ternary_index.c).
 
-**Fix corretto** richiede investigare l'interazione tra inverse di
-`from cond loop body until cond2` (kairos) e la riallocazione di
-e0 cross-iter quando il body esegue push(e0,hist) + ricomputa e0.
+**Fix corretto** (opt-uncall loop-counter, ancora aperto) richiede
+investigare l'interazione tra inverse di `from cond loop body until cond2`
+(kairos) e la riallocazione di e0 cross-iter quando il body esegue
+push(e0,hist) + ricomputa e0. Nota: il sotto-caso disj-chain runtime-index
+NON era questo — era il bug Kairos `exec_branch_inverse` (else-if chain
+double-dispatch), risolto in commit Kairos 5098d1f. Restano aperti i due
+FAIL residui sopra (multi-disjchain compound-read, nested-loop SIGSEGV).
 
 ## Lavori grossi futuri
 
