@@ -7592,7 +7592,14 @@ def _lower_funccall_with_ret(
             stk = _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
-            show_blk = name in ctx.show_using_targets
+            # show-using fn (printf transitivo): l'uncall inverso fa crescere
+            # `recursion_depth` di `__mn_putd_uint@N` (auto-ricorsivo) senza
+            # bound. Cross-iterazione di un loop la depth si accumula → hang.
+            # FUORI loop il `frame_indexer_floor_to_restore` (VM, Janus.c)
+            # libera i frame tra cicli call+uncall consecutivi → safe.
+            # Quindi escludiamo solo quando la call-site è dentro un loop nel
+            # chiamante (ctx.loop_stack non vuoto). Vedere TODO.md.
+            show_blk = name in ctx.show_using_targets and bool(ctx.loop_stack)
             pool_blk = name in ctx.pool_using_targets
             loop_hoist_blk = name in ctx.loop_hoist_targets
             self_rec = (name == ctx.fn_name)

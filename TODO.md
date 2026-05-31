@@ -58,15 +58,20 @@ Fix corretto richiede tracciare quanti livelli forward sono stati
 effettivamente eseguiti per OGNI frame, non solo il base. Lavoro non
 banale; defer.
 
-Workaround Mnemo (`show_using_targets` exclusion) resta attivo per
-correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
+Workaround Mnemo (`show_using_targets` exclusion) **ristretto** alle
+call-site dentro loop (2026-05-31). Le call sequenziali fuori loop ora
+ricevono opt-uncall: il `frame_indexer_floor_to_restore` (VM, Janus.c)
+libera i frame `__mn_putd_uint@N` tra cicli call+uncall consecutivi.
+Solo dentro un loop la depth si accumula cross-iter → hang; quelle
+restano escluse.
 
-**Test empirico 2026-05-31 (post-Frame** refactor + cap bumps)**:
-- `printer(int)` chiamata 2 volte da main → opt-uncall OK (no infinite loop).
-- `for (i=1..5) printer(i*10)` → HANG (depth accumula cross-iter, VM in loop).
+Implementazione: `show_blk = name in show_using_targets and bool(ctx.loop_stack)`
+(c_lower.py ~7595). Verificato byte-per-byte no-opt == opt su
+kernel/des/encrypt/PC/_dbg_kernel_sched.
 
-Tightening del workaround possibile: escludere SOLO se la chiamata è
-dentro un loop nel chiamante. Richiede analisi caller-context (deferred).
+**Open (fix VM definitivo)**: per sbloccare anche le call in loop serve
+resettare `recursion_depth` dei frame auto-ricorsivi a fine UNCALL, o GC
+dei frame `@N` non più referenziati. Vedere note "Causa profonda" sopra.
 
 ### IF/FI reversibilità rotta per `if (arr[k]==x) arr[k]=y;` con k costante (FIXATO 2026-05-31)
 
