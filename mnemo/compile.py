@@ -29,6 +29,7 @@ from mnemo.ir import (
     IPar,
     Instr,
     IUncall,
+    IVmDump,
     Program,
 )
 from mnemo.prelude import (
@@ -1958,11 +1959,17 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
         for (t, n) in old_main.locals
         if not (t == "stack" and n in ("__mn_hist", "__mn_scratch"))
     ]
+    # Dump dello stato forward PRIMA dell'uncall: blocco trailing con `dump()`.
+    # emit_kairos lo emette dopo il corpo, prima dei delocal auto → tutte le
+    # celle __mn_mem* sono ancora vive. Così il dump esce sempre, anche se
+    # l'uncall fallisce (ssend/channel) o reverte la memoria.
+    inner_blocks = list(old_main.blocks)
+    inner_blocks.append(Block(bid="__mn_inv_dump", instrs=[IVmDump()]))
     inner = Function(
         name="__main__",
         params=[("stack", "__mn_hist"), ("stack", "__mn_scratch")],
         locals=inner_locals,
-        blocks=list(old_main.blocks),
+        blocks=inner_blocks,
     )
     wrapper_body = [
         ICall("__main__", ["__mn_hist", "__mn_scratch"]),

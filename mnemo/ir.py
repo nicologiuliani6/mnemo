@@ -145,6 +145,13 @@ class IShow:
 
 
 @dataclass
+class IVmDump:
+    """Kairos `dump()` builtin → opcode MNDUMP. Dump dello stato del frame
+    attivo a metà esecuzione. Iniettato da --check-invertibility alla fine di
+    `__main__` (prima dell'uncall) così il dump forward esce sempre."""
+
+
+@dataclass
 class IComment:
     text: str
 
@@ -220,6 +227,7 @@ Instr = Union[
     IJump,
     IReturn,
     IShow,
+    IVmDump,
     IComment,
     IIfKairos,
     IFromUntilKairos,

@@ -1,5 +1,30 @@
 # TODO
 
+## Note / feature
+
+### `--check-invertibility` + `--vm-dump`: dump dello stato forward (DONE)
+
+Prima il VM dump usciva vuoto (o non usciva affatto) con
+`--check-invertibility`: il wrapper `main` fa `call __main__ ; uncall
+__main__`, l'uncall reverte tutto e il `vm_dump` finale (post-uncall)
+trova memoria azzerata; se l'uncall fallisce (es. `kernel` con
+ssend/channel → `[VM] SSEND: destinazione non è channel!`) la VM esce 1
+prima del dump.
+
+Fix: nuovo builtin Kairos `dump()` → opcode `DUMP` (`vm_dump_active`,
+dump del frame attivo via `get_findex`). Mnemo lo inietta in coda a
+`__main__` (blocco `__mn_inv_dump`), PRIMA dei delocal e dell'uncall →
+stato forward sempre stampato. `DUMP` è no-op nell'inverso (`INVOP_DUMP`)
+e soppresso durante replay (`suppress_show`). Flag `vm->mn_dumped` salta
+il dump finale post-uncall (evita doppio header).
+
+**Caveat native-arith nell'inversione**: con native-arith ON (Janus.c
+UNCALL path `mn_native_arith_uncall_inverse`), `--check-invertibility`
+verifica l'inverso C nativo O(1) di mul/divmod/bits, NON la reversibilità
+del codice Kairos di `mul.kairos`/`divmod.kairos`/`bits.kairos`. Per
+stressare il lib-code reversibile vero → check-invertibility SENZA
+native-arith.
+
 ## Bug aperti
 
 

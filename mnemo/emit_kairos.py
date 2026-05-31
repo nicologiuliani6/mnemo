@@ -29,6 +29,7 @@ from mnemo.ir import (
     ISrecv,
     ISsend,
     IShow,
+    IVmDump,
     IStoreRev,
     ISubEq,
     ISwap,
@@ -152,6 +153,9 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
             lines.append(f"{indent}show({ins.var}, char)")
         else:
             lines.append(f"{indent}show({ins.var})")
+        return
+    if isinstance(ins, IVmDump):
+        lines.append(f"{indent}dump()")
         return
     if isinstance(ins, IIfKairos):
         rhs = ins.rhs
