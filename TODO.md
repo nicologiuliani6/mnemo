@@ -68,18 +68,30 @@ di programmi con loop non banali.
   C2,C3,… invertiti sia al top-level sia via recursion del parent →
   doppia inversione → `POP: stack vuoto` su `__mn_hist`. Fix Kairos
   commit 5098d1f: skip candidate enclosed da un altro nested IF dello span.
-- **FAIL RESIDUO** multi-disj-chain + compound-read: ≥3 store `g[k]=v`
-  seguiti da compound `g[a]+=g[b]` (che legge g[a],g[b] + scrive g[a]) →
-  `POP: stack vuoto dest=__mn_memX inv=1`. Indipendente dal nesting
-  (fallisce anche con tutti gli indici 0/1, array g[6]); `3 store no-cmp`
-  e `2 store + cmp` invertono OK. Repro `c_test/inv_multi_disjchain_compound.c`.
-  Sbilancio hist
-  cumulativo tra disj-chain di READ e WRITE — bug separato, non-nesting.
+- OK (RISOLTO 2026-05-31): multi-disj-chain + compound-read: ≥3 store
+  `g[k]=v` seguiti da `g[a]+=g[b]` (6 disj-chain ≈ 36 nested IF). Root
+  cause era **Kairos** `MAX_IFS=32`: `collect_ifs` troncava i frame con
+  molte disj-chain → IF-map parziale → branch-pairing errato → `POP:
+  stack vuoto`. Fix Kairos commit c5b56ae: MAX_IFS→256 + heap-alloc del
+  local `ifs[]` in `exec_branch_inverse`. Regression guard
+  `c_test/inv_multi_disjchain_compound.c` (ora inverte). Limite residuo
+  noto: `collect_ifs` `stack_idx[64]` capa la *profondità* di nesting a
+  64 → indice runtime su array più lunghi di 64 ancora rotto.
 - **FAIL loop annidato** `while(i<4){while(j<4){g[i]^=j;j++;}i++;}` →
-  ora `SIGSEGV` (exit -11). Pre-esistente e indipendente dal disj-chain:
-  anche `while{while{s+=j}}` SENZA array crasha uguale
-  (repro `c_test/inv_nested_loop_segfault.c`).
-  Bug nested-loop inverse (from/until annidati), distinto.
+  `SIGSEGV` (exit -11). Indipendente da array/disj-chain: anche
+  `while{while{s+=j}}` SENZA array crasha (repro
+  `c_test/inv_nested_loop_segfault.c`). **Root cause (valgrind)**:
+  use-after-free in `exec_branch_inverse` (vm_invert.h). Il path
+  `branch_span_has_from_loop` salva `Var*` raw in `saved[]`, poi la
+  recursion annidata `exec_branch_inverse → invert_op_to_line →
+  exec_branch_inverse` esegue `op_local` (inverse di `delocal lc`) che
+  fa `delete_var`+`malloc` → libera il puntatore tmp che l'outer aveva
+  in `saved[]`; il cleanup inner `memcpy(vars, saved)` reinstaura il
+  puntatore liberato → il prossimo `op_local` legge/free dangling →
+  crash. Fix corretto = ripensare il contratto save/restore dei `Var*`
+  in `exec_branch_inverse` (op_local cambia il pointer del Var via
+  free+realloc, lo snapshot raw si invalida). Path condiviso con
+  divmod/encrypt/DES inverse → richiede validazione ampia, non blind.
 Il forward + run normale di questi pattern funziona; solo
 `--check-invertibility` (uncall whole-program) li espone.
 
