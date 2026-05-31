@@ -123,23 +123,27 @@ memoria (es. `bump(){G[0]+=5}`): il suo XOR-swap lascia G[0]=5, quindi
 `touch_idx_loop` vede l'IF variabile. Un prologo che NON tocca memoria
 (fn vuota) non rompe.
 
-**Root**: il meccanismo "Fix P3" branch_trace (Janus.c op_jmpf push +
-vm_invert.h JMPF_ELSE replay). Forward, dentro il pattern opt-uncall,
-`op_jmpf` registra ogni decisione IF in `vm->branch_trace` (in ordine di
-esecuzione). L'inverse legge la finestra `[trace_window_start, top)` in
-**FIFO** (`trace_idx = win_start + cursor++`). Per decisioni uniformi
-funziona; quando variano tra iterazioni il replay associa la decisione
-SBAGLIATA a una iterazione → ramo invertito errato → hist pop sbilanciato
-→ `e0` (loop-guard) non ripristinato → `lc1 -= 0` invece di `lc1 -= 1`.
-Verificato con dump trace reads (h2 all-true: idx 0→13 ok; h1 mixed:
-fallisce a idx12). Tentativo di consumo LIFO (leggere dalla cima)
-ROMPE il caso uniforme → l'ordine corretto non è il semplice reverse:
-il from-loop inverse + peel interagisce col cursor in modo non banale.
-Serve capire l'ordine di encounter degli IF nell'inverse del from-loop
-(peel) per mappare correttamente il cursor alle iterazioni. Path
-condiviso encrypt/DES → validare ampio, NON blind. Quando risolto:
-rimuovere l'esclusione `loop_hoist_targets` (compile.py) → opt-uncall
-completo su loop con IF body.
+**Root (diagnosi definitiva 2026-05-31, dump PUSH+READ a confronto)**:
+NON è l'ordine della branch_trace. Strumentando sia il push forward
+(`op_jmpf`, vm_ops.h) sia la read inverse (JMPF_ELSE, vm_invert.h) su h1
+(`G[0]=5`, 3 iter, ramo IF variabile): la forward spinge 22 entry
+(iter0=6, iter1=7, iter2=9 — depth disj-chain diversa per indice); la
+inverse legge **FIFO e i valori COINCIDONO esattamente** con le prime 13
+entry (iter0 6 + iter1 7), poi DELOCAL. Cioè l'inverse del `from-loop`
+ha **peelato solo 2 delle 3 iterazioni** → consuma 13/22 trace, lascia
+iter2 non invertita → hist sbilanciato → `e0` non ripristinato →
+`lc1 -= 0`. (h2 all-true peela tutte e 3 perché il footprint hist per
+iterazione è uniforme.)
+
+Il difetto è nel **conteggio di peel del from-loop inverse**
+(`loop_peel_more_at_until` / EVAL until, vm_invert.h ~1042-1074) quando il
+body ha un footprint hist VARIABILE per iterazione (push condizionali da
+un `if` data-dipendente). Il tentativo LIFO sulla trace era una pista
+sbagliata (la trace è già corretta). Fix vero = rendere il peel robusto a
+iterazioni con numero di push/branch diverso (probabile dipendenza da
+`e0`/hist che assume footprint uniforme). Path condiviso encrypt/DES →
+validare ampio, NON blind. Quando risolto: rimuovere l'esclusione
+`loop_hoist_targets` (compile.py) → opt-uncall completo su loop con IF body.
 
 ## Lavori grossi futuri
 
