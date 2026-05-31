@@ -1185,6 +1185,37 @@ def compute_program_mem_layout(
                     file_par1.add(loc)
             continue
 
+        # Array-di-struct file-scope (`P arr[3];`): alloca le celle flat
+        # `arr__i__campo` come slot `__file__`, come fa walk_decl per i locali.
+        sap = L._try_parse_struct_array_decl(ext, fs_ctx)
+        if sap is not None:
+            sa_name, sa_dims, sa_tag = sap
+            sa_fields = fs_ctx.struct_specs.get(sa_tag)
+            if not sa_fields:
+                raise MnemoCompileError(f"struct {sa_tag}: definizione mancante")
+            sa_tot = 1
+            for _d in sa_dims:
+                sa_tot *= int(_d)
+            if sa_name in fs_ctx.int_locals:
+                raise MnemoCompileError(f"ridichiarazione file-scope: {sa_name}")
+            fs_ctx.struct_array_info[sa_name] = (
+                sa_tag, tuple(int(d) for d in sa_dims), sa_tot
+            )
+            for i in range(sa_tot):
+                for fname, fty in sa_fields:
+                    if L._type_node_is_pthread_mutex(fty, td):
+                        continue
+                    cell_sa = f"{sa_name}__{i}__{fname}"
+                    if cell_sa in fs_ctx.int_locals:
+                        raise MnemoCompileError(f"ridichiarazione: {cell_sa}")
+                    fs_ctx.int_locals.add(cell_sa)
+                    if ("__file__", cell_sa) in slot_of:
+                        raise MnemoCompileError(
+                            f"variabile file-scope duplicata: {cell_sa}"
+                        )
+                    alloc("__file__", cell_sa)
+            continue
+
         ap = L._try_parse_array_decl(ext, fs_ctx)
         if ap is not None:
             name, dims, esz = ap

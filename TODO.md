@@ -189,21 +189,6 @@ staticamente; oggi richiedono `--ptr-pool-size N_max`. Una primitiva VM
 `pool_grow N` reversibile permetterebbe crescita on-demand. Dipende da
 [[1. VM Kairos: allocazione dinamica strutture interne]].
 
-### 3. C-subset: `arr[i].campo` su array-di-struct top-level (non supportato)
-
-`_structref_base_and_path` (c_lower.py:~2879) esige che la base di `.campo`
-sia un `c.ID`. Per `P arr[3]; arr[i].x = v;` la base è un `c.ArrayRef` →
-errore `la base di .campo deve essere un identificatore`. Fallisce anche
-con indice **costante** (`arr[0].x`). Esiste già infra per array-di-struct
-annidati (`struct_array_info`, synth tag `__elem` in `_resolve_struct_array_meta`),
-ma il path StructRef→ArrayRef base non è agganciato.
-
-Fix: in `_structref_base_and_path` accettare base `ArrayRef`; calcolare la
-cella `base + idx*sizeof(elem) + field_offset`. Indice costante = cella
-diretta (`arr__N__campo`); indice runtime = riusare la disj-chain / pointer
-arith come per `arr[i]` scalare. Repro: stress s9 (`/tmp/s9.c`), atteso
-gcc `0 20 20`. Non bloccante (pattern raro, scoperto in stress interno).
-
 ---
 
 ## Non fattibile per modello reversibile / VM Kairos

@@ -9492,6 +9492,98 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 raise MnemoCompileError(
                     f"ptr->campo: assegnamento con {node.op!r} non supportato"
                 )
+            # `arr[i].campo = X` con arr array-di-struct top-level (o `BASE.arr`).
+            # Speculare al read path (_eval_expr StructRef): costante i → slot
+            # diretto `arr__i__campo`; runtime i → disj-chain `if i==k` per slot.
+            if (
+                node.lvalue.type == "."
+                and isinstance(node.lvalue.name, c.ArrayRef)
+                and isinstance(node.lvalue.field, c.ID)
+            ):
+                _sr = node.lvalue
+                _arr_ref = _sr.name
+                _arr_log, _sa_meta = _resolve_struct_array_target(_arr_ref.name, ctx)
+                if _sa_meta is not None:
+                    _sa_tag, _sa_dims, _sa_tot = _sa_meta
+                    _field = _sr.field.name
+                    _spec = ctx.struct_specs.get(_sa_tag, [])
+                    if _field not in [fn for fn, _ in _spec]:
+                        raise MnemoCompileError(
+                            f"struct {_sa_tag}: campo {_field!r} assente"
+                        )
+                    _coord = node.coord
+
+                    def _sa_cell(kk: int) -> str:
+                        return f"{_arr_log}__{kk}__{_field}"
+
+                    if isinstance(_arr_ref.subscript, c.Constant):
+                        _ic = int(_arr_ref.subscript.value)
+                        if _ic < 0 or _ic >= _sa_tot:
+                            raise MnemoCompileError(
+                                f"{_arr_log}[{_ic}]: indice fuori range (0..{_sa_tot - 1})"
+                            )
+                        _cell = _sa_cell(_ic)
+                        if _cell not in ctx.int_locals:
+                            raise MnemoCompileError(
+                                f"campo struct array mancante: {_cell!r}"
+                            )
+                        _tphys = _phys(ctx, _cell)
+                        if node.op == "=":
+                            return _lower_assign(_tphys, node.rvalue, ctx)
+                        if node.op in _COMPOUND_ASSIGN_OPS:
+                            _rhs = c.BinaryOp(
+                                _COMPOUND_ASSIGN_OPS[node.op],
+                                c.ID(_cell, _coord),
+                                node.rvalue,
+                                _coord,
+                            )
+                            return _lower_assign(_tphys, _rhs, ctx)
+                        raise MnemoCompileError(
+                            f"arr[i].campo: assegnamento con {node.op!r} non supportato"
+                        )
+                    # Runtime index: disj-chain `if i==kk` per ogni slot.
+                    _ixp, _ixo, _ixt = _eval_expr(_arr_ref.subscript, ctx)
+                    if isinstance(_ixo, Imm):
+                        _tix = ctx.fresh_temp()
+                        _ixp = _ixp + [IConst(_tix, _ixo.value)]
+                        _ixn = _tix
+                        _ixt = _ixt + [_tix]
+                    else:
+                        _ixn = _ixo.name
+                    _out: list[Instr] = list(_ixp)
+                    for _kk in range(_sa_tot):
+                        _cell_kk = _sa_cell(_kk)
+                        if _cell_kk not in ctx.int_locals:
+                            raise MnemoCompileError(
+                                f"campo struct array mancante: {_cell_kk!r}"
+                            )
+                        _tphys = _phys(ctx, _cell_kk)
+                        if node.op == "=":
+                            _body = _lower_assign(_tphys, node.rvalue, ctx)
+                        elif node.op in _COMPOUND_ASSIGN_OPS:
+                            _rhs = c.BinaryOp(
+                                _COMPOUND_ASSIGN_OPS[node.op],
+                                c.ID(_cell_kk, _coord),
+                                node.rvalue,
+                                _coord,
+                            )
+                            _body = _lower_assign(_tphys, _rhs, ctx)
+                        else:
+                            raise MnemoCompileError(
+                                f"arr[i].campo: assegnamento con {node.op!r} non supportato"
+                            )
+                        _guard = c.BinaryOp(
+                            "==",
+                            c.ID(_ixn, _coord),
+                            c.Constant("int", str(_kk), _coord),
+                            _coord,
+                        )
+                        _out.extend(_lower_if_from_expr(_guard, _body, [], ctx))
+                    for _t in _ixt:
+                        _out.append(IHistPush(ctx.scratch, _t))
+                    if _ixt:
+                        ctx.use_scratch = True
+                    return _out
             base, path = _structref_base_and_path(node.lvalue)
             base_log = _scope_resolve(ctx, base)
             mangled = "__".join(path)
@@ -10331,6 +10423,30 @@ def _register_file_scope_struct_union_tags(
         if isinstance(ext.type, c.FuncDecl):
             continue
         if isinstance(ext.type, c.ArrayDecl):
+            # Array-di-struct file-scope (`P arr[3];`): registra struct_array_info
+            # + celle flat come fa il path locale (_lower_stmt), così read/write
+            # di `arr[i].campo` lo riconoscono. Le celle sono già allocate da
+            # layout_collect; qui servono solo in int_locals + struct_array_info.
+            sap = _try_parse_struct_array_decl(ext, ctx)
+            if sap is not None:
+                sa_name, sa_dims, sa_tag = sap
+                sa_fields = ctx.struct_specs.get(sa_tag)
+                if sa_fields:
+                    sa_tot = 1
+                    for _d in sa_dims:
+                        sa_tot *= int(_d)
+                    ctx.struct_array_info[sa_name] = (
+                        sa_tag, tuple(int(d) for d in sa_dims), sa_tot
+                    )
+                    ctx.var_types[sa_name] = ext.type
+                    for i in range(sa_tot):
+                        for fname, fty in sa_fields:
+                            if _type_node_is_pthread_mutex(fty, ctx.typedef_map):
+                                continue
+                            cell_sa = f"{sa_name}__{i}__{fname}"
+                            ctx.int_locals.add(cell_sa)
+                            ctx.var_types[cell_sa] = fty
+                    continue
             ap = _try_parse_array_decl(ext, ctx)
             if ap is not None:
                 name, dims, esz = ap
