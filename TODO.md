@@ -61,6 +61,13 @@ banale; defer.
 Workaround Mnemo (`show_using_targets` exclusion) resta attivo per
 correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
 
+**Test empirico 2026-05-31 (post-Frame** refactor + cap bumps)**:
+- `printer(int)` chiamata 2 volte da main → opt-uncall OK (no infinite loop).
+- `for (i=1..5) printer(i*10)` → HANG (depth accumula cross-iter, VM in loop).
+
+Tightening del workaround possibile: escludere SOLO se la chiamata è
+dentro un loop nel chiamante. Richiede analisi caller-context (deferred).
+
 ### IF/FI reversibilità rotta per `if (arr[k]==x) arr[k]=y;` con k costante (FIXATO 2026-05-31)
 
 **Root cause**: `_transform_hoist_unsafe_if_conds` rilevava solo
