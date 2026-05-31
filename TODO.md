@@ -29,7 +29,22 @@ native-arith.
 
 
 
-### VM `op_uncall` su void proc con `show` → SIGSEGV (workaroundato Mnemo)
+### VM `op_uncall` su void proc con `show` → divergenza inverse putd/putx (RISOLTO 2026-05-31)
+
+**RISOLTO** (commit Kairos put-skip): l'inverse di `call __mn_put*`
+(putd/putx/puto + varianti) è ora un no-op (`vm_invert.h` INVOP_CALL:
+`if (strncmp(pn,"__mn_put",8)==0) skip`). Corretto perché i printer sono
+identità sullo stato (divmod self-uncalled, show no-op, locali delocal'd →
+net `__mn_hist`=0). Elimina la ricorsione inversa non-terminante. Verificato:
+`--check-invertibility` su printf-in-loop ora inverte (exit 0), prima hang.
+Il cap `MN_CLONE_MAX_DEPTH=512` resta come safety-net per altri runaway.
+
+**Da investigare (follow-up)**: ora che l'inverse di putd è no-op, il
+workaround Mnemo `show_using_targets` (esclusione fn-con-printf da opt-uncall
+dentro loop) potrebbe essere rilassabile/rimovibile — verificare se le
+call printer-in-loop opt-uncall ora invertono pulite.
+
+--- diagnosi storica (pre-fix) ---
 
 Bug VM sotto la superficie. Workaround corrente in Mnemo:
 `show_using_targets` transitive closure esclude user fn con printf
@@ -115,13 +130,9 @@ dump+stats+output forward escono (stampati PRIMA dell'uncall), poi
 l'uncall abortisce con messaggio chiaro invece di hang/OOM. DES passa da
 hang-infinito a 4 s + errore diagnostico.
 
-**Open (fix VM definitivo)**: due strade —
-1. Estendere branch_trace al whole-program (replay esatto dei rami per
-   ogni proc, non solo la singola opt-uncall) così la `uncall __main__`
-   inverte correttamente putd/putx.
-2. Riscrivere `__mn_putd_uint`/`__mn_putx_uint` non-ricorsivi (loop
-   reversibile su stack di cifre) → niente ricorsione da invertire.
-Entrambe non banali; il cap tiene il tool usabile nel frattempo.
+**Risolto** dal put-skip (vedi banner in cima alla sezione): non serve più
+né branch_trace whole-program né rewrite non-ricorsivo di putd. Il cap
+resta come safety-net.
 
 ### opt-uncall + loop + if con self-mut → DELOCAL/POP error (WORKAROUND 2026-05-31)
 
@@ -134,6 +145,12 @@ inverse rompe lifecycle di `__mn_lc1` (loop counter local):
   `lc1 -= 0` invece di `lc1 -= 1` → lc1 = 1 a delocal (atteso 0).
 - VM error: `DELOCAL: valore finale errato! var=__mn_lc1, atteso=0, trovato=1`
   oppure `POP: __mn_hist sotto il pavimento mnemo`.
+
+**Blocca anche `--check-invertibility` whole-program**: dopo il put-skip,
+DES supera putd ma fallisce su `DELOCAL: __mn_lc0 atteso=0 trovato=-1`
+(frame=decrypt) — stessa classe (inverse del loop counter sotto `uncall
+__main__` plain). È ora il prossimo blocker per la verifica reversibilità
+di programmi con loop non banali.
 
 **Workaround** (c_lower.py:loop_hoist_targets): hoist transform
 ritorna set di fn dove ha sparato dentro un loop body. Queste fn
