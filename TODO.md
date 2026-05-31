@@ -2,21 +2,6 @@
 
 ## Bug aperti
 
-### opt-uncall su programmi con struct global + printf condizionale fallisce
-
-File: `c_test/_dbg_kernel_sched.c`. Senza `--opt-uncall-user-calls`
-match perfetto con gcc (3× `p0`). Con il flag:
-`[VM] POP: __mn_hist sotto il pavimento mnemo (manca __mn_hist_floor_snap?)`
-e nessun output.
-
-Pattern: struct global `K` con field array di struct + printf condizionale
-dentro fn user `worker(proc_t *p)` chiamata da main. show_using_targets
-DOVREBBE escludere worker (transitive printf use), ma evidentemente non
-sta funzionando o lo snap floor pattern non si chiude correttamente.
-
-Workaround: omettere `--opt-uncall-user-calls` per programmi con questo
-pattern.
-
 
 
 ### VM `op_uncall` su void proc con `show` → SIGSEGV (workaroundato Mnemo)
@@ -75,6 +60,38 @@ banale; defer.
 
 Workaround Mnemo (`show_using_targets` exclusion) resta attivo per
 correttezza. Trade-off: opt-uncall disabilitato per fn con printf.
+
+### IF/FI reversibilità rotta per `if (arr[k]==x) arr[k]=y;` con k costante (FIXATO 2026-05-31)
+
+**Root cause**: `_transform_hoist_unsafe_if_conds` rilevava solo
+assegnazioni con lvalue `c.ID`. Pattern `arr[k] = v` con lvalue
+ArrayRef veniva ignorato → cond `arr[k] == c` con body che muta
+`arr[k]` non veniva hoisted → IF/FI guard sulla cella `__mn_memX`
+direttamente → VM error "IF/FI non reversibile".
+
+**Fix** (compile.py:_lvalue_base_ids): estrae ID base anche da
+ArrayRef/StructRef/UnaryOp deref. Body writes ora include `arr` per
+`arr[k] = v`, `p->field = v`, `*p = v`, `s.f = v`. Hoist scatta.
+
+### opt-uncall + loop + if con self-mut → DELOCAL/POP error (WORKAROUND 2026-05-31)
+
+Pattern: fn con `for/while/do { if (E_self_mut) BODY_self_mut }`.
+Anche con hoist applicato (cond stabile via fresh int), opt-uncall
+inverse rompe lifecycle di `__mn_lc1` (loop counter local):
+- forward: `local lc1=0; lc1 += e0; if lc1!=0 then [body] fi; push(lc1,hist)`
+- inverse: `pop(lc1)`, `inverse if`, `lc1 -= e0`. e0 in inverse non
+  recupera valore originale (consumato da push/pop loop body) →
+  `lc1 -= 0` invece di `lc1 -= 1` → lc1 = 1 a delocal (atteso 0).
+- VM error: `DELOCAL: valore finale errato! var=__mn_lc1, atteso=0, trovato=1`
+  oppure `POP: __mn_hist sotto il pavimento mnemo`.
+
+**Workaround** (c_lower.py:loop_hoist_targets): hoist transform
+ritorna set di fn dove ha sparato dentro un loop body. Queste fn
+escluse da `apply_uncall_opt` / `apply_void_uncall_opt`.
+
+**Fix corretto** richiede investigare l'interazione tra inverse di
+`from cond loop body until cond2` (kairos) e la riallocazione di
+e0 cross-iter quando il body esegue push(e0,hist) + ricomputa e0.
 
 ## Lavori grossi futuri
 
