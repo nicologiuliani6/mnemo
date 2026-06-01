@@ -878,11 +878,6 @@ class _Ctx:
     `op_uncall` su void proc con `show` → SIGSEGV: niente single-call
     opt-uncall. Par-uncall (par/rap) NON usa questa lista — inverse simmetrico."""
     show_using_targets: frozenset[str] = field(default_factory=frozenset)
-    """Funzioni dove `_transform_hoist_unsafe_if_conds` ha sparato DENTRO un
-    loop (for/while/do-while). Single-call opt-uncall su queste rompe in
-    inverse (DELOCAL/POP errors) per interazione del local-block del loop
-    counter (lc1 += e0) con i push/pop di e0 dentro il body. Vedere TODO.md."""
-    loop_hoist_targets: frozenset[str] = field(default_factory=frozenset)
     """Funzioni (transitivamente) contenenti chiamate a pool ops (`__mn_pool_*`).
     Single-call opt-uncall su queste fallisce con DELOCAL var=t. Par-uncall OK."""
     pool_using_targets: frozenset[str] = field(default_factory=frozenset)
@@ -7601,7 +7596,6 @@ def _lower_funccall_with_ret(
             # printer-in-loop 50 iter opt-uncall = base; sweep 163/163 generic).
             show_blk = False
             pool_blk = name in ctx.pool_using_targets
-            loop_hoist_blk = name in ctx.loop_hoist_targets
             self_rec = (name == ctx.fn_name)
             callee_recursive = _func_is_recursive_user(ctx.file_ast, name)
             in_par2_worker = ctx.fn_name in ctx.par2_workers
@@ -7615,7 +7609,6 @@ def _lower_funccall_with_ret(
                 and not ch_blk
                 and not show_blk
                 and not pool_blk
-                and not loop_hoist_blk
                 and not in_par2_worker
             )
             apply_void_uncall_opt = (
@@ -7628,7 +7621,6 @@ def _lower_funccall_with_ret(
                 and not ch_blk
                 and not show_blk
                 and not pool_blk
-                and not loop_hoist_blk
                 and not in_par2_worker
             )
             uncall_with_restore: list[Instr] = []
@@ -10509,7 +10501,6 @@ def _lower_user_function(
     uncall_excluded_via_vm_targets: frozenset[str] = frozenset(),
     channel_using_targets: frozenset[str] = frozenset(),
     show_using_targets: frozenset[str] = frozenset(),
-    loop_hoist_targets: frozenset[str] = frozenset(),
     pool_using_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
@@ -10553,7 +10544,6 @@ def _lower_user_function(
         uncall_excluded_via_vm_targets=uncall_excluded_via_vm_targets,
         channel_using_targets=channel_using_targets,
         show_using_targets=show_using_targets,
-        loop_hoist_targets=loop_hoist_targets,
         pool_using_targets=pool_using_targets,
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
@@ -11122,7 +11112,6 @@ def lower_file_to_program(
     physical_mem_cells: int | None = None,
     opt_uncall_user_calls: bool = False,
     uncall_extra_seeds: frozenset[str] = frozenset(),
-    loop_hoist_targets: frozenset[str] = frozenset(),
 ) -> Program:
     if not (1 <= ptr_pool_size <= PTR_POOL_MAX):
         raise MnemoCompileError(
@@ -11220,7 +11209,6 @@ def lower_file_to_program(
         uc_excl: frozenset[str],
         ch_targets: frozenset[str] = frozenset(),
         sh_targets: frozenset[str] = frozenset(),
-        lh_targets: frozenset[str] = frozenset(),
         pl_targets: frozenset[str] = frozenset(),
         touches: dict[str, frozenset[int]] | None = None,
     ):
@@ -11245,7 +11233,6 @@ def lower_file_to_program(
             uncall_excluded_via_vm_targets=uc_excl,
             channel_using_targets=ch_targets,
             show_using_targets=sh_targets,
-            loop_hoist_targets=lh_targets,
             pool_using_targets=pl_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
@@ -11269,7 +11256,6 @@ def lower_file_to_program(
             _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm,
                             ch_targets=channel_targets,
                             sh_targets=show_targets,
-                            lh_targets=loop_hoist_targets,
                             pl_targets=pool_targets, touches=mem_touches)
             for s in user_fn_specs
         ]
@@ -11278,7 +11264,6 @@ def lower_file_to_program(
             _lower_one_user(s, opt_uc=False, uc_excl=frozenset(),
                             ch_targets=channel_targets,
                             sh_targets=show_targets,
-                            lh_targets=loop_hoist_targets,
                             pl_targets=pool_targets, touches=mem_touches)
             for s in user_fn_specs
         ]
@@ -11317,7 +11302,6 @@ def lower_file_to_program(
         uncall_excluded_via_vm_targets=bad_uncall_via_vm,
         channel_using_targets=channel_targets,
         show_using_targets=show_targets,
-        loop_hoist_targets=loop_hoist_targets,
         pool_using_targets=pool_targets,
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,

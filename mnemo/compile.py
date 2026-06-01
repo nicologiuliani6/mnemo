@@ -270,7 +270,7 @@ def _transform_return_in_loop(ast: c.FileAST) -> None:
         ext.body.block_items = new_items
 
 
-def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
+def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> None:
     """Hoist `if (E) S` cond in fresh int quando S muta variabili usate in E.
 
     La Kairos VM richiede che la condizione `fi c` post-branch coincida con `if c`
@@ -283,9 +283,6 @@ def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
     quando i nomi liberi in E intersecano i nomi assegnati in S1 ∪ S2.
     """
     counter = [0]
-    hoisted_in_loop: set[str] = set()
-    in_loop_depth = [0]
-    cur_fn = [""]
 
     def _fresh() -> str:
         counter[0] += 1
@@ -363,14 +360,6 @@ def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
             body_writes = _writes_in(new_t) | _writes_in(new_f)
             if cond_ids & body_writes:
                 g_name = _fresh()
-                if in_loop_depth[0] > 0 and cur_fn[0]:
-                    hoisted_in_loop.add(cur_fn[0])
-                # NB: il sotto-caso ternary-in-cond-hoisted (il `?:` genera un IF
-                # interno con push/pop su __mn_hist, combinato con disj-chain
-                # sbilanciava l'inverse di opt-uncall) NON è più escluso: il bug
-                # era nel dispatch nested-IF della VM (Kairos 5098d1f, else-if
-                # chain double-dispatch) ed è risolto. generic_if_ternary_index
-                # ora passa opt-uncall. Resta escluso solo il self-mut in loop.
                 g_decl = c.Decl(
                     name=g_name,
                     quals=[], align=[], storage=[], funcspec=[],
@@ -392,28 +381,13 @@ def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
             items = s.block_items or []
             return c.Compound(block_items=_wrap_block(list(items)))
         if isinstance(s, c.While):
-            in_loop_depth[0] += 1
-            try:
-                new_stmt = _rewrite_stmt(s.stmt)
-            finally:
-                in_loop_depth[0] -= 1
-            return c.While(cond=s.cond, stmt=new_stmt)
+            return c.While(cond=s.cond, stmt=_rewrite_stmt(s.stmt))
         if isinstance(s, c.DoWhile):
-            in_loop_depth[0] += 1
-            try:
-                new_stmt = _rewrite_stmt(s.stmt)
-            finally:
-                in_loop_depth[0] -= 1
-            return c.DoWhile(cond=s.cond, stmt=new_stmt)
+            return c.DoWhile(cond=s.cond, stmt=_rewrite_stmt(s.stmt))
         if isinstance(s, c.For):
-            in_loop_depth[0] += 1
-            try:
-                new_stmt = _rewrite_stmt(s.stmt)
-            finally:
-                in_loop_depth[0] -= 1
             return c.For(
                 init=s.init, cond=s.cond, next=s.next,
-                stmt=new_stmt,
+                stmt=_rewrite_stmt(s.stmt),
             )
         if isinstance(s, c.Switch):
             return c.Switch(cond=s.cond, stmt=_rewrite_stmt(s.stmt))
@@ -431,11 +405,8 @@ def _transform_hoist_unsafe_if_conds(ast: c.FileAST) -> frozenset[str]:
             continue
         if ext.body is None or not isinstance(ext.body, c.Compound):
             continue
-        cur_fn[0] = ext.decl.name or ""
         items = ext.body.block_items or []
         ext.body.block_items = _wrap_block(list(items))
-        cur_fn[0] = ""
-    return frozenset(hoisted_in_loop)
 
 
 def _transform_general_early_returns(ast: c.FileAST) -> None:
@@ -2109,10 +2080,7 @@ def compile_c_to_kairos(
     # `if(c) return E`. Cascade trattata ricorsivamente sul ramo else.
     _transform_general_early_returns(ast)
     # `if (E) S` con S che muta var di E → hoist E in fresh int (fi stabile).
-    # Ritorna set di fn dove l'hoist ha sparato DENTRO un loop: questi pattern
-    # rompono opt-uncall (inverse di lc1 += e0 con e0 reset da push-pop
-    # interno produce DELOCAL/POP errors). Vengono esclusi da opt-uncall.
-    hoist_in_loop_fns = _transform_hoist_unsafe_if_conds(ast)
+    _transform_hoist_unsafe_if_conds(ast)
     # `T* p = &BASE.arr[i]; ... p->f ...` → alias inline a `BASE.arr[p].f` (int p).
     _transform_struct_array_pointer_alias(ast)
     # u32 vars: inserisce `__mn_mask_u32(&x)` dopo ogni assignment per emulare
@@ -2166,7 +2134,6 @@ def compile_c_to_kairos(
         ast,
         main_argc=argc_use,
         ptr_pool_size=ptr_pool_size,
-        loop_hoist_targets=hoist_in_loop_fns,
         layout=layout,
         physical_mem_cells=physical_mem_cells,
         opt_uncall_user_calls=opt_uncall_user_calls,
