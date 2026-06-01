@@ -88,6 +88,20 @@ inverse = `ctr += 1`; la guardia `ctr0==need` non tocca ctr). Lo stesso
 errore era nel pool bancato. Regression `generic_malloc_loop_free.c`.
 Verificato forward + `--check-invertibility`.
 
+**BUG aperto — malloc CONCORRENTI multi-cella si sovrappongono**.
+`__mn_pool_alloc` avanza `ctr` di 1 (un solo slot) per ogni malloc, ma un
+blocco di N celle a slot k occupa le celle [k, k+N). Due malloc vivi
+contemporaneamente con N>1 si sovrappongono: malloc#1 a slot k+1 scrive
+celle che appartengono a malloc#0. Es. `int*a=malloc(int*3);
+int*b=malloc(int*3);` → a e b condividono celle (risultato 91 invece di
+66). Funziona invece: blocchi da 1 cella concorrenti; multi-cella
+sequenziali (free in mezzo, slot riusato); singolo malloc multi-cella.
+Fix corretto = pool block-aware: `alloc` avanza `ctr += nblk` e `free`
+decrementa di `nblk`, ma `free(p)` deve conoscere la dimensione del blocco
+di `p` → serve tracciare le size (header per-blocco o array parallelo) →
+ridisegno del modello pool. Pattern comune (due array malloc'd vivi
+insieme), quindi prioritario nel ridisegno §2.
+
 **Open (feature)**: pool runtime growable (non statico al compile-time).
 Programmi con `malloc` dentro un loop con N iterazioni runtime non sono
 inferibili staticamente; oggi richiedono `--ptr-pool-size N_max`. Una
