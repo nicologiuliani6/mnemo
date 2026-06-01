@@ -1990,28 +1990,80 @@ def _infer_arr_max(ast: c.FileAST) -> int:
     return max_total
 
 
+def _malloc_block_cells(call: c.FuncCall) -> int:
+    """Numero di celle (int) richieste da una `malloc`/`calloc`, valutando
+    staticamente l'argomento size. Una cella = un int (sizeof(int)=4 nel modello
+    Mnemo). `malloc(sizeof(int)*5)` → 5; `malloc(20)` → 5; `calloc(5, sizeof(int))`
+    → 5. Size non costante (es. `malloc(n*4)` con `n` runtime) → 1 (fallback
+    conservativo: il blocco va dimensionato a mano con --ptr-pool-size)."""
+    args = call.args.exprs if (call.args and call.args.exprs) else []
+
+    def const_bytes(e: c.Node) -> int | None:
+        """Valuta `e` in BYTE se costante; None altrimenti. sizeof(scalar)=4."""
+        if isinstance(e, c.Constant) and e.type in ("int", "unsigned int", "long"):
+            try:
+                return int(e.value, 0)
+            except ValueError:
+                return None
+        if isinstance(e, c.UnaryOp) and e.op == "sizeof":
+            return 4  # ogni scalare/puntatore = 1 cella = 4 byte
+        if isinstance(e, c.Cast):
+            return const_bytes(e.expr)
+        if isinstance(e, c.BinaryOp):
+            l = const_bytes(e.left)
+            r = const_bytes(e.right)
+            if l is None or r is None:
+                return None
+            if e.op == "*":
+                return l * r
+            if e.op == "+":
+                return l + r
+        return None
+
+    if call.name.name == "calloc" and len(args) == 2:
+        nb = const_bytes(args[0])
+        eb = const_bytes(args[1])
+        if nb is not None and eb is not None:
+            return max(1, (nb * eb + 3) // 4)
+        return 1
+    if args:
+        b = const_bytes(args[0])
+        if b is not None:
+            return max(1, (b + 3) // 4)  # byte → celle (ceil / sizeof(int))
+    return 1
+
+
 def _infer_ptr_pool_size(ast: c.FileAST) -> int:
-    """Conta call site di `malloc`/`calloc` nell'AST. Upper bound conservativo
-    per dimensionare auto il pool. Assume tutte le alloc concorrenti e nessuna
-    free intermedia. Loop con malloc dentro contati 1 sola volta (statico)
-    quindi se il programma ha un loop che malloc N volte va comunque dato
-    --ptr-pool-size manuale.
-    """
+    """Dimensiona auto il pool puntatori. Il pool è un array piatto di celle
+    `__mn_mem*`; `__mn_pool_alloc` ritorna lo slot corrente e avanza il contatore
+    di 1, quindi malloc #k vive a slot k e `p[i]` legge la cella `slot+k+i`.
+    Serve quindi spazio per (numero di malloc - 1) slot di partenza PIÙ il blocco
+    più grande: `pool ≥ (count-1) + max_block_cells`, con +1 sentinella. Valutare
+    solo `count` (vecchio comportamento) troncava silenziosamente `malloc(int*N)`
+    con N > count → `p[i]` oltre l'ultima cella (nessun branch `if slot==k`) =
+    no-op, risultato errato vs gcc. Loop con malloc dentro contati 1 volta
+    (statico): per N runtime serve ancora --ptr-pool-size manuale."""
     count = 0
+    max_block = 1
     def visit(n: c.Node) -> None:
-        nonlocal count
+        nonlocal count, max_block
         if (
             isinstance(n, c.FuncCall)
             and isinstance(n.name, c.ID)
             and n.name.name in ("malloc", "calloc")
         ):
             count += 1
+            cells = _malloc_block_cells(n)
+            if cells > max_block:
+                max_block = cells
         for _, child in n.children():
             visit(child)
     for ext in ast.ext or []:
         visit(ext)
-    # +1 slot sentinel (NULL = slot 0 già riservato dal layout).
-    return count + 1 if count > 0 else 0
+    if count == 0:
+        return 0
+    # (count-1) slot di base + blocco più grande + 1 sentinella (slot 0 = NULL).
+    return (count - 1) + max_block + 1
 
 
 def compile_c_to_kairos(
