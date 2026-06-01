@@ -2033,27 +2033,104 @@ def _malloc_block_cells(call: c.FuncCall) -> int:
     return 1
 
 
+def _const_loop_trip_count(node: c.Node) -> int | None:
+    """Numero di iterazioni di un `for`/`while` con bound COSTANTE, o None se
+    runtime/non riconosciuto. Riconosce `for(i=A; i<B|i<=B; i++|i+=K)` e
+    `for(i=A; i>B|i>=B; i--|i-=K)` con A,B,K costanti interi; `while(0)`→0."""
+
+    def const_int(e: c.Node | None) -> int | None:
+        if isinstance(e, c.Constant) and e.type in ("int", "unsigned int", "long"):
+            try:
+                return int(e.value, 0)
+            except ValueError:
+                return None
+        if isinstance(e, c.UnaryOp) and e.op == "-":
+            v = const_int(e.expr)
+            return -v if v is not None else None
+        return None
+
+    if isinstance(node, c.While):
+        return 0 if const_int(node.cond) == 0 else None
+    if not isinstance(node, c.For) or node.cond is None or node.next is None:
+        return None
+    # init: i = A  (Assignment o DeclList con un Decl init)
+    var = a = None
+    init = node.init
+    if isinstance(init, c.Assignment) and init.op == "=" and isinstance(init.lvalue, c.ID):
+        var, a = init.lvalue.name, const_int(init.rvalue)
+    elif isinstance(init, c.DeclList) and len(init.decls) == 1:
+        d = init.decls[0]
+        var, a = d.name, const_int(d.init)
+    elif isinstance(init, c.Decl):
+        var, a = init.name, const_int(init.init)
+    if var is None or a is None:
+        return None
+    # cond: i < B / i <= B / i > B / i >= B
+    cond = node.cond
+    if not (isinstance(cond, c.BinaryOp) and isinstance(cond.left, c.ID)
+            and cond.left.name == var):
+        return None
+    b = const_int(cond.right)
+    if b is None:
+        return None
+    # next: i++ / i-- / i += K / i -= K
+    nx = node.next
+    step = None
+    if isinstance(nx, c.UnaryOp) and nx.op in ("p++", "++"):
+        step = 1
+    elif isinstance(nx, c.UnaryOp) and nx.op in ("p--", "--"):
+        step = -1
+    elif isinstance(nx, c.Assignment) and isinstance(nx.lvalue, c.ID) and nx.lvalue.name == var:
+        k = const_int(nx.rvalue)
+        if k is not None and nx.op == "+=":
+            step = k
+        elif k is not None and nx.op == "-=":
+            step = -k
+    if step is None or step == 0:
+        return None
+    if cond.op == "<" and step > 0:
+        n = (b - a + step - 1) // step
+    elif cond.op == "<=" and step > 0:
+        n = (b - a + step) // step
+    elif cond.op == ">" and step < 0:
+        n = (a - b + (-step) - 1) // (-step)
+    elif cond.op == ">=" and step < 0:
+        n = (a - b + (-step)) // (-step)
+    else:
+        return None
+    return max(0, n)
+
+
 def _infer_ptr_pool_size(ast: c.FileAST) -> int:
     """Dimensiona auto il pool puntatori. Modello block-aware con header:
     `__mn_pool_alloc` riserva nblk+1 celle per ogni malloc (1 header + nblk dati)
     e avanza il contatore di nblk+1, quindi malloc concorrenti non si
     sovrappongono. Bound conservativo (tutte le alloc vive insieme, nessuna free
-    intermedia): `pool ≥ Σ(nblk_i + 1)`, con +1 sentinella. Loop con malloc
-    dentro contati 1 volta (statico): per N iterazioni runtime serve ancora
-    --ptr-pool-size manuale (i blocchi del loop si riusano via free LIFO)."""
+    intermedia): `pool ≥ Σ(nblk_i + 1)`, +1 sentinella. Una malloc dentro un loop
+    a bound COSTANTE è contata × trip-count (auto-sizing dei loop statici); per
+    loop a bound RUNTIME serve ancora --ptr-pool-size (i blocchi si riusano via
+    free LIFO, quindi spesso basta il max concorrente)."""
     total = 0
-    def visit(n: c.Node) -> None:
+
+    def visit(n: c.Node, mult: int) -> None:
         nonlocal total
         if (
             isinstance(n, c.FuncCall)
             and isinstance(n.name, c.ID)
             and n.name.name in ("malloc", "calloc")
         ):
-            total += _malloc_block_cells(n) + 1  # +1 header per blocco
+            total += (_malloc_block_cells(n) + 1) * mult  # +1 header per blocco
+        child_mult = mult
+        if isinstance(n, (c.For, c.While)):
+            tc = _const_loop_trip_count(n)
+            # bound costante → moltiplica; runtime → resta `mult` (best-effort,
+            # i blocchi in loop di solito si riusano via free).
+            child_mult = mult * tc if tc is not None else mult
         for _, child in n.children():
-            visit(child)
+            visit(child, child_mult)
+
     for ext in ast.ext or []:
-        visit(ext)
+        visit(ext, 1)
     if total == 0:
         return 0
     return total + 1  # +1 sentinella (slot 0 = NULL)

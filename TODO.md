@@ -114,11 +114,22 @@ ora funziona anche col pool bancato. Due bug:
 Regression `tests/test_pool_banked_malloc.py` (concorrente + check-invertibility
 con --ptr-pool-size 1500).
 
-**Open (feature)**: pool runtime growable (non statico al compile-time).
-Programmi con `malloc` dentro un loop con N iterazioni runtime non sono
-inferibili staticamente; oggi richiedono `--ptr-pool-size N_max`. Una
-primitiva VM `pool_grow N` reversibile permetterebbe crescita on-demand.
-Dipende da [[1. VM Kairos: allocazione dinamica strutture interne]].
+**RISOLTO (loop a bound costante)** (commit Mnemo): `malloc` dentro un loop
+`for`/`while` con trip-count COSTANTE (riconosciuto da `_const_loop_trip_count`:
+`for(i=A; i</<=/>/>=B; i++/--/+=/-=K)` con A,B,K costanti) è ora auto-sizato ×
+trip-count, quindi malloc-in-loop senza free (blocchi accumulati) funziona
+senza `--ptr-pool-size`. Regression `generic_malloc_loop_nofree.c`.
+
+**Open (feature) — solo bound RUNTIME**: `malloc` in loop con N iterazioni
+*runtime* (non costante, no free) resta non inferibile staticamente → richiede
+`--ptr-pool-size N_max`. Il fix vero (crescita on-demand) richiede un modello
+di memoria VM dinamico: il pool attuale è un array di celle `__mn_mem*` con
+dispatch `if slot==k` generato a compile-time → NON cresce a runtime. Servirebbe
+una primitiva VM `pool_grow N` reversibile + accesso indicizzato O(1) a un heap
+dinamico (nuovo modello di memoria). Lavoro grosso, dipende da
+[[1. VM Kairos: allocazione dinamica strutture interne]]. Nota: con `free` in
+loop il blocco si riusa (LIFO) e il pool resta piccolo, quindi il caso davvero
+problematico è malloc-in-loop-runtime SENZA free (allocazioni accumulate).
 
 ---
 
