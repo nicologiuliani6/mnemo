@@ -64,8 +64,10 @@ native-arith.
 (`KAIROS_MAX_PROC_PARAMS=1000 ≤ 1024`). Resta come future-proof la dyn
 alloc per-Frame (realloc inline) al posto del bump statico, ma non urgente.
 
-**Open — non ancora toccati**:
-- DBG_MAX_BREAKPOINTS=256, DBG_MAX_HISTORY=4096 (debug only, low priority).
+**Intenzionalmente bounded (non bug)**: `DBG_MAX_BREAKPOINTS=256`,
+`DBG_MAX_HISTORY=4096` sono limiti del debugger DAP (solo debug). La
+history è già un ring-buffer (shift a MAX in `vm_debug.h`), i breakpoint
+256 sono ampi per uso interattivo → nessuna azione necessaria.
 
 Update `kairos_limits.py` lato Mnemo per allinearsi a quanto cambia.
 
@@ -97,10 +99,22 @@ int*b=malloc(int*3);` → a e b condividono celle (risultato 91 invece di
 66). Funziona invece: blocchi da 1 cella concorrenti; multi-cella
 sequenziali (free in mezzo, slot riusato); singolo malloc multi-cella.
 Fix corretto = pool block-aware: `alloc` avanza `ctr += nblk` e `free`
-decrementa di `nblk`, ma `free(p)` deve conoscere la dimensione del blocco
-di `p` → serve tracciare le size (header per-blocco o array parallelo) →
-ridisegno del modello pool. Pattern comune (due array malloc'd vivi
-insieme), quindi prioritario nel ridisegno §2.
+decrementa di `nblk`. Il nodo è che `free(p)` deve conoscere `nblk` di `p`.
+Design analizzato (3 opzioni, tutte = ridisegno):
+1. **size-stack** `__mn_pool_sizes` (preferito): `alloc` pusha `nblk`,
+   `free` poppa. Corretto per malloc/free LIFO (caso comune), robusto a
+   ogni aliasing del puntatore. Costo: è un 3° stack da threadare in TUTTE
+   le procedure (come `__mn_hist`/`__mn_scratch`) — niente stack globali in
+   Kairos.
+2. **malloc-header**: `alloc` scrive `nblk` in `mem{ctr}`, ritorna `ctr+1`;
+   `free` lo rilegge. Self-contained ma sposta gli indici (p = slot+1) e
+   aggiunge dispatch header in alloc/free.
+3. **dataflow Mnemo**: traccia `ptr → nblk` al sito di `p = malloc(C)` e
+   lo passa a `free(p)`. Fragile (p riassegnato, da param, in struct).
+Serve anche: `alloc` riceve `nblk` (calcolabile da `_malloc_block_cells`),
+sizing pool = somma dei blocchi, varianti bancate aggiornate. Pattern
+comune (due array malloc'd vivi insieme) → prioritario. NON nel corpus di
+test attuale (i 165 gcc-compat non lo esercitano), quindi non regressione.
 
 **Open (feature)**: pool runtime growable (non statico al compile-time).
 Programmi con `malloc` dentro un loop con N iterazioni runtime non sono
