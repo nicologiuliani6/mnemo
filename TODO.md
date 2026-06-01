@@ -46,6 +46,16 @@ native-arith.
   Frame allocati individualmente sull'heap → realloc del pointer array
   non sposta Frame. Sblocca bump safe di MAX_NESTED/MAX_VARS senza
   rompere ex33 parallel2_fib.
+- **Cap dell'inverse per disj-chain runtime-index** (commit Kairos
+  58017d1): `collect_ifs` stack `[64]`, `exec_branch_inverse` `lp/ln[512]`,
+  `invert_op_to_line` `MAX_LINES=1024`, `MAX_IFS=256` (_fa_cache.ifs +
+  exec_branch) → tutti heap, dimensionati a frame/branch span. Risolve il
+  vecchio limite «store `g[i]` a indice runtime su array > 64 elementi
+  fallisce/SIGSEGV sotto --check-invertibility»: ora inverte fino ad
+  ARR_MAX=1024 (verificato N=300/400 single-store; array[100] in loop
+  deterministico). Regression guard `c_test/inv_bigidx.c`. NB: la versione
+  con loop su tutti gli N elementi è O(N²) nell'interprete → lenta (non un
+  bug) per N grandi.
 
 **Frame fields statici — bumpati (FATTO)**: valori correnti in
 `vm_types.h` già oltre i vecchi target: `MAX_VARS=4096`, `MAX_LABEL=16384`,
