@@ -102,11 +102,17 @@ concorrenti, sequenziali, loop+free, single, + `--check-invertibility`;
 167/167 gcc-compat (regression `generic_malloc_concurrent.c`). Sizing pool
 = Σ(nblk+1)+sentinella (`_infer_ptr_pool_size`).
 
-**Follow-up — pool BANCATO (> ~998 celle)**: il modello header non è
-ancora cablato per il pool bancato (header store/load via banca+divmod da
-validare). Per ora `malloc` con pool bancato dà un **errore di compile
-pulito** (non più crash/risultato errato). Raro (richiede pool enorme),
-non nel corpus.
+**RISOLTO — pool BANCATO (> ~998 celle)** (commit Mnemo): il modello header
+ora funziona anche col pool bancato. Due bug:
+1. il dispatch slot→(banca,offset) usa `__mn_divmod_nonneg`, ma la lib divmod
+   era auto-inclusa solo se il C usa `/`/`%` → proc chiamata ma non definita →
+   SEGV in `get_findex`. Fix: includi `divmod`(+`mul`+`helpers`) quando il pool
+   è bancato.
+2. l'header store passava `__mn_pool_ctr` diretto al divmod del dispatch, che
+   CONSUMA il dividendo → ctr azzerato → alloc vedeva ctr=0 → slot drift. Fix:
+   passa una COPIA di ctr allo store dell'header.
+Regression `tests/test_pool_banked_malloc.py` (concorrente + check-invertibility
+con --ptr-pool-size 1500).
 
 **Open (feature)**: pool runtime growable (non statico al compile-time).
 Programmi con `malloc` dentro un loop con N iterazioni runtime non sono

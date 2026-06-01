@@ -2191,6 +2191,16 @@ def compile_c_to_kairos(
         _wrap_main_in_invertibility_check(prog)
     if _program_uses_ptr_pool(prog):
         lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])
+        # Pool bancato (> MONOLITHIC_POOL_MEM_MAX celle): il dispatch per banca
+        # usa __mn_divmod_nonneg per (slot → banca, offset). Va incluso anche se
+        # il C non usa `/`/`%` (altrimenti la proc è chiamata ma non definita →
+        # SEGV in get_findex).
+        from mnemo.kairos_limits import MONOLITHIC_POOL_MEM_MAX
+
+        if layout.total_cells > MONOLITHIC_POOL_MEM_MAX:
+            lib_names = _merge_lib_lists(
+                lib_names, ["helpers.kairos", "mul.kairos", "divmod.kairos"]
+            )
     if _program_uses_hist_floor_snap(prog):
         lib_names = _merge_lib_lists(["mn_hist_floor_snap.kairos"], lib_names)
     try:

@@ -6628,32 +6628,28 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             if not ctx.proc_returns_int.get(name, False):
                 raise MnemoCompileError("malloc deve restituire un puntatore (void* / int*)")
             _register_ptr_pool_locals(ctx)
-            if _pool_uses_banking(ctx):
-                # Il modello header (malloc concorrenti) non è ancora cablato per
-                # il pool BANCATO (> MONOLITHIC_POOL_MEM_MAX celle): l'header
-                # store/load via banca + divmod va validato. Errore pulito invece
-                # di un risultato errato silenzioso. Workaround: riduci il pool.
-                raise MnemoCompileError(
-                    "malloc con pool bancato (> ~998 celle) non supportato: "
-                    "riduci --ptr-pool-size o le allocazioni (TODO §2 header banked)"
-                )
             t = ctx.fresh_temp()
             t_nblk = ctx.fresh_temp()
+            t_hslot = ctx.fresh_temp()
             nblk = _malloc_block_cells(expr)
             ctx.use_hist = True
             ctx.use_scratch = True
             # Modello block-aware con header. Scrivi l'header nblk in mem{ctr}
             # (banked-aware via pool_store), poi alloc ritorna ctr+1 (inizio dati)
             # e avanza ctr di nblk+1 → blocchi concorrenti non si sovrappongono.
+            # NB: passa una COPIA di ctr (t_hslot) allo store: nel path bancato il
+            # divmod del dispatch CONSUMA il dividendo → con `_PTR_POOL_CTR` diretto
+            # azzererebbe il contatore e alloc vedrebbe ctr=0.
             ins = (
-                [IConst(t_nblk, nblk)]
-                + _ir_pool_store_call(ctx, _PTR_POOL_CTR, t_nblk)
+                [IConst(t_nblk, nblk), IAddEq(t_hslot, Var(_PTR_POOL_CTR))]
+                + _ir_pool_store_call(ctx, t_hslot, t_nblk)
                 + [
                     ICall(
                         "__mn_pool_alloc",
                         [_PTR_POOL_CTR, t, t_nblk] + _kairos_stack_actuals(ctx),
                     ),
                     IHistPush(ctx.scratch, t_nblk),
+                    IHistPush(ctx.scratch, t_hslot),
                 ]
             )
             return ins, Var(t), [t]
