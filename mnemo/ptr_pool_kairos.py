@@ -102,7 +102,11 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
             [
                 f"        if slot == {i} then",
                 f"            if ctr0 == {need} then",
-                "                push(ctr, __mn_hist)",
+                # NB: niente push(ctr) prima di ctr-=1 — op_push AZZERA la
+                # sorgente (vedi commento in __mn_pool_alloc) → ctr diventerebbe
+                # 0-1=-1 invece di ctr-1, corrompendo il contatore al riuso di
+                # slot in un loop (malloc/free ripetuti). `ctr -= 1` è già
+                # reversibile (inverse = ctr += 1); ctr0 (guardia) non è toccato.
                 "                ctr -= 1",
                 f"            fi ctr0 == {need}",
                 f"        fi slot == {i}",
@@ -205,7 +209,8 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
                 [
                     f"        if lslot == {rel} then",
                     f"            if ctr0 == {need} then",
-                    "                push(ctr, __mn_hist)",
+                    # niente push(ctr): op_push azzera la sorgente → ctr=-1. Vedi
+                    # nota nel pool monolitico. `ctr -= 1` è già reversibile.
                     "                ctr -= 1",
                     f"            fi ctr0 == {need}",
                     f"        fi lslot == {rel}",

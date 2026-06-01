@@ -77,24 +77,16 @@ call-site): `malloc(sizeof(int)*N)` → N celle (commit Mnemo b986723,
 regression `generic_malloc_block.c`). Banked pools sopra
 `MONOLITHIC_POOL_MEM_MAX`.
 
-**BUG aperto — `malloc`+`free` dentro un loop perde iterazioni**. Pattern
-`for(i…){ int *p = malloc(...); *p = i; use(*p); free(p); }` dà risultato
-errato vs gcc: es. `for(i=0;i<3;i++)` stampa `0 0 2` invece di `0 1 2`
-(perde l'iterazione di mezzo). Caratterizzato:
-- forward-only (no inverse/uncall), quindi è lowering/VM forward, non il
-  path inverse;
-- specifico di `free` DENTRO il loop: `malloc` in loop SENZA free (slot che
-  avanzano) con `--ptr-pool-size` sufficiente → corretto;
-- NON è il block-size (fixato b986723) né loop-local scalari/array (ok) né
-  pointer-alias `int *p=&G[i]` in loop (ok, `0 5 10`);
-- il `.kairos` sembra corretto all'analisi statica (`push(memP); memP +=
-  slot` resetta p; `__mn_pool_free` azzera la cella slot e fa dec-ctr LIFO
-  corretto) → il difetto è probabilmente nell'interazione runtime VM tra le
-  pool-proc (`__mn_pool_store/load/free`, che ricevono TUTTE le celle
-  `__mn_mem*` come parametri) e il riuso di slot sotto loop. Serve tracing
-  VM runtime (vedi [[reference-kairos-vm-debug]]), non risolvibile staticamente.
-Reproducer minimo: `for(i=0;i<3;i++){int*p=malloc(sizeof(int));*p=i;
-printf("%d ",*p);free(p);}` → `0 0 2`.
+**RISOLTO — `malloc`+`free` dentro un loop perdeva iterazioni** (commit
+Mnemo): `__mn_pool_free` generato faceva `push(ctr, __mn_hist); ctr -= 1`
+per il dec-ctr LIFO, ma `op_push` AZZERA la sorgente → `ctr` diventava
+`0-1 = -1` invece di `ctr-1`. Single malloc/free non lo notava (programma
+finiva); in un loop il contatore corrotto faceva drift­are gli slot
+(`for(i=0;i<3;i++){…malloc;*p=i;print;free;}` → `0 0 2`). Fix:
+`ptr_pool_kairos.py` emette `ctr -= 1` SENZA push (già reversibile,
+inverse = `ctr += 1`; la guardia `ctr0==need` non tocca ctr). Lo stesso
+errore era nel pool bancato. Regression `generic_malloc_loop_free.c`.
+Verificato forward + `--check-invertibility`.
 
 **Open (feature)**: pool runtime growable (non statico al compile-time).
 Programmi con `malloc` dentro un loop con N iterazioni runtime non sono
