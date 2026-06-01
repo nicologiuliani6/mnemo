@@ -90,31 +90,23 @@ inverse = `ctr += 1`; la guardia `ctr0==need` non tocca ctr). Lo stesso
 errore era nel pool bancato. Regression `generic_malloc_loop_free.c`.
 Verificato forward + `--check-invertibility`.
 
-**BUG aperto — malloc CONCORRENTI multi-cella si sovrappongono**.
-`__mn_pool_alloc` avanza `ctr` di 1 (un solo slot) per ogni malloc, ma un
-blocco di N celle a slot k occupa le celle [k, k+N). Due malloc vivi
-contemporaneamente con N>1 si sovrappongono: malloc#1 a slot k+1 scrive
-celle che appartengono a malloc#0. Es. `int*a=malloc(int*3);
-int*b=malloc(int*3);` → a e b condividono celle (risultato 91 invece di
-66). Funziona invece: blocchi da 1 cella concorrenti; multi-cella
-sequenziali (free in mezzo, slot riusato); singolo malloc multi-cella.
-Fix corretto = pool block-aware: `alloc` avanza `ctr += nblk` e `free`
-decrementa di `nblk`. Il nodo è che `free(p)` deve conoscere `nblk` di `p`.
-Design analizzato (3 opzioni, tutte = ridisegno):
-1. **size-stack** `__mn_pool_sizes` (preferito): `alloc` pusha `nblk`,
-   `free` poppa. Corretto per malloc/free LIFO (caso comune), robusto a
-   ogni aliasing del puntatore. Costo: è un 3° stack da threadare in TUTTE
-   le procedure (come `__mn_hist`/`__mn_scratch`) — niente stack globali in
-   Kairos.
-2. **malloc-header**: `alloc` scrive `nblk` in `mem{ctr}`, ritorna `ctr+1`;
-   `free` lo rilegge. Self-contained ma sposta gli indici (p = slot+1) e
-   aggiunge dispatch header in alloc/free.
-3. **dataflow Mnemo**: traccia `ptr → nblk` al sito di `p = malloc(C)` e
-   lo passa a `free(p)`. Fragile (p riassegnato, da param, in struct).
-Serve anche: `alloc` riceve `nblk` (calcolabile da `_malloc_block_cells`),
-sizing pool = somma dei blocchi, varianti bancate aggiornate. Pattern
-comune (due array malloc'd vivi insieme) → prioritario. NON nel corpus di
-test attuale (i 165 gcc-compat non lo esercitano), quindi non regressione.
+**RISOLTO (pool monolitico) — malloc concorrenti multi-cella** (commit
+Mnemo): adottato il **modello header** (opzione 2). Ogni malloc di N celle
+occupa N+1 celle a partire da `ctr`: `mem{ctr}=N` (header, scritto dal
+lowering via `__mn_pool_store`), dati in `mem{ctr+1..ctr+N}`, puntatore
+utente = `ctr+1`, `ctr += N+1`. `free(p)` rilegge N da `mem{p-1}` (via
+`__mn_pool_load`) e decrementa `ctr` di N+1 se il blocco è l'ultimo
+allocato (riuso LIFO). `alloc`/`free` toccano solo `ctr` (mem-free); lo
+store auto-resetta l'header al riuso (push). Verificato: 2 e 3 malloc
+concorrenti, sequenziali, loop+free, single, + `--check-invertibility`;
+167/167 gcc-compat (regression `generic_malloc_concurrent.c`). Sizing pool
+= Σ(nblk+1)+sentinella (`_infer_ptr_pool_size`).
+
+**Follow-up — pool BANCATO (> ~998 celle)**: il modello header non è
+ancora cablato per il pool bancato (header store/load via banca+divmod da
+validare). Per ora `malloc` con pool bancato dà un **errore di compile
+pulito** (non più crash/risultato errato). Raro (richiede pool enorme),
+non nel corpus.
 
 **Open (feature)**: pool runtime growable (non statico al compile-time).
 Programmi con `malloc` dentro un loop con N iterazioni runtime non sono

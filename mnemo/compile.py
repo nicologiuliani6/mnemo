@@ -2034,36 +2034,29 @@ def _malloc_block_cells(call: c.FuncCall) -> int:
 
 
 def _infer_ptr_pool_size(ast: c.FileAST) -> int:
-    """Dimensiona auto il pool puntatori. Il pool è un array piatto di celle
-    `__mn_mem*`; `__mn_pool_alloc` ritorna lo slot corrente e avanza il contatore
-    di 1, quindi malloc #k vive a slot k e `p[i]` legge la cella `slot+k+i`.
-    Serve quindi spazio per (numero di malloc - 1) slot di partenza PIÙ il blocco
-    più grande: `pool ≥ (count-1) + max_block_cells`, con +1 sentinella. Valutare
-    solo `count` (vecchio comportamento) troncava silenziosamente `malloc(int*N)`
-    con N > count → `p[i]` oltre l'ultima cella (nessun branch `if slot==k`) =
-    no-op, risultato errato vs gcc. Loop con malloc dentro contati 1 volta
-    (statico): per N runtime serve ancora --ptr-pool-size manuale."""
-    count = 0
-    max_block = 1
+    """Dimensiona auto il pool puntatori. Modello block-aware con header:
+    `__mn_pool_alloc` riserva nblk+1 celle per ogni malloc (1 header + nblk dati)
+    e avanza il contatore di nblk+1, quindi malloc concorrenti non si
+    sovrappongono. Bound conservativo (tutte le alloc vive insieme, nessuna free
+    intermedia): `pool ≥ Σ(nblk_i + 1)`, con +1 sentinella. Loop con malloc
+    dentro contati 1 volta (statico): per N iterazioni runtime serve ancora
+    --ptr-pool-size manuale (i blocchi del loop si riusano via free LIFO)."""
+    total = 0
     def visit(n: c.Node) -> None:
-        nonlocal count, max_block
+        nonlocal total
         if (
             isinstance(n, c.FuncCall)
             and isinstance(n.name, c.ID)
             and n.name.name in ("malloc", "calloc")
         ):
-            count += 1
-            cells = _malloc_block_cells(n)
-            if cells > max_block:
-                max_block = cells
+            total += _malloc_block_cells(n) + 1  # +1 header per blocco
         for _, child in n.children():
             visit(child)
     for ext in ast.ext or []:
         visit(ext)
-    if count == 0:
+    if total == 0:
         return 0
-    # (count-1) slot di base + blocco più grande + 1 sentinella (slot 0 = NULL).
-    return (count - 1) + max_block + 1
+    return total + 1  # +1 sentinella (slot 0 = NULL)
 
 
 def compile_c_to_kairos(

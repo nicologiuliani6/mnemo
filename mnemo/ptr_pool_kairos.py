@@ -26,24 +26,54 @@ def emit_ptr_pool_kairos(n: int) -> str:
     return _emit_banked_ptr_pool_kairos(n)
 
 
+def _pool_alloc_free_src() -> str:
+    """`__mn_pool_alloc`/`__mn_pool_free` — toccano solo `ctr` (l'header per-blocco
+    è gestito dal lowering via store/load), quindi sono identici per pool
+    monolitico e bancato. NB: op_push azzera la sorgente → mai `push(x)` prima di
+    `x ±= …` su x stesso. `ctr -= nblk; ctr -= 1` è reversibile (inverse +=)."""
+    return "\n".join(
+        [
+            "procedure __mn_pool_alloc(int ctr, int out_slot, int nblk, stack __mn_hist, stack __mn_scratch)",
+            "    push(out_slot, __mn_hist)",
+            "    out_slot += ctr",
+            "    out_slot += 1",
+            "    ctr += nblk",
+            "    ctr += 1",
+            "",
+            "procedure __mn_pool_free(int slot, int ctr, int nblk, stack __mn_hist, stack __mn_scratch)",
+            "    local int ctr0 = 0",
+            "        ctr0 += ctr",
+            "    local int last = 0",
+            "        last += slot",
+            "        last += nblk",
+            "        if ctr0 == last then",
+            "            ctr -= nblk",
+            "            ctr -= 1",
+            "        fi ctr0 == last",
+            "        push(last, __mn_hist)",
+            "    delocal int last = 0",
+            "        push(ctr0, __mn_hist)",
+            "    delocal int ctr0 = 0",
+            "",
+        ]
+    )
+
+
 def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
     mem_params = ", ".join(f"int __mn_mem{i}" for i in range(n))
 
+    # Modello block-aware con HEADER. Ogni malloc di nblk celle occupa nblk+1
+    # celle a partire da `ctr`: mem{ctr}=nblk (header), mem{ctr+1..ctr+nblk}=dati;
+    # il puntatore utente restituito è ctr+1. `ctr += nblk+1` → malloc concorrenti
+    # non si sovrappongono. L'header è scritto/riletto dal LOWERING via
+    # `__mn_pool_store`/`__mn_pool_load` (già banked-aware; lo store azzera la
+    # cella col push, quindi l'header si auto-resetta al riuso). `alloc`/`free`
+    # toccano solo `ctr`, quindi sono identici per pool monolitico e bancato.
     lines: list[str] = [
         f"// Pool puntatori Mnemo — generato, N={n} celle (__mn_mem0..__mn_mem{n - 1}).",
-        "// `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.",
-        "// `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push",
-        "// e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).",
+        "// Header per-blocco (scritto dal lowering): mem{ctr}=nblk; ptr=ctr+1.",
         "",
-        "procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)",
-        "    local int t = 0",
-        "        t += ctr",
-        "        push(out_slot, __mn_hist)",
-        "        out_slot += t",
-        "        ctr += 1",
-        "        push(t, __mn_hist)",
-        "    delocal int t = 0",
-        "",
+        _pool_alloc_free_src(),
         f"procedure __mn_pool_store(int slot, int val, {mem_params}, stack __mn_hist, stack __mn_scratch)",
     ]
 
@@ -78,49 +108,7 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
             ]
         )
 
-    lines.extend(
-        [
-            "",
-            f"procedure __mn_pool_free(int slot, {mem_params}, int ctr, stack __mn_hist, stack __mn_scratch)",
-            "    local int ctr0 = 0",
-            "        ctr0 += ctr",
-        ]
-    )
-
-    for i in range(n):
-        lines.extend(
-            [
-                f"        if slot == {i} then",
-                f"            push(__mn_mem{i}, __mn_hist)",
-                f"        fi slot == {i}",
-            ]
-        )
-
-    for i in range(n):
-        need = i + 1
-        lines.extend(
-            [
-                f"        if slot == {i} then",
-                f"            if ctr0 == {need} then",
-                # NB: niente push(ctr) prima di ctr-=1 — op_push AZZERA la
-                # sorgente (vedi commento in __mn_pool_alloc) → ctr diventerebbe
-                # 0-1=-1 invece di ctr-1, corrompendo il contatore al riuso di
-                # slot in un loop (malloc/free ripetuti). `ctr -= 1` è già
-                # reversibile (inverse = ctr += 1); ctr0 (guardia) non è toccato.
-                "                ctr -= 1",
-                f"            fi ctr0 == {need}",
-                f"        fi slot == {i}",
-            ]
-        )
-
-    lines.extend(
-        [
-            "        push(ctr0, __mn_hist)",
-            "    delocal int ctr0 = 0",
-            "",
-        ]
-    )
-
+    # alloc/free sono già emessi da _pool_alloc_free_src() in testa (mem-free).
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -130,16 +118,9 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
     lines: list[str] = [
         f"// Pool puntatori Mnemo — generato (bancato), N={n}, bank={bsz}, n_banks={n_banks}.",
         "// Limite VM su argomenti di call / parametri di procedura.",
+        "// alloc/free mem-free (header gestito dal lowering via store/load bancati).",
         "",
-        "procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)",
-        "    local int t = 0",
-        "        t += ctr",
-        "        push(out_slot, __mn_hist)",
-        "        out_slot += t",
-        "        ctr += 1",
-        "        push(t, __mn_hist)",
-        "    delocal int t = 0",
-        "",
+        _pool_alloc_free_src(),
     ]
 
     for bi in range(n_banks):
@@ -184,44 +165,6 @@ def _emit_banked_ptr_pool_kairos(n: int) -> str:
             )
         lines.append("")
 
-    for bi in range(n_banks):
-        start = bi * bsz
-        end = min(n, start + bsz)
-        mem_params = ", ".join(f"int __mn_mem{i}" for i in range(start, end))
-        lines.append(
-            f"procedure __mn_pool_free_b{bi}(int lslot, {mem_params}, int ctr, stack __mn_hist, stack __mn_scratch)"
-        )
-        lines.append("    local int ctr0 = 0")
-        lines.append("        ctr0 += ctr")
-        for j in range(start, end):
-            rel = j - start
-            lines.extend(
-                [
-                    f"        if lslot == {rel} then",
-                    f"            push(__mn_mem{j}, __mn_hist)",
-                    f"        fi lslot == {rel}",
-                ]
-            )
-        for j in range(start, end):
-            rel = j - start
-            need = j + 1
-            lines.extend(
-                [
-                    f"        if lslot == {rel} then",
-                    f"            if ctr0 == {need} then",
-                    # niente push(ctr): op_push azzera la sorgente → ctr=-1. Vedi
-                    # nota nel pool monolitico. `ctr -= 1` è già reversibile.
-                    "                ctr -= 1",
-                    f"            fi ctr0 == {need}",
-                    f"        fi lslot == {rel}",
-                ]
-            )
-        lines.extend(
-            [
-                "        push(ctr0, __mn_hist)",
-                "    delocal int ctr0 = 0",
-                "",
-            ]
-        )
-
+    # free è mem-free (single proc da _pool_alloc_free_src, emesso in testa):
+    # tocca solo `ctr`, niente dispatch per banca.
     return "\n".join(lines).rstrip() + "\n"

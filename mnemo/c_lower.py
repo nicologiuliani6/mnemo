@@ -971,6 +971,47 @@ def _ptr_pool_mem_names(ctx: _Ctx) -> tuple[str, ...]:
     return tuple(f"__mn_mem{i}" for i in range(n))
 
 
+def _malloc_block_cells(call: c.FuncCall) -> int:
+    """Celle (int) richieste da una `malloc`/`calloc`, valutando staticamente la
+    size (1 cella = 1 int = 4 byte). `malloc(sizeof(int)*5)`→5; `malloc(20)`→5;
+    `calloc(5,sizeof(int))`→5. Size non costante → 1 (conservativo)."""
+    args = call.args.exprs if (call.args and call.args.exprs) else []
+
+    def const_bytes(e: c.Node) -> int | None:
+        if isinstance(e, c.Constant) and e.type in ("int", "unsigned int", "long"):
+            try:
+                return int(e.value, 0)
+            except ValueError:
+                return None
+        if isinstance(e, c.UnaryOp) and e.op == "sizeof":
+            return 4
+        if isinstance(e, c.Cast):
+            return const_bytes(e.expr)
+        if isinstance(e, c.BinaryOp):
+            l = const_bytes(e.left)
+            r = const_bytes(e.right)
+            if l is None or r is None:
+                return None
+            if e.op == "*":
+                return l * r
+            if e.op == "+":
+                return l + r
+        return None
+
+    name = call.name.name if isinstance(call.name, c.ID) else ""
+    if name == "calloc" and len(args) == 2:
+        nb = const_bytes(args[0])
+        eb = const_bytes(args[1])
+        if nb is not None and eb is not None:
+            return max(1, (nb * eb + 3) // 4)
+        return 1
+    if args:
+        b = const_bytes(args[0])
+        if b is not None:
+            return max(1, (b + 3) // 4)
+    return 1
+
+
 def _parallel_branch_mem_actuals(
     ctx: _Ctx, *, left: bool, callee_name: str | None = None
 ) -> list[str]:
@@ -1117,24 +1158,25 @@ def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
 
 
 def _ir_pool_free_call(ctx: _Ctx, slot_var: str) -> list[Instr]:
-    if not _pool_uses_banking(ctx):
-        return [
+    # Modello header: rileggi nblk da mem{p-1} (pool_load, banked-aware), poi
+    # `__mn_pool_free(p, ctr, nblk)` decrementa ctr di nblk+1 se il blocco è
+    # l'ultimo allocato (riuso LIFO). free è mem-free (tocca solo ctr).
+    t_hdr = ctx.fresh_temp()
+    t_nblk = ctx.fresh_temp()
+    ctx.use_hist = True
+    ctx.use_scratch = True
+    return (
+        [IAddEq(t_hdr, Var(slot_var)), ISubEq(t_hdr, Imm(1))]
+        + _ir_pool_load_call(ctx, t_hdr, t_nblk)
+        + [
             ICall(
                 "__mn_pool_free",
-                [slot_var]
-                + list(_ptr_pool_mem_names(ctx))
-                + [_PTR_POOL_CTR]
-                + _kairos_stack_actuals(ctx),
-            )
+                [slot_var, _PTR_POOL_CTR, t_nblk] + _kairos_stack_actuals(ctx),
+            ),
+            IHistPush(ctx.scratch, t_nblk),
+            IHistPush(ctx.scratch, t_hdr),
         ]
-    pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
-
-    def args_for(bi: int) -> list[str]:
-        s0 = bi * POOL_BANK_SIZE
-        s1 = min(ctx.total_mem_cells, s0 + POOL_BANK_SIZE)
-        return [t_r] + [f"__mn_mem{i}" for i in range(s0, s1)] + [_PTR_POOL_CTR]
-
-    return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_free", args_for)
+    )
 
 
 def _phys(ctx: _Ctx, logical: str) -> str:
@@ -6586,13 +6628,34 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             if not ctx.proc_returns_int.get(name, False):
                 raise MnemoCompileError("malloc deve restituire un puntatore (void* / int*)")
             _register_ptr_pool_locals(ctx)
-            t = ctx.fresh_temp()
-            ins = [
-                ICall(
-                    "__mn_pool_alloc",
-                    [_PTR_POOL_CTR, t] + _kairos_stack_actuals(ctx),
+            if _pool_uses_banking(ctx):
+                # Il modello header (malloc concorrenti) non è ancora cablato per
+                # il pool BANCATO (> MONOLITHIC_POOL_MEM_MAX celle): l'header
+                # store/load via banca + divmod va validato. Errore pulito invece
+                # di un risultato errato silenzioso. Workaround: riduci il pool.
+                raise MnemoCompileError(
+                    "malloc con pool bancato (> ~998 celle) non supportato: "
+                    "riduci --ptr-pool-size o le allocazioni (TODO §2 header banked)"
                 )
-            ]
+            t = ctx.fresh_temp()
+            t_nblk = ctx.fresh_temp()
+            nblk = _malloc_block_cells(expr)
+            ctx.use_hist = True
+            ctx.use_scratch = True
+            # Modello block-aware con header. Scrivi l'header nblk in mem{ctr}
+            # (banked-aware via pool_store), poi alloc ritorna ctr+1 (inizio dati)
+            # e avanza ctr di nblk+1 → blocchi concorrenti non si sovrappongono.
+            ins = (
+                [IConst(t_nblk, nblk)]
+                + _ir_pool_store_call(ctx, _PTR_POOL_CTR, t_nblk)
+                + [
+                    ICall(
+                        "__mn_pool_alloc",
+                        [_PTR_POOL_CTR, t, t_nblk] + _kairos_stack_actuals(ctx),
+                    ),
+                    IHistPush(ctx.scratch, t_nblk),
+                ]
+            )
             return ins, Var(t), [t]
         if name not in ctx.extern_procs:
             raise MnemoCompileError(
