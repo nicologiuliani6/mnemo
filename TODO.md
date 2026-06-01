@@ -71,16 +71,36 @@ Update `kairos_limits.py` lato Mnemo per allinearsi a quanto cambia.
 
 ### 2. Mnemo: pointer pool runtime growable (auto-sizing già fatto)
 
-**Già fatto**: pool size auto-inferito da `_infer_ptr_pool_size` che
-conta call site di `malloc`/`calloc` nel sorgente. Default `--ptr-pool-size 4`
-è ora un *minimo*; auto-cresce verso l'alto se servono più slot. Banked
-pools scattano sopra `MONOLITHIC_POOL_MEM_MAX`.
+**Già fatto**: pool size auto-inferito da `_infer_ptr_pool_size`. Ora
+dimensiona dalla SIZE di ogni `malloc`/`calloc` (non più dal solo numero di
+call-site): `malloc(sizeof(int)*N)` → N celle (commit Mnemo b986723,
+regression `generic_malloc_block.c`). Banked pools sopra
+`MONOLITHIC_POOL_MEM_MAX`.
 
-**Open**: pool runtime growable (non statico al compile-time). Programmi
-con `malloc` dentro un loop con N iterazioni runtime non sono inferibili
-staticamente; oggi richiedono `--ptr-pool-size N_max`. Una primitiva VM
-`pool_grow N` reversibile permetterebbe crescita on-demand. Dipende da
-[[1. VM Kairos: allocazione dinamica strutture interne]].
+**BUG aperto — `malloc`+`free` dentro un loop perde iterazioni**. Pattern
+`for(i…){ int *p = malloc(...); *p = i; use(*p); free(p); }` dà risultato
+errato vs gcc: es. `for(i=0;i<3;i++)` stampa `0 0 2` invece di `0 1 2`
+(perde l'iterazione di mezzo). Caratterizzato:
+- forward-only (no inverse/uncall), quindi è lowering/VM forward, non il
+  path inverse;
+- specifico di `free` DENTRO il loop: `malloc` in loop SENZA free (slot che
+  avanzano) con `--ptr-pool-size` sufficiente → corretto;
+- NON è il block-size (fixato b986723) né loop-local scalari/array (ok) né
+  pointer-alias `int *p=&G[i]` in loop (ok, `0 5 10`);
+- il `.kairos` sembra corretto all'analisi statica (`push(memP); memP +=
+  slot` resetta p; `__mn_pool_free` azzera la cella slot e fa dec-ctr LIFO
+  corretto) → il difetto è probabilmente nell'interazione runtime VM tra le
+  pool-proc (`__mn_pool_store/load/free`, che ricevono TUTTE le celle
+  `__mn_mem*` come parametri) e il riuso di slot sotto loop. Serve tracing
+  VM runtime (vedi [[reference-kairos-vm-debug]]), non risolvibile staticamente.
+Reproducer minimo: `for(i=0;i<3;i++){int*p=malloc(sizeof(int));*p=i;
+printf("%d ",*p);free(p);}` → `0 0 2`.
+
+**Open (feature)**: pool runtime growable (non statico al compile-time).
+Programmi con `malloc` dentro un loop con N iterazioni runtime non sono
+inferibili staticamente; oggi richiedono `--ptr-pool-size N_max`. Una
+primitiva VM `pool_grow N` reversibile permetterebbe crescita on-demand.
+Dipende da [[1. VM Kairos: allocazione dinamica strutture interne]].
 
 ---
 
