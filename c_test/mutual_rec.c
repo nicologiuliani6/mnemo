@@ -1,6 +1,9 @@
-/* REPRO bug aperto: ricorsione mutua → VM crash `PUSH: variabile '__mn_e1'
- * è NULL`. is_even/is_odd si chiamano a vicenda; temp non dichiarato nel
- * codegen cross-call. Atteso "1 0".  (Distinto dal fix self-rec.)
+/* REGRESSION: ricorsione mutua. Storicamente crashava la VM
+ * (`PUSH: variabile '__mn_e1' è NULL`): is_even→is_odd→is_even ri-entrava nel
+ * frame BASE di is_even, e il delocal della call interna liberava i LOCAL int
+ * condivisi della call esterna. Fix VM (Janus.c): clona il frame anche per la
+ * re-entrancy mutua (contatore Frame.active), non solo per la self-rec.
+ * is_even(10)=1, is_odd(7)=1.
  */
 #ifdef MNEMO
 int printf(const char *fmt, ...);

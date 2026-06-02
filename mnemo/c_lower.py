@@ -212,6 +212,54 @@ def _func_is_recursive_user(ast: c.FileAST | None, fname: str) -> bool:
     return False
 
 
+def _func_direct_callees(ast: c.FileAST | None, fname: str) -> set[str]:
+    """Nomi delle funzioni chiamate direttamente nel body di `fname`."""
+    out: set[str] = set()
+    if ast is None:
+        return out
+    fdef = _get_funcdef(ast, fname)
+    if fdef is None or fdef.body is None:
+        return out
+    stack: list[c.Node | None] = [fdef.body]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if isinstance(n, c.FuncCall) and isinstance(n.name, c.ID):
+            out.add(n.name.name)
+        for _na, ch in n.children():
+            if isinstance(ch, list):
+                stack.extend(ch)
+            elif ch is not None:
+                stack.append(ch)
+    return out
+
+
+def _func_reaches(ast: c.FileAST | None, src: str, dst: str) -> bool:
+    """True se `src` chiama `dst` transitivamente (grafo delle call user).
+
+    Usato per rilevare se una call fa parte di un ciclo ricorsivo col chiamante:
+    se il callee `src` può ri-raggiungere il chiamante `dst`, allora la call
+    rientrerà nel frame del chiamante (self- o mutua-ricorsione) e ne aliasa le
+    celle → serve snapshot/restore delle celle vive del chiamante.
+    """
+    if ast is None:
+        return False
+    seen: set[str] = set()
+    work = [src]
+    while work:
+        cur = work.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        for callee in _func_direct_callees(ast, cur):
+            if callee == dst:
+                return True
+            if callee not in seen:
+                work.append(callee)
+    return False
+
+
 def infer_par2_workers_all(ast: c.FileAST) -> frozenset[str]:
     """Entrambi i worker (arg0 e arg1) di `mnemo_pthread_parallel2`.
 
@@ -7666,25 +7714,60 @@ def _lower_funccall_with_ret(
             # questo, arg2 vede `b` invece di `a` → risultato sbagliato.
             # Variante: se arg è già un Constant int (no ID refs), assegna diretto
             # alla mem cell per evitare temp inutili.
-            # Self-recursione: gli slot-arg del callee SONO le celle `__mn_mem*`
-            # del frame chiamante (stesso range, params per-Frame aliasati by-ref
-            # nella `call`). Il setup-arg `push(dst); dst += arg` sovrascrive il
-            # valore del chiamante (es. `n` → `n-1`) e la `call` lo muta ancora →
-            # dopo la call il param del chiamante è perso. Il path inline
-            # (`return n*f(n-1)`) lo salva in un temp `__mn_e*` (frame-local, non
-            # passato al callee) e lo ripristina dopo; il path call-into-local non
-            # lo faceva → `int t=f(n-1); return n*t;` leggeva `n` corrotto.
-            # Fix: per self-rec snapshot di ogni slot-arg in un temp frame-local
-            # PRIMA del setup, restore DOPO l'estrazione del ritorno.
-            self_rec_arg = (name == ctx.fn_name)
+            # Ricorsione (self O mutua): gli slot-arg del callee possono COINCIDERE
+            # con celle `__mn_mem*` vive del frame chiamante. Self-rec: stesso range
+            # ovvio. Mutua (ev↔od): il layout assegna range di slot SOVRAPPOSTI alle
+            # funzioni in un ciclo ricorsivo, quindi il param-slot del callee è la
+            # stessa cella del param del chiamante. Il setup-arg `push(dst); dst +=
+            # arg` sovrascrive quel valore → dopo la call il chiamante legge corrotto
+            # (`int t=f(n-1); return n*t;` → n=0). Il path inline lo salva in un temp
+            # `__mn_e*` (frame-local, non passato al callee) e ripristina; il path
+            # call-into-local no.
+            # Fix: snapshot di ogni slot-arg che ricade nel set di celle del FRAME
+            # CHIAMANTE (caller_slots) in un temp frame-local PRIMA del setup, restore
+            # DOPO l'estrazione del ritorno. Le call non-ricorsive con range disgiunti
+            # non toccano caller_slots → nessuno snapshot, comportamento invariato.
+            # La `call` passa al callee la finestra `mem_args` (= celle toccate dal
+            # callee) per RIFERIMENTO: nel VM il clone ricorsivo aliasa i Var* del
+            # chiamante, quindi un callee ricorsivo (self O mutuo) che muta quelle
+            # celle distrugge le var vive del chiamante. Le funzioni Mnemo
+            # restituiscono solo via slot di ritorno + globali; params/locali del
+            # chiamante sono semantica by-value → vanno preservati. Snapshot di ogni
+            # cella che è (a) del frame chiamante e (b) toccata dal callee, restore
+            # dopo l'estrazione del ritorno. I globali NON sono in caller_slots
+            # (chiave fn diversa) → mutazione globale attraverso la ricorsione
+            # preservata. Call non-ricorsive con finestre disgiunte → intersezione
+            # vuota → nessuno snapshot, comportamento invariato.
+            # Solo le call dentro un ciclo ricorsivo col chiamante aliasano le sue
+            # celle (la layout RIUSA gli slot tra funzioni non simultanee, quindi le
+            # call normali hanno intersezione non vuota ma SENZA aliasing → non
+            # vanno toccate). Gate: self-rec o callee che ri-raggiunge il chiamante.
+            in_rec_cycle = (name == ctx.fn_name) or _func_reaches(
+                ctx.file_ast, name, ctx.fn_name
+            )
+            caller_slots = (
+                {s for (fn, _k), s in layout.slot_of.items() if fn == ctx.fn_name}
+                if in_rec_cycle
+                else set()
+            )
+            _ct_pre = ctx.callee_mem_touches.get(name)
+            callee_cells = (
+                set(range(layout.total_cells)) if _ct_pre is None
+                else {i for i in _ct_pre if i < layout.total_cells}
+            )
+            # Esclude lo slot di ritorno: post_uc lo legge come valore di ritorno,
+            # non va ripristinato al valore pre-call.
+            ret_slot_idx = {
+                layout.slot_of[(name, rn)] for rn in _ret_slot_names(rw_c)
+            }
             selfrec_restore: list[tuple[str, str]] = []
-            if self_rec_arg:
-                for log_key in slot_logs:
-                    idx = layout.slot_of[(name, log_key)]
-                    dst = f"__mn_mem{idx}"
-                    snap = ctx.fresh_temp()
-                    pre_uc.append(IXorEq(snap, Var(dst)))
-                    selfrec_restore.append((dst, snap))
+            for idx in sorted(caller_slots & callee_cells):
+                if idx in ret_slot_idx:
+                    continue
+                dst = f"__mn_mem{idx}"
+                snap = ctx.fresh_temp()
+                pre_uc.append(IXorEq(snap, Var(dst)))
+                selfrec_restore.append((dst, snap))
             arg_setup_temps: list[tuple[str, str]] = []
             for ex, log_key in zip(exprs, slot_logs):
                 idx = layout.slot_of[(name, log_key)]
