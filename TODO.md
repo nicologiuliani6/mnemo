@@ -23,10 +23,6 @@
   dallo snap/swap → divergenza (repro `c_test/bug_malloc_in_function.c` sotto
   `--opt-uncall`). Per coprirle servirebbe estendere lo snapshot opt-uncall alle
   celle scritte via ptr-param fuori dal touch-set — lavoro fine.
-- **Sotto-gap**: una fn `int` chiamata come STATEMENT (return scartato, es.
-  `work(…);`) non rientra né in `apply_uncall_opt` (serve `ret_sink`) né in
-  `apply_void_uncall_opt` (serve `void`) → niente opt. Renderla void o usare il
-  return abilita l'opt.
 
 ## Migliorie / limiti noti (non bloccanti)
 

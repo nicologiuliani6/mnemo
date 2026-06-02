@@ -7971,9 +7971,28 @@ def _lower_funccall_with_ret(
                 and not pool_blk
                 and not in_par2_worker
             )
+            # Fn `int` chiamata come STATEMENT (return scartato, `ret_sink is
+            # None` ma `wants`): opt come la void. Lo snapshot include la cella di
+            # ritorno (in `touched`); il valore resta lì, scartato. Niente
+            # `post_uc` (nessun ret_sink da assegnare).
+            apply_discard_int_opt = (
+                ctx.opt_uncall_user_calls
+                and wants
+                and ret_sink is None
+                and rw_c >= 1
+                and not self_rec
+                and not ir_blk
+                and not ch_blk
+                and not show_blk
+                and not pool_blk
+                and not in_par2_worker
+            )
+            apply_opt = (
+                apply_uncall_opt or apply_void_uncall_opt or apply_discard_int_opt
+            )
             uncall_with_restore: list[Instr] = []
             snap_pairs: list[tuple[int, str]] = []
-            if apply_uncall_opt or apply_void_uncall_opt:
+            if apply_opt:
                 touched = ctx.callee_mem_touches.get(name)
                 if touched is None:
                     cell_iter = list(range(layout.total_cells))
@@ -8022,10 +8041,10 @@ def _lower_funccall_with_ret(
                         src_id = f"__mn_mem{ri}"
                         post_uc.extend(_lower_assign(dst, c.ID(src_id, coord), ctx))
             call_uc: list[Instr] = []
-            if apply_uncall_opt or apply_void_uncall_opt:
+            if apply_opt:
                 call_uc.append(ICall("__mn_hist_floor_snap", [ctx.hist]))
             call_uc.append(ICall(name, mem_args + pi_suffix + chx + stk))
-            if apply_uncall_opt or apply_void_uncall_opt:
+            if apply_opt:
                 call_uc.extend(uncall_with_restore)
             # Self-rec: ripristina gli slot-arg del chiamante DOPO l'estrazione del
             # ritorno (post_uc legge la cella di ritorno). `push(dst); dst += snap`
