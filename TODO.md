@@ -35,12 +35,6 @@
   non supportato in alcuni contesti (es. dentro `switch`): `letterale stringa
   non è un valore intero` (probe `v12`). L'init diretto `char *p="..."` invece
   funziona.
-- **Ricorsione mista self+mutua: possibile collisione di frame-key.** Il clone
-  per la mutua usa `Frame.active` come depth, la self-rec usa il parsing `@N`
-  del frame name (Janus.c). Una proc raggiunta SIA da self- SIA da mutua-
-  ricorsione nello stesso path potrebbe generare chiavi `proc@depth`
-  collidenti. Caso limite non coperto dai test (mutua a 2/3 vie + self pure
-  OK). Verificare/serve uno schema di depth unificato se emerge.
 - **`_Generic` non distingue `char` da `int`.** Mnemo aliasa `char` a `int`
   nel type-system → `_Generic((c), char:…, int:…)` sceglie sempre `int`.
   Probe `p22`. Richiede un tag di tipo `char` separato nel lowering.
