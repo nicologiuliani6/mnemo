@@ -905,6 +905,11 @@ class _Ctx:
     """Array di fn-ptr risolti a compile-time: nome logico → lista di nomi fn
     (per indice). `ops[k](…)` con k costante → call al nome corrispondente."""
     func_ptr_array: dict[str, list[str]] = field(default_factory=dict)
+    """Celle (fisiche) di variabili scalari `char` / `unsigned char`: dopo ogni
+    scrittura il valore va troncato a 8 bit (signed-default x86 / zero-ext).
+    Solo scalari (gli array char = stringhe ASCII, mask = no-op, esclusi)."""
+    char_trunc_signed: set[str] = field(default_factory=set)
+    char_trunc_unsigned: set[str] = field(default_factory=set)
     """Fn ptr con >1 candidato runtime: nome logico → set di nomi fn possibili."""
     func_ptr_runtime: dict[str, set[str]] = field(default_factory=dict)
     """Tag intero per ogni fn addressable in modalità runtime-dispatch (file-level)."""
@@ -8453,6 +8458,11 @@ def _lower_assign(lhs: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
     out: list[Instr] = ei + [IHistPush(ctx.hist, lhs), IAddEq(lhs, op)]
     for tmp in reversed(temps):
         out.append(IHistPush(ctx.scratch, tmp))
+    # Var scalare char: tronca a 8 bit dopo la scrittura (wrap aritmetico C).
+    if lhs in ctx.char_trunc_unsigned:
+        out.extend(_emit_char_trunc(lhs, signed=False, ctx=ctx))
+    elif lhs in ctx.char_trunc_signed:
+        out.extend(_emit_char_trunc(lhs, signed=True, ctx=ctx))
     return out
 
 
@@ -8555,6 +8565,51 @@ def _kairos_atom(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], str, list[str]]:
 def _negate_guard(g: tuple[str, CmpOp, str]) -> tuple[str, CmpOp, str]:
     lh, op, rh = g
     return lh, _NEG_CMP[op], rh
+
+
+def _char_scalar_kind(tnode: c.Node | None) -> str | None:
+    """`char`/`signed char` → 'signed'; `unsigned char` → 'unsigned'; else None.
+    Solo TypeDecl scalare (no ptr/array)."""
+    if not isinstance(tnode, c.TypeDecl):
+        return None
+    inner = tnode.type
+    if not isinstance(inner, c.IdentifierType):
+        return None
+    nms = inner.names
+    if nms in (["char"], ["signed", "char"]):
+        return "signed"
+    if nms == ["unsigned", "char"]:
+        return "unsigned"
+    return None
+
+
+def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
+    """IR per troncare la cella `lhs` a 8 bit (dopo una scrittura su var char).
+    unsigned: lhs &= 0xFF. signed: lhs = sign-extend del byte basso.
+    Usa __mn_and_into / __mn_shr_into / __mn_mul_into (reversibili)."""
+    stk = _kairos_stack_actuals(ctx)
+    ctx.use_hist = True
+    t = ctx.fresh_temp()
+    c255 = ctx.fresh_temp()
+    out: list[Instr] = [
+        IConst(c255, 255),
+        ICall("__mn_and_into", [t, lhs, c255] + stk),   # t = lhs & 255 (0..255)
+        IHistPush(ctx.hist, lhs),
+        ICall("__mn_move_int", [lhs, t] + stk),          # lhs = t (t → 0)
+    ]
+    if signed:
+        seven = ctx.fresh_temp()
+        hb = ctx.fresh_temp()
+        c256 = ctx.fresh_temp()
+        prod = ctx.fresh_temp()
+        out += [
+            IConst(seven, 7),
+            ICall("__mn_shr_into", [hb, lhs, seven] + stk),   # hb = lhs >> 7 (0/1)
+            IConst(c256, 256),
+            ICall("__mn_mul_into", [prod, hb, c256] + stk),   # prod = hb * 256
+            ISubEq(lhs, Var(prod)),                            # lhs -= prod
+        ]
+    return out
 
 
 def _type_node_is_unsigned(tnode: c.Node | None) -> bool:
@@ -9956,6 +10011,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         if ctx.mem_layout is None:
             ctx.decl_order.append(logical)
         ctx.var_types[logical] = node.type
+        # Scalari char: registra la cella per il troncamento a 8 bit post-scrittura.
+        _ck = _char_scalar_kind(node.type)
+        if _ck is not None:
+            _ccell = _phys(ctx, logical)
+            if _ck == "unsigned":
+                ctx.char_trunc_unsigned.add(_ccell)
+            else:
+                ctx.char_trunc_signed.add(_ccell)
         if node.init is None:
             return []
         if isinstance(node.init, c.InitList):
@@ -10913,6 +10976,13 @@ def infer_auto_lib_files(ast: c.FileAST) -> list[str]:
     def visit(node: object) -> None:
         if node is None:
             return
+        # Var scalare char → troncamento 8 bit usa and_into/shr/mul (bits+mul).
+        if isinstance(node, c.Decl) and _char_scalar_kind(
+            getattr(node, "type", None)
+        ) is not None:
+            needed.update(
+                {"helpers.kairos", "mul.kairos", "divmod.kairos", "bits.kairos"}
+            )
         if isinstance(node, c.FuncCall) and isinstance(node.name, c.ID):
             if node.name.name == "printf":
                 needed.update(

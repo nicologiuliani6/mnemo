@@ -2,15 +2,9 @@
 
 ## Bug aperti (verificati, fix rischioso/non banale)
 
-- **`char`/`unsigned char`: aritmetica non wrappa a 8 bit.** Mnemo è
-  internamente all-signed-int e non modella la width del char: `unsigned char
-  c=250; c+=10;` dà 260 invece di 4. Fix = tipo char a 8 bit (mask 0xFF su TUTTI
-  i path di scrittura `=`/`+=`/`++`/subscript + char signed-default x86) →
-  invasivo, alto rischio su string-ops (22 test usano char). Repro
-  `c_test/bug_uchar_wrap.c`. NB: il confronto misto signed/unsigned vs 0
-  (`(a+b)<0`) è ORA gestito (fold `_fold_unsigned_cmp_zero`); restano i confronti
-  unsigned vs valore non-zero con high-bit (es. `u1 < u2` con u1≥2^31), non
-  coperti.
+- **Confronti unsigned vs valore non-zero con high-bit** (es. `u1 < u2` con
+  u1≥2^31): non coperti (Mnemo confronto signed). Il caso comune `unsigned <,>= 0`
+  e l'aritmetica char/unsigned-char (wrap 8 bit) sono ORA gestiti.
 
 ## Ottimizzazioni mancanti
 
