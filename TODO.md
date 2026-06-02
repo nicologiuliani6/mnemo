@@ -18,17 +18,23 @@
 
 ## Ottimizzazioni mancanti
 
-- **`--opt-uncall-user-calls` non ottimizza la memoria nei cicli con malloc.**
-  Su `c_test/malloc_test.c` (100 `malloc` in loop, solo l'ultimo `p` vivo) le
-  stats VM sono IDENTICHE con e senza il flag:
-  `cells_final 1452 / cells_mean 1362.61 / cells_max 5084` in entrambi i casi.
-  L'opt agisce solo su snapshot/uncall delle celle `__mn_mem*` nominate, NON
-  sulle allocazioni dell'heap dinamico (`vm->mn_pool`): le 99 allocazioni morte
-  del loop restano nel pool. Idea: riconoscere gli slot pool non più
-  raggiungibili (es. malloc senza free il cui puntatore è sovrascritto a ogni
-  iterazione) e ridurli/riusarli — difficile in modello reversibile (il
-  ripristino inverso richiede la storia delle allocazioni), valutare un
-  free-implicito reversibile o riuso dello slot a parità di `nblk`.
+- **`--opt-uncall-user-calls` esclude TUTTE le funzioni che usano il pool.**
+  Diagnosi precisa (`_pool_using_transitive_closure`, c_lower): una funzione che
+  usa pool ops — `malloc`/`free` O **qualsiasi deref di puntatore** (lo store/
+  load indicizzato passa da `__mn_pool_*`) — più i suoi chiamanti transitivi è
+  in `pool_using_targets` → `pool_blk` → mai ottimizzata. Quindi i loop con
+  malloc/puntatori NON beneficiano mai dell'opt, né in `main` (mai toccato) né
+  in funzione.
+  - Prova: `work(){ acc=…; G=acc; }` (scrive globale, no ptr) → opt applica,
+    `cells_max 3616 → 2008` (−45 %). Stessa fn con `*out=…` o `malloc` → 0
+    `uncall work`, celle identiche.
+  - Sotto-gap collegato: una fn int chiamata come STATEMENT (return scartato,
+    es. `work(…);`) non rientra né in `apply_uncall_opt` (serve `ret_sink`) né
+    in `apply_void_uncall_opt` (serve `void`) → niente opt anche senza pool.
+  Motivo dell'esclusione pool: l'uncall inverso di POOLPUSH/POOLADD/POOLGET sotto
+  il pattern snap/uncall non è garantito corretto. Fix = renderlo invertibile e
+  togliere `pool_blk` (così i malloc-loop ne beneficiano) — lavoro VM
+  profondo, rischio su invertibilità/encrypt-des.
 
 ## Migliorie / limiti noti (non bloccanti)
 
