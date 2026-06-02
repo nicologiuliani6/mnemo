@@ -1,7 +1,16 @@
 # TODO
 
-Nessun lavoro aperto. Sotto: i limiti intenzionali (bounded-by-design,
-non bug) e le esclusioni strutturali.
+## Aperto
+
+- **Ricorsione mutua → crash VM** (`PUSH: variabile '__mn_e1' è NULL`).
+  Repro `c_test/mutual_rec.c` (is_even/is_odd). Il `.kairos` emesso è
+  ben formato (tutti i temp `__mn_e*` dichiarati `local` nelle rispettive
+  procedure), quindi sospetto bug **lato Kairos VM** nella risoluzione delle
+  var di Frame quando due procedure mutuamente ricorsive condividono nomi di
+  local attraverso lo stack di call. Isolare Mnemo (emit) vs Kairos (Frame
+  lookup) prima di patchare. NB: la self-ricorsione diretta è OK (fix
+  snapshot/restore slot-arg in `_lower_funccall_with_ret`, regression
+  `generic_recursion_param_after_call.c`).
 
 ## Bounded-by-design (non bug)
 
