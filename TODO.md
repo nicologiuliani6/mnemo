@@ -2,11 +2,19 @@
 
 ## Bug aperti (verificati, fix rischioso/non banale)
 
-- **`char`/`unsigned char`: aritmetica non wrappa a 8 bit.** char aliasato a
-  `int` → `unsigned char c=250; c+=10;` dà 260 invece di 4. Fix proprio =
-  tipo char a 8 bit (mask 0xFF su TUTTI i path di scrittura: `=`, `+=`, `++`,
-  subscript + char di default signed su x86). Multi-path + impatto string-ops
-  (22 test usano char) → invasivo. Repro `c_test/bug_uchar_wrap.c`.
+- **Semantica tipi interi: Mnemo è internamente all-signed-int.** Non modella le
+  *usual arithmetic conversions* del C. Due manifestazioni:
+  - **`char`/`unsigned char` non wrappa a 8 bit**: `unsigned char c=250; c+=10;`
+    dà 260 invece di 4. Fix = tipo char a 8 bit (mask 0xFF su TUTTI i path di
+    scrittura `=`/`+=`/`++`/subscript + char signed-default x86). Repro
+    `c_test/bug_uchar_wrap.c`.
+  - **Confronti misti signed/unsigned**: `unsigned a=10; int b=-20; (a+b)<0` →
+    gcc "pos" (la somma è unsigned, mai <0), Mnemo "neg" (confronto signed). Il
+    *valore* è giusto (stessi bit, %u/%d corretti); è il confronto `<`/`>` che
+    usa la signedness sbagliata. Repro `c_test/bug_mixed_sign_cmp.c`.
+  Fix comune = tracciare la signedness/width attraverso le espressioni ed
+  emettere op (confronto, mask) coerenti → invasivo (type-system), alto rischio
+  su string-ops (22 test usano char) e su encrypt/des (unsigned-heavy).
 
 ## Ottimizzazioni mancanti
 
@@ -31,8 +39,17 @@
 - **`struct P *p = arr` (puntatore a base array-di-struct)** non supportato
   (`identificatore non dichiarato` sul nome array, probe `s10`). L'init
   dell'array-di-struct invece ora funziona.
-- **Indice array commutato `2[a]`** (== `a[2]`) non supportato: `array: la base
-  dell'indicizzazione deve essere un nome` (probe `r17`). Sintassi rara.
+- **Indicizzazione su non-nome**: `2[a]` (== `a[2]`, probe `r17`) e
+  `"ABCDE"[i]` (indice runtime su letterale stringa, probe `u12`) non
+  supportati: `array: la base dell'indicizzazione deve essere un nome`. Il caso
+  letterale a indice costante è compile-time-foldabile; quello runtime serve un
+  buffer materializzato. Sintassi rara.
+- **Campo union/struct annidato `u.s.a`** non supportato: `union: un solo
+  livello di campo` (probe `v03`).
+- **`char *n; n = "literal";` (riassegnazione da letterale) + `printf("%s",n)`**
+  non supportato in alcuni contesti (es. dentro `switch`): `letterale stringa
+  non è un valore intero` (probe `v12`). L'init diretto `char *p="..."` invece
+  funziona.
 - **Ricorsione mista self+mutua: possibile collisione di frame-key.** Il clone
   per la mutua usa `Frame.active` come depth, la self-rec usa il parsing `@N`
   del frame name (Janus.c). Una proc raggiunta SIA da self- SIA da mutua-
