@@ -1,16 +1,23 @@
 # TODO
 
-## Aperto
+## Migliorie / limiti noti (non bloccanti)
 
-- **Ricorsione mutua → crash VM** (`PUSH: variabile '__mn_e1' è NULL`).
-  Repro `c_test/mutual_rec.c` (is_even/is_odd). Il `.kairos` emesso è
-  ben formato (tutti i temp `__mn_e*` dichiarati `local` nelle rispettive
-  procedure), quindi sospetto bug **lato Kairos VM** nella risoluzione delle
-  var di Frame quando due procedure mutuamente ricorsive condividono nomi di
-  local attraverso lo stack di call. Isolare Mnemo (emit) vs Kairos (Frame
-  lookup) prima di patchare. NB: la self-ricorsione diretta è OK (fix
-  snapshot/restore slot-arg in `_lower_funccall_with_ret`, regression
-  `generic_recursion_param_after_call.c`).
+- **Ricorsione mista self+mutua: possibile collisione di frame-key.** Il clone
+  per la mutua usa `Frame.active` come depth, la self-rec usa il parsing `@N`
+  del frame name (Janus.c). Una proc raggiunta SIA da self- SIA da mutua-
+  ricorsione nello stesso path potrebbe generare chiavi `proc@depth`
+  collidenti. Caso limite non coperto dai test (mutua a 2/3 vie + self pure
+  OK). Verificare/serve uno schema di depth unificato se emerge.
+- **`_Generic` non distingue `char` da `int`.** Mnemo aliasa `char` a `int`
+  nel type-system → `_Generic((c), char:…, int:…)` sceglie sempre `int`.
+  Probe `p22`. Richiede un tag di tipo `char` separato nel lowering.
+- **Array di puntatori a funzione non supportati** (`int (*ops[2])(int)`).
+  Probe `p07` → `array: elemento supportato solo se scalare/puntatore`.
+  Solo fnptr scalari compile-time-resolved oggi.
+- **Cruft debug VM**: blocco `#ifdef MNEMO_AGENT_LOG` in
+  `kairos/src/vm/Janus.c` (END_PROC) scrive su path hardcoded
+  `/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log`. Morto salvo `-D`, ma da
+  rimuovere.
 
 ## Bounded-by-design (non bug)
 
