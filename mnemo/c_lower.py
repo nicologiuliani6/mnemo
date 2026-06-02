@@ -6297,6 +6297,45 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 # `&a[K]` ≡ `a + K` (l-value indirizzo del K-esimo elemento).
                 synth = c.BinaryOp(op="+", left=inner.name, right=inner.subscript)
                 return _eval_expr(synth, ctx)
+            if isinstance(inner, c.ArrayRef) and isinstance(inner.name, c.ArrayRef):
+                # `&m[i][j]` multidim: indirizzo = base_slot + offset row-major.
+                try:
+                    mbase, msubs = _flatten_array_ref_chain(inner)
+                except MnemoCompileError:
+                    mbase, msubs = None, None
+                if mbase is not None:
+                    mbase_log = _scope_resolve(ctx, mbase)
+                    if (
+                        mbase_log in ctx.array_info
+                        and not ctx.array_info[mbase_log].array_decay_pointer
+                    ):
+                        minfo = ctx.array_info[mbase_log]
+                        if len(msubs) == len(minfo.dims):
+                            cell0 = _array_elem_local(mbase_log, 0)
+                            base_slot = ctx.slot_index.get(cell0)
+                            if (
+                                base_slot is None
+                                and ctx.mem_layout is not None
+                                and ("__file__", cell0) in ctx.mem_layout.slot_of
+                            ):
+                                base_slot = ctx.mem_layout.slot_of[("__file__", cell0)]
+                            if base_slot is not None:
+                                ctx.addr_taken_logicals.add(cell0)
+                                if all(isinstance(s, c.Constant) for s in msubs):
+                                    lin = _const_row_major_linear(msubs, minfo.dims)
+                                    return [], Imm(base_slot + lin), []
+                                idx_expr = _c_row_major_index_ast(
+                                    msubs, minfo.dims, getattr(inner, "coord", None)
+                                )
+                                pre_a, op_a, tm_a = _eval_expr(idx_expr, ctx)
+                                t = ctx.fresh_temp()
+                                ctx.use_hist = True
+                                out_a = pre_a + [
+                                    IHistPush(ctx.hist, t),
+                                    IAddEq(t, Imm(base_slot)),
+                                    IAddEq(t, op_a),
+                                ]
+                                return out_a, Var(t), tm_a + [t]
             if isinstance(inner, c.ArrayRef) and isinstance(inner.name, c.StructRef):
                 # `&BASE.arr[K]`: array di struct dentro struct (es. `&K.procs[i]`).
                 arr_log, sa_meta = _resolve_struct_array_target(inner.name, ctx)
