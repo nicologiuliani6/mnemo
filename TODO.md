@@ -2,37 +2,35 @@
 
 ## Lavori grossi futuri (aperti)
 
-Entrambi gli item richiedono lo stesso pezzo mancante: un **modello di memoria
-VM dinamico** (heap reversibile con accesso indicizzato O(1) + crescita
-on-demand). Sono gli unici lavori non completati; tutto il resto (auto-sizing
-pool, modello header, pool bancato, malloc+free in loop, loop a bound costante,
-diagnostica bound-runtime, dump forward sotto `--check-invertibility`, bump
-statici dei Frame fields) è già fatto e coperto da regression.
-
 ### 1. VM Kairos: dyn alloc per-Frame (non-urgente)
 
 I Frame fields (`MAX_VARS=4096`, `MAX_NESTED=4096`, `MAX_PROC_PARAMS=1024`,
 `MAX_LABEL=16384`, `VM_TRACE_WIN_STACK_MAX=4096`, `IF_BRANCH_STACK_MAX=65536`)
 sono **bump statici** ampi, non array dinamici. Future-proofing: sostituire il
 bump con `realloc` inline per-Frame (come già fatto per `vm->frames`,
-`branch_trace`, `mn_hist_floor_snaps`, `CallRecord`). Non urgente: i valori
-correnti coprono tutti i casi noti. `kairos_limits.py` lato Mnemo già allineato
-(`KAIROS_MAX_PROC_PARAMS=1000 ≤ 1024`).
+`branch_trace`, `mn_hist_floor_snaps`, `CallRecord`, e ora `vm->mn_pool`). Non
+urgente: i valori correnti coprono tutti i casi noti. `kairos_limits.py` lato
+Mnemo già allineato (`KAIROS_MAX_PROC_PARAMS=1000 ≤ 1024`).
 
 Intenzionalmente bounded (non bug): `DBG_MAX_BREAKPOINTS=256`,
 `DBG_MAX_HISTORY=4096` sono limiti del debugger DAP (history = ring-buffer).
 
-### 2. Mnemo: pointer pool runtime growable
+---
 
-`malloc` in loop a bound **runtime** senza `free` (allocazioni accumulate, N non
-noto a compile-time) richiede `--ptr-pool-size N` esplicito. Oggi il caso è
-**diagnosticato** a compile-time (errore chiaro invece di miscompile), ma il fix
-VERO — pool che cresce a runtime senza flag — manca: il pool è un array di celle
-`__mn_mem*` con dispatch `if slot==k` generato a compile-time → NON cresce a
-runtime. Servirebbe una primitiva VM `pool_grow N` reversibile + accesso
-indicizzato O(1) a un heap dinamico. Dipende da [[1. VM Kairos: dyn alloc]].
-Nota: con `free` nel corpo i blocchi si riusano (LIFO) e il pool resta piccolo,
-quindi il solo caso problematico è malloc-in-loop-runtime SENZA free.
+## Note su lavori chiusi
+
+**Pointer pool runtime growable — FATTO** (heap VM dinamico `vm->mn_pool`):
+`malloc` in loop a bound runtime senza free ora cresce on-demand, niente
+`--ptr-pool-size`. Modello ibrido: slot < heap_base = memoria nominata
+(`__mn_mem*`, dispatch `if slot==k`, bancato se > ~998 celle); slot >= heap_base
+= heap senza alias → procedure `__mn_pool_*_dyn` su `vm->mn_pool` via ops VM
+reversibili POOLPUSH/POOLADD/POOLGET (vedi commit Kairos `feat(vm): heap
+puntatori dinamico`). Verificato forward + `--check-invertibility` (malloc
+base/concorrente/loop/runtime, banked+dynamic), encrypt round-trip intatto,
+168/168 gcc-compat. Regression `tests/test_pool_runtime_loop.py` +
+`tests/test_ptr_pool_emit.py`. NB: il dispatch statico bancato (> 998 celle
+*nominate* accedute via puntatore) resta lento nell'interprete (O(N) per accesso)
+ed è un limite pre-esistente ortogonale, non legato all'heap.
 
 ---
 
