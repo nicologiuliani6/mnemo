@@ -2,6 +2,18 @@
 
 ## Bug aperti (verificati, fix rischioso/non banale)
 
+- **`malloc` in una funzione non-`main` → risultato errato.** `__mn_pool_ctr` è
+  un LOCAL per-funzione che parte da 0 (solo `main` lo inizializza a heap_base
+  in `lower_file_to_program`). In una funzione counter=0 → le malloc cadono
+  negli slot `< heap_base`, che il dispatch ibrido tratta come celle NOMINATE
+  `__mn_mem*` → corruzione + `*out = v` instradato male. Es. `setv(&r){ p=
+  malloc; p[0]=99; *out=p[0]; }` → `r` resta 0. Inizializzare il counter a
+  heap_base in ogni funzione NON basta (due funzioni che allocano collidono
+  sugli stessi slot, regressione su `main`+helper, verificato). Fix proprio =
+  `__mn_pool_ctr` stato GLOBALE threaded attraverso le call (come gli stack
+  hist/scratch, by-ref) → allocazioni sequenziali tra funzioni. Cambiamento di
+  layout/segnatura. Repro `c_test/bug_malloc_in_function.c`.
+
 - **Semantica tipi interi: Mnemo è internamente all-signed-int.** Non modella le
   *usual arithmetic conversions* del C. Due manifestazioni:
   - **`char`/`unsigned char` non wrappa a 8 bit**: `unsigned char c=250; c+=10;`
