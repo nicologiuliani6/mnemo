@@ -120,16 +120,29 @@ con --ptr-pool-size 1500).
 trip-count, quindi malloc-in-loop senza free (blocchi accumulati) funziona
 senza `--ptr-pool-size`. Regression `generic_malloc_loop_nofree.c`.
 
-**Open (feature) — solo bound RUNTIME**: `malloc` in loop con N iterazioni
-*runtime* (non costante, no free) resta non inferibile staticamente → richiede
-`--ptr-pool-size N_max`. Il fix vero (crescita on-demand) richiede un modello
-di memoria VM dinamico: il pool attuale è un array di celle `__mn_mem*` con
-dispatch `if slot==k` generato a compile-time → NON cresce a runtime. Servirebbe
-una primitiva VM `pool_grow N` reversibile + accesso indicizzato O(1) a un heap
+**RISOLTO (diagnostica) — bound RUNTIME senza free → errore chiaro** (commit
+Mnemo): `malloc`/`calloc` in un loop a bound *runtime* (non costante) il cui
+corpo NON libera (`free`) accumula allocazioni in numero non noto a
+compile-time → il pool statico non è dimensionabile. Prima Mnemo
+sottodimensionava e produceva output ERRATO in silenzio (es. il caso
+`for(i=0;i<argc+4;i++){p=malloc(...);…}` stampava `0` invece di `308`). Ora
+`_unbounded_malloc_loop` (in `compile.py`) intercetta il pattern e emette un
+errore con la riga incriminata, suggerendo `--ptr-pool-size N` (escape hatch:
+flag esplicito > 0 bypassa il check) oppure il `free` nel corpo per il riuso
+LIFO. Default `--ptr-pool-size` di `run`/`dump-kairos` allineati a 0 (= auto)
+come `compile` (prima 4, mascherava il check). Regression
+`tests/test_pool_runtime_loop.py`.
+
+**Open (feature) — crescita on-demand del pool**: il fix VERO (pool che cresce
+a runtime, senza richiedere `--ptr-pool-size`) richiede un modello di memoria
+VM dinamico: il pool attuale è un array di celle `__mn_mem*` con dispatch
+`if slot==k` generato a compile-time → NON cresce a runtime. Servirebbe una
+primitiva VM `pool_grow N` reversibile + accesso indicizzato O(1) a un heap
 dinamico (nuovo modello di memoria). Lavoro grosso, dipende da
 [[1. VM Kairos: allocazione dinamica strutture interne]]. Nota: con `free` in
 loop il blocco si riusa (LIFO) e il pool resta piccolo, quindi il caso davvero
-problematico è malloc-in-loop-runtime SENZA free (allocazioni accumulate).
+problematico è malloc-in-loop-runtime SENZA free (allocazioni accumulate) — ora
+diagnosticato a compile-time invece di miscompilare.
 
 ---
 

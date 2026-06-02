@@ -2136,6 +2136,44 @@ def _infer_ptr_pool_size(ast: c.FileAST) -> int:
     return total + 1  # +1 sentinella (slot 0 = NULL)
 
 
+def _unbounded_malloc_loop(ast: c.FileAST) -> c.Node | None:
+    """Trova un `for`/`while` a bound RUNTIME (trip-count non costante) il cui
+    corpo alloca (`malloc`/`calloc`) ma non libera (`free`): le allocazioni si
+    accumulano per un numero di iterazioni non noto a compile-time → il pool
+    statico non è dimensionabile (servirebbe la crescita on-demand, gated su
+    [[1. VM Kairos: allocazione dinamica]]). Con `free` nel corpo i blocchi si
+    riusano LIFO e il pool resta limitato (caso ok). Ritorna il nodo loop
+    incriminato (per il messaggio d'errore) o None. Loop a bound COSTANTE sono
+    già auto-sizati × trip-count da `_infer_ptr_pool_size` → esclusi."""
+
+    def subtree_has_call(node: c.Node, names: tuple[str, ...]) -> bool:
+        if (
+            isinstance(node, c.FuncCall)
+            and isinstance(node.name, c.ID)
+            and node.name.name in names
+        ):
+            return True
+        return any(subtree_has_call(ch, names) for _, ch in node.children())
+
+    def visit(node: c.Node) -> c.Node | None:
+        if isinstance(node, (c.For, c.While)) and _const_loop_trip_count(node) is None:
+            if subtree_has_call(node, ("malloc", "calloc")) and not subtree_has_call(
+                node, ("free",)
+            ):
+                return node
+        for _, child in node.children():
+            hit = visit(child)
+            if hit is not None:
+                return hit
+        return None
+
+    for ext in ast.ext or []:
+        hit = visit(ext)
+        if hit is not None:
+            return hit
+    return None
+
+
 def compile_c_to_kairos(
     path: str,
     *,
@@ -2222,6 +2260,32 @@ def compile_c_to_kairos(
     # flag user > 0 funziona come MIN (override solo verso l'alto se serve
     # più capacità di quella inferita, es. malloc in loop runtime).
     inferred_pool = _infer_ptr_pool_size(ast)
+    # Pool a bound runtime non dimensionabile staticamente: meglio errore chiaro
+    # che miscompile silenzioso (prima stampava risultati sbagliati). Escape
+    # hatch: `--ptr-pool-size N` esplicito (user>0) bypassa il check.
+    if ptr_pool_size <= 0:
+        bad = _unbounded_malloc_loop(ast)
+        if bad is not None:
+            # `_transform_return_in_loop` ricostruisce il For senza coord → cerca
+            # la prima riga utile tra i discendenti.
+            def _first_line(node: c.Node) -> int | None:
+                if getattr(node, "coord", None) is not None:
+                    return node.coord.line
+                for _, ch in node.children():
+                    ln = _first_line(ch)
+                    if ln is not None:
+                        return ln
+                return None
+
+            ln = _first_line(bad)
+            where = f" (riga {ln})" if ln is not None else ""
+            raise MnemoCompileError(
+                f"malloc/calloc dentro un loop a bound runtime senza free{where}: "
+                "il numero di allocazioni non è noto a compile-time, il pool "
+                "puntatori non è dimensionabile automaticamente. Passa "
+                "--ptr-pool-size N (N = max allocazioni concorrenti) oppure "
+                "libera (free) i blocchi nel corpo del loop per il riuso LIFO."
+            )
     if inferred_pool > ptr_pool_size:
         ptr_pool_size = inferred_pool
     # Fallback: ogni programma deve avere almeno 1 cella pool per `int *p =

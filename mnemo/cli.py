@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> None:
     p_dk.add_argument(
         "--ptr-pool-size",
         type=int,
-        default=4,
+        default=0,
         metavar="N",
         help="come per compile",
     )
@@ -201,7 +201,7 @@ def main(argv: list[str] | None = None) -> None:
     p_r.add_argument(
         "--ptr-pool-size",
         type=int,
-        default=4,
+        default=0,
         metavar="N",
         help="come per compile: dimensione pool puntatori",
     )
