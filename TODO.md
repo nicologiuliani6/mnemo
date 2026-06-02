@@ -1,23 +1,38 @@
 # TODO
 
-## Lavori grossi futuri (aperti)
+Nessun lavoro aperto. Sotto: note sui lavori chiusi e i limiti
+intenzionali (bounded-by-design, non bug).
 
-### 1. VM Kairos: dyn alloc per-Frame (non-urgente)
+## Bounded-by-design (non bug)
 
-I Frame fields (`MAX_VARS=4096`, `MAX_NESTED=4096`, `MAX_PROC_PARAMS=1024`,
-`MAX_LABEL=16384`, `VM_TRACE_WIN_STACK_MAX=4096`, `IF_BRANCH_STACK_MAX=65536`)
-sono **bump statici** ampi, non array dinamici. Future-proofing: sostituire il
-bump con `realloc` inline per-Frame (come già fatto per `vm->frames`,
-`branch_trace`, `mn_hist_floor_snaps`, `CallRecord`, e ora `vm->mn_pool`). Non
-urgente: i valori correnti coprono tutti i casi noti. `kairos_limits.py` lato
-Mnemo già allineato (`KAIROS_MAX_PROC_PARAMS=1000 ≤ 1024`).
-
-Intenzionalmente bounded (non bug): `DBG_MAX_BREAKPOINTS=256`,
-`DBG_MAX_HISTORY=4096` sono limiti del debugger DAP (history = ring-buffer).
-
----
+- **`STACK_MAX=4096`** (`stack.h`, lo `Stack` di `Var*` usato da
+  `LocalVariables`): profondità di `local` per-Frame. Irraggiungibile via Mnemo
+  (il layout cap­pa le celle a 2048 < 4096). Convertirlo a dinamico romperebbe la
+  copia by-value dello `Stack` (inline) usata nel save/restore di
+  CALL/UNCALL/par/inversione (~10 siti + `CallRecord.saved_local_vars`) → rischio
+  alto sul core fragile per zero guadagno raggiungibile. Si tiene statico. NB: la
+  crescita dinamica di `Frame.vars` (oltre 4096) È verificata di per sé — un
+  `.kairos` scritto a mano con 5000 `local` somma corretto una volta alzato
+  `STACK_MAX`; è solo lo `Stack` a fare da tappo prima.
+- **`IF_BRANCH_STACK_MAX=65536`** (thread-local, `vm_ops.h`): stack di profondità
+  IF per thread. 65536 IF annidati in un singolo path di esecuzione è
+  irraggiungibile; la versione thread-local dinamica leakerebbe a thread-exit →
+  si tiene statico, stesso criterio dei `DBG_MAX_*`.
+- **`DBG_MAX_BREAKPOINTS=256`, `DBG_MAX_HISTORY=4096`**: limiti del debugger DAP
+  (history = ring-buffer). Solo debug interattivo.
 
 ## Note su lavori chiusi
+
+**VM Kairos: dyn alloc per-Frame — FATTO**: i campi per-Frame erano array
+statici (`vars[MAX_VARS]`, `label[MAX_LABEL]`, `param_indices[MAX_PROC_PARAMS]`,
+`trace_window_stack[VM_TRACE_WIN_STACK_MAX]`) → ora heap che cresce on-demand via
+`frame_ensure_vars/labels/params/trace` (init cap = vecchio MAX, quindi fast path
+identico per i programmi noti; la crescita è valvola di sicurezza, niente più
+hard cap per-Frame). Rimossi i campi morti `loop_restart_i/loop_bottom_i/
+loop_counter` + macro `MAX_NESTED`. La struct `Frame` non ha più cap statici.
+Commit Kairos `feat(vm): Frame.vars dinamico` + `feat(vm): Frame label/
+param_indices/trace dinamici`. Verificato 25/25 unit, 168/168 gcc-compat, 36/36
+c_examples, encrypt `--check-invertibility`, fib/parallel2_fib (clone+par).
 
 **Pointer pool runtime growable — FATTO** (heap VM dinamico `vm->mn_pool`):
 `malloc` in loop a bound runtime senza free ora cresce on-demand, niente
