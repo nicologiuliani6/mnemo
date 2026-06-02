@@ -1,10 +1,8 @@
-/* BUG (niche): `x = x ? 1 : (x=2, x+1);` esce 1 SILENZIOSO (no stdout, no
- * messaggio d'errore). Si verifica solo quando lo stesso `x` è (a) lvalue del
- * ternario, (b) letto nella condizione, (c) riassegnato nel ramo via comma.
- * Varianti con cond costante / lvalue diverso / senza comma funzionano.
- * Probabile collisione di cella nel lowering (x dst + read + write). Doppio
- * difetto: risultato errato + fallimento silenzioso (dovrebbe almeno errorare).
- * Atteso 3.
+/* REGRESSION: ternario la cui guardia è mutata in un ramo:
+ * `x = x ? 1 : (x=2, x+1);`. Storicamente fallimento silenzioso (la `fi`
+ * Kairos rivalutava `x!=0` dopo che il ramo aveva cambiato x → inversione
+ * rotta). Fix: _lower_if_from_expr materializza la verità in un temp
+ * frame-local prima dei rami. Atteso 3.
  */
 #ifdef MNEMO
 int printf(const char *fmt, ...);

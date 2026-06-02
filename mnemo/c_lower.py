@@ -51,6 +51,7 @@ from mnemo.ir import (
     ISsend,
     IShow,
     ISubEq,
+    ISwap,
     IXorEq,
     Instr,
     Program,
@@ -8344,9 +8345,62 @@ def _lower_if_from_expr(
         return _lower_if_from_expr(expr.left, then_instrs, right_chain, ctx)
     pre, g, tm = _lower_predicate_simple(expr, ctx)
     lh, op, rh = g
+    # Reversibilità: il Kairos `if C then … else … fi C` rivaluta C alla `fi`.
+    # Se un ramo MUTA una variabile della guardia (es. `x = x ? 1 : (x=2,…)`,
+    # ramo else fa `x=2`), il valore di verità alla `fi` cambia → inversione
+    # rotta (storicamente: fallimento silenzioso). Fix: se la cella di guardia è
+    # scritta in un ramo, materializza la verità in un temp frame-local PRIMA
+    # dei rami e guarda su quello (i rami non lo toccano → `fi` stabile).
+    guard_cells = [v for v in (lh, rh) if isinstance(v, str) and not v.lstrip("-").isdigit()]
+    branch_writes = any(
+        _writes_cell(then_instrs, gc)
+        or (else_instrs is not None and _writes_cell(else_instrs, gc))
+        for gc in guard_cells
+    )
+    if branch_writes:
+        g_tmp = ctx.fresh_temp()
+        mat: list[Instr] = pre + [IConst(g_tmp, 0)]
+        mat += [IIfKairos(lh, op, rh, _truth_lc_incr(ctx, g_tmp), _truth_lc_keep(ctx, g_tmp))]
+        _append_cond_cleanup(mat, ctx, tm)
+        out2: list[Instr] = mat + [IIfKairos(g_tmp, "!=", "0", then_instrs, else_instrs)]
+        ctx.use_hist = True
+        return out2
     out: list[Instr] = pre + [IIfKairos(lh, op, rh, then_instrs, else_instrs)]
     _append_cond_cleanup(out, ctx, tm)
     return out
+
+
+def _writes_cell(instrs: list[Instr], cell: str) -> bool:
+    """True se una qualsiasi istruzione (anche annidata) scrive su `cell`.
+
+    Conservativo: in dubbio (ICall/IUncall con `cell` tra gli argomenti, passati
+    by-ref) ritorna True. Usato per decidere se la guardia di un IF va
+    materializzata in un temp (cella di guardia mutata in un ramo).
+    """
+    for ins in instrs:
+        d = getattr(ins, "dst", None)
+        if d == cell:
+            return True
+        if isinstance(ins, IHistPush) and ins.var == cell:
+            return True
+        if isinstance(ins, ISwap) and cell in (getattr(ins, "a", None), getattr(ins, "b", None)):
+            return True
+        if isinstance(ins, (ICall, IUncall)) and cell in getattr(ins, "args", []):
+            return True
+        if isinstance(ins, IIfKairos):
+            if _writes_cell(ins.then_instrs or [], cell) or _writes_cell(ins.else_instrs or [], cell):
+                return True
+        if isinstance(ins, IFromUntilKairos):
+            if _writes_cell(ins.body_instrs or [], cell):
+                return True
+        if isinstance(ins, ILocalBlock):
+            if _writes_cell(ins.body_instrs or [], cell):
+                return True
+        if isinstance(ins, IPar):
+            for blk in ins.branches:
+                if _writes_cell(blk, cell):
+                    return True
+    return False
 
 
 def _build_truth_incr_lc(expr: c.Node, lc: str, ctx: _Ctx) -> list[Instr]:
