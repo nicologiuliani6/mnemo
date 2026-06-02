@@ -2,31 +2,23 @@
 
 ## Bug aperti (verificati, fix rischioso/non banale)
 
-- **Bitwise OR/AND/XOR perdono il bit 31 (segno).** `lib/bits.kairos`
-  `__mn_and_into`/`__mn_or_into` iterano 31 bit (`until k==31`): il bit 31 non
-  è mai impostato e manca la sign-extension. `-5|8` → 2147483643 invece di -5;
-  `-1&-1` → 2147483647 invece di -1. Latente per AND/XOR quando l'operando con
-  bit31 dà 0 nel risultato (passano -5^1, -5&8). Fix dipende dalla signedness
-  (signed → sign-extend a -2^31; unsigned → +2^31 + mask u32) e bits.kairos è
-  core per encrypt/des → riverificare round-trip + invertibility. Repro
-  `c_test/bug_bitwise_or_sign.c`.
 - **`char`/`unsigned char`: aritmetica non wrappa a 8 bit.** char aliasato a
-  `int` → `unsigned char c=250; c+=10;` dà 260 invece di 4. Servirebbe mask
-  0xFF sugli assegnamenti a var char; impatta string-ops → valutare. Repro
-  `c_test/bug_uchar_wrap.c`.
+  `int` → `unsigned char c=250; c+=10;` dà 260 invece di 4. Fix proprio =
+  tipo char a 8 bit (mask 0xFF su TUTTI i path di scrittura: `=`, `+=`, `++`,
+  subscript + char di default signed su x86). Multi-path + impatto string-ops
+  (22 test usano char) → invasivo. Repro `c_test/bug_uchar_wrap.c`.
 
 ## Migliorie / limiti noti (non bloccanti)
 
-- **Ternario self-assign con comma-assign nel ramo**: `x = x ? 1 : (x=2, x+1);`
-  esce 1 SILENZIOSO (no output, no errore). Solo quando lo stesso `x` è lvalue
-  + letto in cond + riassegnato nel ramo. Probabile collisione di cella nel
-  lowering. Difetto doppio: risultato errato + fallimento silenzioso (dovrebbe
-  errorare). Repro `c_test/bug_ternary_self_comma.c` (probe `s13`).
-- **Array di struct con init a graffe**: `struct P a[3]={{1,2},{3,4}};` →
-  `array di struct: inizializzatore non supportato` (probe `s10`). Gap feature.
+- **Bitwise in interprete puro O(value) sugli operandi grandi**: `2147483647|1`
+  in interprete è lentissimo/hang (le halving reversibili sono O(value)). Usare
+  `--native-arith` (bypassa `lib/bits.kairos`, C O(1)). Perf pre-esistente, non
+  correttezza.
+- **`struct P *p = arr` (puntatore a base array-di-struct)** non supportato
+  (`identificatore non dichiarato` sul nome array, probe `s10`). L'init
+  dell'array-di-struct invece ora funziona.
 - **Indice array commutato `2[a]`** (== `a[2]`) non supportato: `array: la base
   dell'indicizzazione deve essere un nome` (probe `r17`). Sintassi rara.
-
 - **Ricorsione mista self+mutua: possibile collisione di frame-key.** Il clone
   per la mutua usa `Frame.active` come depth, la self-rec usa il parsing `@N`
   del frame name (Janus.c). Una proc raggiunta SIA da self- SIA da mutua-
@@ -39,10 +31,6 @@
 - **Array di puntatori a funzione non supportati** (`int (*ops[2])(int)`).
   Probe `p07` → `array: elemento supportato solo se scalare/puntatore`.
   Solo fnptr scalari compile-time-resolved oggi.
-- **Cruft debug VM**: blocco `#ifdef MNEMO_AGENT_LOG` in
-  `kairos/src/vm/Janus.c` (END_PROC) scrive su path hardcoded
-  `/home/nico/Desktop/mnemo/.cursor/debug-acb76d.log`. Morto salvo `-D`, ma da
-  rimuovere.
 
 ## Bounded-by-design (non bug)
 
