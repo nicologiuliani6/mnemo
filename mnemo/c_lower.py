@@ -5914,6 +5914,50 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 expr.subscript, expr.name, getattr(expr, "coord", None)
             )
             return _eval_expr(swapped, ctx)
+        # Letterale stringa a indice COSTANTE: `"ABC"[k]` → byte compile-time.
+        if (
+            isinstance(expr.name, c.Constant)
+            and expr.name.type == "string"
+            and isinstance(expr.subscript, c.Constant)
+        ):
+            raw = _literal_c_string(expr.name).encode("utf-8", errors="replace")
+            k = _literal_int_widen(expr.subscript)
+            if k < 0 or k > len(raw):
+                raise MnemoCompileError(
+                    f'"{expr.name.value}"[{k}]: indice fuori range'
+                )
+            byte = raw[k] if k < len(raw) else 0  # raw[len] = NUL terminatore
+            return [], Imm(byte), []
+        # Letterale stringa a indice RUNTIME: `"ABC"[i]`. Materializza i byte (+
+        # NUL) in temp e seleziona con disj-chain sull'indice.
+        if (
+            isinstance(expr.name, c.Constant)
+            and expr.name.type == "string"
+        ):
+            raw = _literal_c_string(expr.name).encode("utf-8", errors="replace")
+            data = list(raw) + [0]
+            ctx.use_hist = True
+            pre_s: list[Instr] = []
+            cells: list[str] = []
+            for b in data:
+                tcb = ctx.fresh_temp()
+                pre_s.append(IConst(tcb, b))
+                cells.append(tcb)
+            pre_i, op_ix, tm_i = _eval_expr(expr.subscript, ctx)
+            if isinstance(op_ix, Imm):
+                tix = ctx.fresh_temp()
+                pre_i = pre_i + [IConst(tix, op_ix.value)]
+                ixn = tix
+                tm_i = tm_i + [tix]
+            else:
+                ixn = op_ix.name
+            t_dest = ctx.fresh_temp()
+            bodies = [
+                [IHistPush(ctx.hist, t_dest), IAddEq(t_dest, Var(cells[k]))]
+                for k in range(len(cells))
+            ]
+            chain = _disj_eq_chain(ixn, list(range(len(cells))), bodies)
+            return pre_s + pre_i + chain, Var(t_dest), tm_i + cells + [t_dest]
         # `(*p)[i]`: ArrayRef.name è UnaryOp("*", ID(p)). Equivale a `p[i]`
         # → rewrite a `*(p + i)` (puntatore-indicizzazione).
         nm = expr.name

@@ -29,9 +29,6 @@
 - **`struct P *p = arr` (puntatore a base array-di-struct)** non supportato
   (`identificatore non dichiarato` sul nome array, probe `s10`). L'init
   dell'array-di-struct invece ora funziona.
-- **Indice su letterale stringa `"ABCDE"[i]`** (indice runtime) non supportato:
-  `array: la base dell'indicizzazione deve essere un nome` (probe `u12`). Serve
-  un buffer materializzato. Sintassi rara. (`2[a]` commutato ora supportato.)
 - **Campo union/struct annidato `u.s.a`** non supportato: `union: un solo
   livello di campo` (probe `v03`).
 - **`char *n; n = "literal";` (riassegnazione da letterale) + `printf("%s",n)`**
