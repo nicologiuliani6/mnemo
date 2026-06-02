@@ -933,6 +933,10 @@ class _Ctx:
     """Funzioni (transitivamente) contenenti chiamate a pool ops (`__mn_pool_*`).
     Single-call opt-uncall su queste fallisce con DELOCAL var=t. Par-uncall OK."""
     pool_using_targets: frozenset[str] = field(default_factory=frozenset)
+    pool_ctr_targets: frozenset[str] = field(default_factory=frozenset)
+    """Funzioni che usano malloc/free (pool_alloc/free) → ricevono `__mn_pool_ctr`
+    threaded by-ref. Sottoinsieme di pool_using_targets (il deref di puntatore
+    non usa il counter)."""
     pool_uncall_blocked: frozenset[str] = field(default_factory=frozenset)
     """pool-using ∩ scrive-attraverso-ptr-param: SOLO queste vanno escluse da
     opt-uncall (l'uncall inverte una scrittura su una cella del chiamante non
@@ -7679,6 +7683,49 @@ def _ptr_param_write_transitive_closure(
     return frozenset(blocked)
 
 
+def _malloc_using_transitive_closure(
+    probe_map: dict[str, Function]
+) -> frozenset[str]:
+    """Funzioni che usano `__mn_pool_alloc`/`__mn_pool_free` (malloc/free) —
+    direttamente o tramite call. Solo QUESTE usano `__mn_pool_ctr` e vanno
+    threaded (param by-ref). Il semplice deref di puntatore (pool_store/load)
+    NON usa il counter → non deve ricevere il param, altrimenti rompe la firma
+    dei worker `par` (vedi c_test/kernel.c)."""
+    alloc_procs = {"__mn_pool_alloc", "__mn_pool_free"}
+
+    def uses_alloc(seq: list[Instr]) -> bool:
+        for ins in seq:
+            if isinstance(ins, ICall) and ins.proc in alloc_procs:
+                return True
+            if isinstance(ins, IPar) and any(uses_alloc(b) for b in ins.branches):
+                return True
+            if isinstance(ins, IIfKairos):
+                if uses_alloc(ins.then_instrs) or (
+                    ins.else_instrs is not None and uses_alloc(ins.else_instrs)
+                ):
+                    return True
+            if isinstance(ins, IFromUntilKairos) and uses_alloc(ins.body_instrs):
+                return True
+            if isinstance(ins, ILocalBlock) and uses_alloc(ins.body_instrs):
+                return True
+        return False
+
+    blocked: set[str] = {
+        n for n, f in probe_map.items()
+        if any(uses_alloc(b.instrs) for b in f.blocks)
+    }
+    changed = True
+    while changed:
+        changed = False
+        for n, f in probe_map.items():
+            if n in blocked:
+                continue
+            if _function_ir_calls_proc_in(f, blocked):
+                blocked.add(n)
+                changed = True
+    return frozenset(blocked)
+
+
 def _show_using_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
     """Chiusura transitiva delle funzioni che usano `show` (printf/putchar) —
     direttamente o tramite call. Solo per escludere single-call opt-uncall;
@@ -8021,7 +8068,7 @@ def _lower_funccall_with_ret(
             # garantisce che il chiamante abbia `__mn_pool_ctr` (param o, in main,
             # local) da passare.
             pool_actual = (
-                [_PTR_POOL_CTR] if name in ctx.pool_using_targets else []
+                [_PTR_POOL_CTR] if name in ctx.pool_ctr_targets else []
             )
             stk = pool_actual + _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
@@ -11144,6 +11191,7 @@ def _lower_user_function(
     show_using_targets: frozenset[str] = frozenset(),
     pool_using_targets: frozenset[str] = frozenset(),
     pool_uncall_blocked: frozenset[str] = frozenset(),
+    pool_ctr_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
     file_field_bits: dict[tuple[str, str], int] | None = None,
@@ -11188,6 +11236,7 @@ def _lower_user_function(
         show_using_targets=show_using_targets,
         pool_using_targets=pool_using_targets,
         pool_uncall_blocked=pool_uncall_blocked,
+        pool_ctr_targets=pool_ctr_targets,
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
     )
@@ -11292,7 +11341,7 @@ def _lower_user_function(
     # sono sequenziali tra funzioni (vs local per-funzione che parte da 0 e
     # collide con la regione nominata / con le malloc di main). `main` lo possiede
     # come local (init heap_base); le altre pool-using lo ricevono come param.
-    pool_thread = name in ctx.pool_using_targets
+    pool_thread = name in ctx.pool_ctr_targets
     pool_formal: list[tuple[str, str]] = (
         [("int", _PTR_POOL_CTR)] if pool_thread else []
     )
@@ -11867,6 +11916,7 @@ def lower_file_to_program(
         sh_targets: frozenset[str] = frozenset(),
         pl_targets: frozenset[str] = frozenset(),
         pb_targets: frozenset[str] = frozenset(),
+        pc_targets: frozenset[str] = frozenset(),
         touches: dict[str, frozenset[int]] | None = None,
     ):
         ext, fn_phys = ext_phys
@@ -11892,6 +11942,7 @@ def lower_file_to_program(
             show_using_targets=sh_targets,
             pool_using_targets=pl_targets,
             pool_uncall_blocked=pb_targets,
+            pool_ctr_targets=pc_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
             fp_runtime=fp_runtime_per_fn.get(ext.decl.name or ""),
@@ -11914,12 +11965,16 @@ def lower_file_to_program(
     # dallo snap/swap). Le altre (return/globale, malloc-loop) sono ottimizzabili.
     ptr_param_write_targets = _ptr_param_write_transitive_closure(ast, probe_by_name)
     pool_uncall_blocked = pool_targets & ptr_param_write_targets
+    # __mn_pool_ctr threaded SOLO ai veri utenti di malloc/free (non al deref di
+    # puntatore) → non rompe la firma dei worker `par` (kernel.c).
+    pool_ctr_targets = _malloc_using_transitive_closure(probe_by_name)
     if opt_uncall_user_calls:
         user_fns = [
             _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm,
                             ch_targets=channel_targets,
                             sh_targets=show_targets,
                             pl_targets=pool_targets, pb_targets=pool_uncall_blocked,
+                            pc_targets=pool_ctr_targets,
                             touches=mem_touches)
             for s in user_fn_specs
         ]
@@ -11929,6 +11984,7 @@ def lower_file_to_program(
                             ch_targets=channel_targets,
                             sh_targets=show_targets,
                             pl_targets=pool_targets, pb_targets=pool_uncall_blocked,
+                            pc_targets=pool_ctr_targets,
                             touches=mem_touches)
             for s in user_fn_specs
         ]
@@ -11969,6 +12025,7 @@ def lower_file_to_program(
         show_using_targets=show_targets,
         pool_using_targets=pool_targets,
         pool_uncall_blocked=pool_uncall_blocked,
+        pool_ctr_targets=pool_ctr_targets,
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,
     )
