@@ -14,23 +14,19 @@
 
 ## Ottimizzazioni mancanti
 
-- **`--opt-uncall-user-calls` esclude TUTTE le funzioni che usano il pool.**
-  Diagnosi precisa (`_pool_using_transitive_closure`, c_lower): una funzione che
-  usa pool ops — `malloc`/`free` O **qualsiasi deref di puntatore** (lo store/
-  load indicizzato passa da `__mn_pool_*`) — più i suoi chiamanti transitivi è
-  in `pool_using_targets` → `pool_blk` → mai ottimizzata. Quindi i loop con
-  malloc/puntatori NON beneficiano mai dell'opt, né in `main` (mai toccato) né
-  in funzione.
-  - Prova: `work(){ acc=…; G=acc; }` (scrive globale, no ptr) → opt applica,
-    `cells_max 3616 → 2008` (−45 %). Stessa fn con `*out=…` o `malloc` → 0
-    `uncall work`, celle identiche.
-  - Sotto-gap collegato: una fn int chiamata come STATEMENT (return scartato,
-    es. `work(…);`) non rientra né in `apply_uncall_opt` (serve `ret_sink`) né
-    in `apply_void_uncall_opt` (serve `void`) → niente opt anche senza pool.
-  Motivo dell'esclusione pool: l'uncall inverso di POOLPUSH/POOLADD/POOLGET sotto
-  il pattern snap/uncall non è garantito corretto. Fix = renderlo invertibile e
-  togliere `pool_blk` (così i malloc-loop ne beneficiano) — lavoro VM
-  profondo, rischio su invertibilità/encrypt-des.
+- **opt-uncall su funzioni pool che scrivono attraverso un ptr-param**:
+  ancora escluse. La maggior parte delle funzioni pool-using (malloc-loop con
+  return/globale) è ORA ottimizzata (`cells_max -50%` su poolopt, encrypt/des
+  invertibili intatti). Restano escluse SOLO quelle che fanno `*out=…`/`out[i]=…`
+  su un puntatore-parametro (`pool_uncall_blocked = pool ∩ writes-ptr-param`):
+  l'uncall inverte una scrittura su una cella del frame chiamante non coperta
+  dallo snap/swap → divergenza (repro `c_test/bug_malloc_in_function.c` sotto
+  `--opt-uncall`). Per coprirle servirebbe estendere lo snapshot opt-uncall alle
+  celle scritte via ptr-param fuori dal touch-set — lavoro fine.
+- **Sotto-gap**: una fn `int` chiamata come STATEMENT (return scartato, es.
+  `work(…);`) non rientra né in `apply_uncall_opt` (serve `ret_sink`) né in
+  `apply_void_uncall_opt` (serve `void`) → niente opt. Renderla void o usare il
+  return abilita l'opt.
 
 ## Migliorie / limiti noti (non bloccanti)
 

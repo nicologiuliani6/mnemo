@@ -930,6 +930,11 @@ class _Ctx:
     """Funzioni (transitivamente) contenenti chiamate a pool ops (`__mn_pool_*`).
     Single-call opt-uncall su queste fallisce con DELOCAL var=t. Par-uncall OK."""
     pool_using_targets: frozenset[str] = field(default_factory=frozenset)
+    pool_uncall_blocked: frozenset[str] = field(default_factory=frozenset)
+    """pool-using ∩ scrive-attraverso-ptr-param: SOLO queste vanno escluse da
+    opt-uncall (l'uncall inverte una scrittura su una cella del chiamante non
+    coperta dallo snap/swap). Le altre pool-using (return/globale, malloc-loop)
+    sono ora ottimizzabili."""
     """Funzioni che sono worker di `mnemo_pthread_parallel2`: niente opt-uncall nei loro body
     (par-uncall esterno richiede body invertibili senza pattern snap/uncall interno)."""
     par2_workers: frozenset[str] = field(default_factory=frozenset)
@@ -7507,6 +7512,82 @@ def _pool_using_transitive_closure(probe_map: dict[str, Function]) -> frozenset[
     return frozenset(blocked)
 
 
+def _fn_writes_through_ptr_param(fdef: c.FuncDef) -> bool:
+    """True se la funzione scrive attraverso un puntatore-PARAMETRO (`*out=…`,
+    `out[i]=…`). Sotto opt-uncall questa scrittura va su una cella del frame
+    CHIAMANTE (es. `&r` di main); l'uncall la inverte ma lo snap/swap copre solo
+    le celle toccate del callee → divergenza. Conservativo (over-approssima =
+    esclude di più = sempre corretto, solo meno opt)."""
+    fd = fdef.decl.type
+    if not isinstance(fd, c.FuncDecl):
+        return False
+    ptr_params: set[str] = set()
+    for p in (fd.args.params if fd.args else []):
+        if isinstance(p, c.Decl) and isinstance(p.type, (c.PtrDecl, c.ArrayDecl)):
+            if p.name:
+                ptr_params.add(p.name)
+    if not ptr_params or fdef.body is None:
+        return False
+
+    def ids_in(node: c.Node) -> set[str]:
+        out: set[str] = set()
+        st: list[c.Node | None] = [node]
+        while st:
+            x = st.pop()
+            if x is None:
+                continue
+            if isinstance(x, c.ID):
+                out.add(x.name)
+            for _na, ch in x.children():
+                if isinstance(ch, list):
+                    st.extend(ch)
+                elif ch is not None:
+                    st.append(ch)
+        return out
+
+    stack: list[c.Node | None] = [fdef.body]
+    while stack:
+        n = stack.pop()
+        if n is None:
+            continue
+        if isinstance(n, c.Assignment) and isinstance(
+            n.lvalue, (c.UnaryOp, c.ArrayRef)
+        ):
+            # lvalue è un deref/subscript; se un puntatore-param vi compare,
+            # è (potenzialmente) una scrittura attraverso il param.
+            if ids_in(n.lvalue) & ptr_params:
+                return True
+        for _na, ch in n.children():
+            if isinstance(ch, list):
+                stack.extend(ch)
+            elif ch is not None:
+                stack.append(ch)
+    return False
+
+
+def _ptr_param_write_transitive_closure(
+    ast: c.FileAST, probe_map: dict[str, Function]
+) -> frozenset[str]:
+    """Chiusura: fn che scrive attraverso un ptr-param, direttamente o tramite
+    una call (l'uncall replay-a l'intero sottoalbero). Usata per restringere
+    l'esclusione pool da opt-uncall ai soli casi non invertibili in sicurezza."""
+    blocked: set[str] = set()
+    for n in probe_map:
+        fdef = _get_funcdef(ast, n)
+        if fdef is not None and _fn_writes_through_ptr_param(fdef):
+            blocked.add(n)
+    changed = True
+    while changed:
+        changed = False
+        for n, f in probe_map.items():
+            if n in blocked:
+                continue
+            if _function_ir_calls_proc_in(f, blocked):
+                blocked.add(n)
+                changed = True
+    return frozenset(blocked)
+
+
 def _show_using_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
     """Chiusura transitiva delle funzioni che usano `show` (printf/putchar) —
     direttamente o tramite call. Solo per escludere single-call opt-uncall;
@@ -7862,7 +7943,7 @@ def _lower_funccall_with_ret(
             # ricorsivo del printer. Esclusione rimossa 2026-05-31 (verificato:
             # printer-in-loop 50 iter opt-uncall = base; sweep 163/163 generic).
             show_blk = False
-            pool_blk = name in ctx.pool_using_targets
+            pool_blk = name in ctx.pool_uncall_blocked
             self_rec = (name == ctx.fn_name)
             callee_recursive = _func_is_recursive_user(ctx.file_ast, name)
             in_par2_worker = ctx.fn_name in ctx.par2_workers
@@ -10924,6 +11005,7 @@ def _lower_user_function(
     channel_using_targets: frozenset[str] = frozenset(),
     show_using_targets: frozenset[str] = frozenset(),
     pool_using_targets: frozenset[str] = frozenset(),
+    pool_uncall_blocked: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
     file_field_bits: dict[tuple[str, str], int] | None = None,
@@ -10967,6 +11049,7 @@ def _lower_user_function(
         channel_using_targets=channel_using_targets,
         show_using_targets=show_using_targets,
         pool_using_targets=pool_using_targets,
+        pool_uncall_blocked=pool_uncall_blocked,
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
     )
@@ -11645,6 +11728,7 @@ def lower_file_to_program(
         ch_targets: frozenset[str] = frozenset(),
         sh_targets: frozenset[str] = frozenset(),
         pl_targets: frozenset[str] = frozenset(),
+        pb_targets: frozenset[str] = frozenset(),
         touches: dict[str, frozenset[int]] | None = None,
     ):
         ext, fn_phys = ext_phys
@@ -11669,6 +11753,7 @@ def lower_file_to_program(
             channel_using_targets=ch_targets,
             show_using_targets=sh_targets,
             pool_using_targets=pl_targets,
+            pool_uncall_blocked=pb_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
             fp_runtime=fp_runtime_per_fn.get(ext.decl.name or ""),
@@ -11686,12 +11771,18 @@ def lower_file_to_program(
     )
     show_targets: frozenset[str] = _show_using_transitive_closure(probe_by_name)
     pool_targets: frozenset[str] = _pool_using_transitive_closure(probe_by_name)
+    # Solo le pool-using che scrivono attraverso un ptr-param vanno escluse da
+    # opt-uncall (uncall inverte una scrittura su cella del chiamante non coperta
+    # dallo snap/swap). Le altre (return/globale, malloc-loop) sono ottimizzabili.
+    ptr_param_write_targets = _ptr_param_write_transitive_closure(ast, probe_by_name)
+    pool_uncall_blocked = pool_targets & ptr_param_write_targets
     if opt_uncall_user_calls:
         user_fns = [
             _lower_one_user(s, opt_uc=True, uc_excl=bad_uncall_via_vm,
                             ch_targets=channel_targets,
                             sh_targets=show_targets,
-                            pl_targets=pool_targets, touches=mem_touches)
+                            pl_targets=pool_targets, pb_targets=pool_uncall_blocked,
+                            touches=mem_touches)
             for s in user_fn_specs
         ]
     else:
@@ -11699,7 +11790,8 @@ def lower_file_to_program(
             _lower_one_user(s, opt_uc=False, uc_excl=frozenset(),
                             ch_targets=channel_targets,
                             sh_targets=show_targets,
-                            pl_targets=pool_targets, touches=mem_touches)
+                            pl_targets=pool_targets, pb_targets=pool_uncall_blocked,
+                            touches=mem_touches)
             for s in user_fn_specs
         ]
 
@@ -11738,6 +11830,7 @@ def lower_file_to_program(
         channel_using_targets=channel_targets,
         show_using_targets=show_targets,
         pool_using_targets=pool_targets,
+        pool_uncall_blocked=pool_uncall_blocked,
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,
     )
