@@ -9319,9 +9319,29 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         ctx.decl_order.append(cell_sa)
             if node.init is None:
                 return []
-            raise MnemoCompileError(
-                "array di struct: inizializzatore non supportato"
-            )
+            # Init array-di-struct: `struct P a[N] = {{...},{...},...}`. Appiattisce
+            # in ordine row-major e assegna alle celle (i, fname) in sequenza.
+            # Celle non coperte restano 0 (init parziale, standard C). Solo init a
+            # graffe positionali (no designated `[i]=` / `.f=` qui).
+            if not isinstance(node.init, c.InitList):
+                raise MnemoCompileError(
+                    "array di struct: inizializzatore deve essere `{ ... }`"
+                )
+            ordered_cells: list[str] = []
+            for i in range(sa_tot):
+                for fname, fty in sa_fields:
+                    if _type_node_is_pthread_mutex(fty, ctx.typedef_map):
+                        continue
+                    ordered_cells.append(f"{logical}__{i}__{fname}")
+            flat_sa = _flatten_init_list(node.init)
+            if len(flat_sa) > len(ordered_cells):
+                raise MnemoCompileError(
+                    "init array di struct: troppi elementi in `{ ... }`"
+                )
+            out_sa: list[Instr] = []
+            for cell, val in zip(ordered_cells, flat_sa):
+                out_sa.extend(_lower_assign(_phys(ctx, cell), val, ctx))
+            return out_sa
 
         ap = _try_parse_array_decl(node, ctx)
         if ap is not None:
