@@ -8,6 +8,20 @@
   subscript + char di default signed su x86). Multi-path + impatto string-ops
   (22 test usano char) → invasivo. Repro `c_test/bug_uchar_wrap.c`.
 
+## Ottimizzazioni mancanti
+
+- **`--opt-uncall-user-calls` non ottimizza la memoria nei cicli con malloc.**
+  Su `c_test/malloc_test.c` (100 `malloc` in loop, solo l'ultimo `p` vivo) le
+  stats VM sono IDENTICHE con e senza il flag:
+  `cells_final 1452 / cells_mean 1362.61 / cells_max 5084` in entrambi i casi.
+  L'opt agisce solo su snapshot/uncall delle celle `__mn_mem*` nominate, NON
+  sulle allocazioni dell'heap dinamico (`vm->mn_pool`): le 99 allocazioni morte
+  del loop restano nel pool. Idea: riconoscere gli slot pool non più
+  raggiungibili (es. malloc senza free il cui puntatore è sovrascritto a ogni
+  iterazione) e ridurli/riusarli — difficile in modello reversibile (il
+  ripristino inverso richiede la storia delle allocazioni), valutare un
+  free-implicito reversibile o riuso dello slot a parità di `nblk`.
+
 ## Migliorie / limiti noti (non bloccanti)
 
 - **Bitwise in interprete puro O(value) sugli operandi grandi**: `2147483647|1`
