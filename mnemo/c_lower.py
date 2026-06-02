@@ -7832,7 +7832,15 @@ def _lower_funccall_with_ret(
             pi_suffix = _call_pi_channel_kairos_names(callee_fd, orig_exprs, ctx)
             ctx.use_hist = True
             chx = _file_scope_channel_actuals(ctx)
-            stk = _kairos_stack_actuals(ctx)
+            # `__mn_pool_ctr` threaded by-ref se il callee usa il pool (vedi
+            # costruzione Function). Posizione: dopo i canali, prima degli stack —
+            # coerente con `pool_formal` nella segnatura. La chiusura transitiva
+            # garantisce che il chiamante abbia `__mn_pool_ctr` (param o, in main,
+            # local) da passare.
+            pool_actual = (
+                [_PTR_POOL_CTR] if name in ctx.pool_using_targets else []
+            )
+            stk = pool_actual + _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
             # show-using fn (printf transitivo): storicamente escluse da
@@ -10973,13 +10981,26 @@ def _lower_user_function(
         ("stack", ctx.hist),
         ("stack", ctx.scratch),
     ]
+    # `__mn_pool_ctr` (next-free-slot del pool) è stato GLOBALE: va threaded
+    # by-ref attraverso le call delle funzioni pool-using, così le allocazioni
+    # sono sequenziali tra funzioni (vs local per-funzione che parte da 0 e
+    # collide con la regione nominata / con le malloc di main). `main` lo possiede
+    # come local (init heap_base); le altre pool-using lo ricevono come param.
+    pool_thread = name in ctx.pool_using_targets
+    pool_formal: list[tuple[str, str]] = (
+        [("int", _PTR_POOL_CTR)] if pool_thread else []
+    )
+    locals_list = _locals_list(ctx, for_main=False)
+    if pool_thread:
+        locals_list = [lv for lv in locals_list if lv[1] != _PTR_POOL_CTR]
     return Function(
         name=name,
         params=[("int", p) for p in param_order]
         + ch_pi_formals
         + ch_formals
+        + pool_formal
         + stack_formals,
-        locals=_locals_list(ctx, for_main=False),
+        locals=locals_list,
         blocks=[Block("entry", [IComment(f"funzione C {name}")] + instrs)],
     )
 
