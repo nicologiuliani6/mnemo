@@ -902,6 +902,9 @@ class _Ctx:
     func_ptr_vars: set[str] = field(default_factory=set)
     """Puntatore a funzione (nome logico) → nome procedura risolto a compile-time."""
     func_ptr_alias: dict[str, str] = field(default_factory=dict)
+    """Array di fn-ptr risolti a compile-time: nome logico → lista di nomi fn
+    (per indice). `ops[k](…)` con k costante → call al nome corrispondente."""
+    func_ptr_array: dict[str, list[str]] = field(default_factory=dict)
     """Fn ptr con >1 candidato runtime: nome logico → set di nomi fn possibili."""
     func_ptr_runtime: dict[str, set[str]] = field(default_factory=dict)
     """Tag intero per ogni fn addressable in modalità runtime-dispatch (file-level)."""
@@ -5650,6 +5653,33 @@ def _func_ptr_decl_meta(node: c.Decl, td: dict[str, c.Node]) -> tuple[str, c.Fun
     return str(rt.declname), inner
 
 
+def _func_ptr_array_decl_meta(
+    node: c.Decl, ctx: _Ctx
+) -> tuple[str, int] | None:
+    """`int (*ops[N])(int)` → (`ops`, N). Array di puntatori a funzione."""
+    cur = node.type
+    if not isinstance(cur, c.ArrayDecl) or cur.dim is None:
+        return None
+    inner = cur.type
+    if not isinstance(inner, c.PtrDecl):
+        return None
+    fn = inner.type
+    while isinstance(fn, c.PtrDecl):
+        fn = fn.type
+    if not isinstance(fn, c.FuncDecl) or fn.args is None:
+        return None
+    if _func_decl_has_variadic(fn):
+        return None
+    rt = fn.type
+    if not isinstance(rt, c.TypeDecl) or rt.declname is None:
+        return None
+    try:
+        n = _array_dim_const(cur.dim, ctx)
+    except MnemoCompileError:
+        return None
+    return str(rt.declname), int(n)
+
+
 def _parse_function_designator(init: c.Node, ctx: _Ctx) -> str | None:
     if isinstance(init, c.ID):
         nm = init.name
@@ -5746,6 +5776,23 @@ def _resolve_indirect_callee(
             )
         nm = ctx.func_ptr_alias[log]
         return c.FuncCall(c.ID(nm, coord), node.args, coord), nm
+    # `ops[k](…)` con ops array di fn-ptr e k costante → risolto a compile-time.
+    if (
+        isinstance(node.name, c.ArrayRef)
+        and isinstance(node.name.name, c.ID)
+        and isinstance(node.name.subscript, c.Constant)
+    ):
+        log = _scope_resolve(ctx, node.name.name.name)
+        if log in ctx.func_ptr_array:
+            names = ctx.func_ptr_array[log]
+            k = _literal_int_widen(node.name.subscript)
+            if k < 0 or k >= len(names) or not names[k]:
+                raise MnemoCompileError(
+                    f"array di fn-ptr: indice {k} fuori range o elemento non "
+                    "inizializzato"
+                )
+            nm = names[k]
+            return c.FuncCall(c.ID(nm, coord), node.args, coord), nm
     raise MnemoCompileError(
         "chiamata: atteso nome funzione, variabile puntatore a funzione, o `(*p)(…)`"
     )
@@ -9618,6 +9665,34 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             for cell, val in zip(ordered_cells, flat_sa):
                 out_sa.extend(_lower_assign(_phys(ctx, cell), val, ctx))
             return out_sa
+
+        fpa_meta = _func_ptr_array_decl_meta(node, ctx)
+        if fpa_meta is not None:
+            # Array di fn-ptr risolto a compile-time: registra la lista dei nomi
+            # (per indice), nessuna cella. `ops[k](…)` con k costante → call.
+            fpa_name, fpa_n = fpa_meta
+            logical_fpa = _scope_declare(ctx, fpa_name)
+            names: list[str] = [""] * fpa_n
+            if node.init is not None:
+                if not isinstance(node.init, c.InitList):
+                    raise MnemoCompileError(
+                        "array di fn-ptr: init deve essere `{f0, f1, …}`"
+                    )
+                elems = list(node.init.exprs or [])
+                if len(elems) > fpa_n:
+                    raise MnemoCompileError(
+                        "array di fn-ptr: troppi inizializzatori"
+                    )
+                for i, e in enumerate(elems):
+                    tgt = _parse_function_designator(e, ctx)
+                    if tgt is None:
+                        raise MnemoCompileError(
+                            "array di fn-ptr: ogni elemento deve essere "
+                            "`nome_funzione` o `&nome_funzione`"
+                        )
+                    names[i] = tgt
+            ctx.func_ptr_array[logical_fpa] = names
+            return []
 
         ap = _try_parse_array_decl(node, ctx)
         if ap is not None:

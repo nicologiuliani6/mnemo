@@ -954,6 +954,12 @@ def compute_program_mem_layout(
                     alloc(fn, cell_sa)
             return
 
+        fpa_meta = L._func_ptr_array_decl_meta(node, ctx)
+        if fpa_meta is not None:
+            # Array di fn-ptr risolto a compile-time: nessuna cella, solo nome.
+            L._scope_declare(ctx, fpa_meta[0])
+            return
+
         ap = L._try_parse_array_decl(node, ctx)
         if ap is not None:
             name, dims, esz = ap

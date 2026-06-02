@@ -38,9 +38,9 @@
 - **`_Generic` non distingue `char` da `int`.** Mnemo aliasa `char` a `int`
   nel type-system → `_Generic((c), char:…, int:…)` sceglie sempre `int`.
   Probe `p22`. Richiede un tag di tipo `char` separato nel lowering.
-- **Array di puntatori a funzione non supportati** (`int (*ops[2])(int)`).
-  Probe `p07` → `array: elemento supportato solo se scalare/puntatore`.
-  Solo fnptr scalari compile-time-resolved oggi.
+- **Array di fn-ptr a indice RUNTIME** (`ops[i](…)` con i variabile): solo
+  l'indice COSTANTE è risolto a compile-time. Il runtime servirebbe una
+  dispatch-chain sui candidati. Sintassi rara.
 
 ## Bounded-by-design (non bug)
 
