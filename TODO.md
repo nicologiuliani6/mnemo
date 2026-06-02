@@ -1,7 +1,7 @@
 # TODO
 
-Nessun lavoro aperto. Sotto: note sui lavori chiusi e i limiti
-intenzionali (bounded-by-design, non bug).
+Nessun lavoro aperto. Sotto: i limiti intenzionali (bounded-by-design,
+non bug) e le esclusioni strutturali.
 
 ## Bounded-by-design (non bug)
 
@@ -20,34 +20,6 @@ intenzionali (bounded-by-design, non bug).
   si tiene statico, stesso criterio dei `DBG_MAX_*`.
 - **`DBG_MAX_BREAKPOINTS=256`, `DBG_MAX_HISTORY=4096`**: limiti del debugger DAP
   (history = ring-buffer). Solo debug interattivo.
-
-## Note su lavori chiusi
-
-**VM Kairos: dyn alloc per-Frame — FATTO**: i campi per-Frame erano array
-statici (`vars[MAX_VARS]`, `label[MAX_LABEL]`, `param_indices[MAX_PROC_PARAMS]`,
-`trace_window_stack[VM_TRACE_WIN_STACK_MAX]`) → ora heap che cresce on-demand via
-`frame_ensure_vars/labels/params/trace` (init cap = vecchio MAX, quindi fast path
-identico per i programmi noti; la crescita è valvola di sicurezza, niente più
-hard cap per-Frame). Rimossi i campi morti `loop_restart_i/loop_bottom_i/
-loop_counter` + macro `MAX_NESTED`. La struct `Frame` non ha più cap statici.
-Commit Kairos `feat(vm): Frame.vars dinamico` + `feat(vm): Frame label/
-param_indices/trace dinamici`. Verificato 25/25 unit, 168/168 gcc-compat, 36/36
-c_examples, encrypt `--check-invertibility`, fib/parallel2_fib (clone+par).
-
-**Pointer pool runtime growable — FATTO** (heap VM dinamico `vm->mn_pool`):
-`malloc` in loop a bound runtime senza free ora cresce on-demand, niente
-`--ptr-pool-size`. Modello ibrido: slot < heap_base = memoria nominata
-(`__mn_mem*`, dispatch `if slot==k`, bancato se > ~998 celle); slot >= heap_base
-= heap senza alias → procedure `__mn_pool_*_dyn` su `vm->mn_pool` via ops VM
-reversibili POOLPUSH/POOLADD/POOLGET (vedi commit Kairos `feat(vm): heap
-puntatori dinamico`). Verificato forward + `--check-invertibility` (malloc
-base/concorrente/loop/runtime, banked+dynamic), encrypt round-trip intatto,
-168/168 gcc-compat. Regression `tests/test_pool_runtime_loop.py` +
-`tests/test_ptr_pool_emit.py`. NB: il dispatch statico bancato (> 998 celle
-*nominate* accedute via puntatore) resta lento nell'interprete (O(N) per accesso)
-ed è un limite pre-esistente ortogonale, non legato all'heap.
-
----
 
 ## Non fattibile per modello reversibile / VM Kairos
 
