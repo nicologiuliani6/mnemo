@@ -5898,6 +5898,17 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
+        # Indice commutato `N[a]` ≡ `a[N]` (C: `E1[E2]` = `*(E1+E2)`). pycparser
+        # mette il letterale come `.name`: se la base è una costante INTERA,
+        # scambia base/indice. (Letterale stringa `"…"[i]` non è commutabile qui.)
+        if (
+            isinstance(expr.name, c.Constant)
+            and expr.name.type in ("int", "char")
+        ):
+            swapped = c.ArrayRef(
+                expr.subscript, expr.name, getattr(expr, "coord", None)
+            )
+            return _eval_expr(swapped, ctx)
         # `(*p)[i]`: ArrayRef.name è UnaryOp("*", ID(p)). Equivale a `p[i]`
         # → rewrite a `*(p + i)` (puntatore-indicizzazione).
         nm = expr.name
