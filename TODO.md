@@ -17,6 +17,13 @@
 
 ## Migliorie / limiti noti (non bloccanti)
 
+- **Ternario self-assign con comma-assign nel ramo**: `x = x ? 1 : (x=2, x+1);`
+  esce 1 SILENZIOSO (no output, no errore). Solo quando lo stesso `x` è lvalue
+  + letto in cond + riassegnato nel ramo. Probabile collisione di cella nel
+  lowering. Difetto doppio: risultato errato + fallimento silenzioso (dovrebbe
+  errorare). Repro `c_test/bug_ternary_self_comma.c` (probe `s13`).
+- **Array di struct con init a graffe**: `struct P a[3]={{1,2},{3,4}};` →
+  `array di struct: inizializzatore non supportato` (probe `s10`). Gap feature.
 - **Indice array commutato `2[a]`** (== `a[2]`) non supportato: `array: la base
   dell'indicizzazione deve essere un nome` (probe `r17`). Sintassi rara.
 
