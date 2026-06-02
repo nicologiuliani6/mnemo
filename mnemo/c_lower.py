@@ -7666,6 +7666,25 @@ def _lower_funccall_with_ret(
             # questo, arg2 vede `b` invece di `a` → risultato sbagliato.
             # Variante: se arg è già un Constant int (no ID refs), assegna diretto
             # alla mem cell per evitare temp inutili.
+            # Self-recursione: gli slot-arg del callee SONO le celle `__mn_mem*`
+            # del frame chiamante (stesso range, params per-Frame aliasati by-ref
+            # nella `call`). Il setup-arg `push(dst); dst += arg` sovrascrive il
+            # valore del chiamante (es. `n` → `n-1`) e la `call` lo muta ancora →
+            # dopo la call il param del chiamante è perso. Il path inline
+            # (`return n*f(n-1)`) lo salva in un temp `__mn_e*` (frame-local, non
+            # passato al callee) e lo ripristina dopo; il path call-into-local non
+            # lo faceva → `int t=f(n-1); return n*t;` leggeva `n` corrotto.
+            # Fix: per self-rec snapshot di ogni slot-arg in un temp frame-local
+            # PRIMA del setup, restore DOPO l'estrazione del ritorno.
+            self_rec_arg = (name == ctx.fn_name)
+            selfrec_restore: list[tuple[str, str]] = []
+            if self_rec_arg:
+                for log_key in slot_logs:
+                    idx = layout.slot_of[(name, log_key)]
+                    dst = f"__mn_mem{idx}"
+                    snap = ctx.fresh_temp()
+                    pre_uc.append(IXorEq(snap, Var(dst)))
+                    selfrec_restore.append((dst, snap))
             arg_setup_temps: list[tuple[str, str]] = []
             for ex, log_key in zip(exprs, slot_logs):
                 idx = layout.slot_of[(name, log_key)]
@@ -7785,7 +7804,15 @@ def _lower_funccall_with_ret(
             call_uc.append(ICall(name, mem_args + pi_suffix + chx + stk))
             if apply_uncall_opt or apply_void_uncall_opt:
                 call_uc.extend(uncall_with_restore)
-            return pre_uc + call_uc + post_uc
+            # Self-rec: ripristina gli slot-arg del chiamante DOPO l'estrazione del
+            # ritorno (post_uc legge la cella di ritorno). `push(dst); dst += snap`
+            # rimette il valore pre-call; snap è frame-local, intatto attraverso la
+            # call ricorsiva.
+            restore_uc: list[Instr] = []
+            for dst, snap in selfrec_restore:
+                restore_uc.append(IHistPush(ctx.hist, dst))
+                restore_uc.append(IAddEq(dst, Var(snap)))
+            return pre_uc + call_uc + post_uc + restore_uc
 
     if wants and ret_sink is None:
         raise MnemoCompileError(f"{name} restituisce un valore: uso interno errato")
