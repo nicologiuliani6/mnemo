@@ -2,19 +2,15 @@
 
 ## Bug aperti (verificati, fix rischioso/non banale)
 
-- **Semantica tipi interi: Mnemo è internamente all-signed-int.** Non modella le
-  *usual arithmetic conversions* del C. Due manifestazioni:
-  - **`char`/`unsigned char` non wrappa a 8 bit**: `unsigned char c=250; c+=10;`
-    dà 260 invece di 4. Fix = tipo char a 8 bit (mask 0xFF su TUTTI i path di
-    scrittura `=`/`+=`/`++`/subscript + char signed-default x86). Repro
-    `c_test/bug_uchar_wrap.c`.
-  - **Confronti misti signed/unsigned**: `unsigned a=10; int b=-20; (a+b)<0` →
-    gcc "pos" (la somma è unsigned, mai <0), Mnemo "neg" (confronto signed). Il
-    *valore* è giusto (stessi bit, %u/%d corretti); è il confronto `<`/`>` che
-    usa la signedness sbagliata. Repro `c_test/bug_mixed_sign_cmp.c`.
-  Fix comune = tracciare la signedness/width attraverso le espressioni ed
-  emettere op (confronto, mask) coerenti → invasivo (type-system), alto rischio
-  su string-ops (22 test usano char) e su encrypt/des (unsigned-heavy).
+- **`char`/`unsigned char`: aritmetica non wrappa a 8 bit.** Mnemo è
+  internamente all-signed-int e non modella la width del char: `unsigned char
+  c=250; c+=10;` dà 260 invece di 4. Fix = tipo char a 8 bit (mask 0xFF su TUTTI
+  i path di scrittura `=`/`+=`/`++`/subscript + char signed-default x86) →
+  invasivo, alto rischio su string-ops (22 test usano char). Repro
+  `c_test/bug_uchar_wrap.c`. NB: il confronto misto signed/unsigned vs 0
+  (`(a+b)<0`) è ORA gestito (fold `_fold_unsigned_cmp_zero`); restano i confronti
+  unsigned vs valore non-zero con high-bit (es. `u1 < u2` con u1≥2^31), non
+  coperti.
 
 ## Ottimizzazioni mancanti
 

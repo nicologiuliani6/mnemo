@@ -8319,6 +8319,73 @@ def _negate_guard(g: tuple[str, CmpOp, str]) -> tuple[str, CmpOp, str]:
     return lh, _NEG_CMP[op], rh
 
 
+def _type_node_is_unsigned(tnode: c.Node | None) -> bool:
+    """True se il type-node è `unsigned …` (IdentifierType con 'unsigned')."""
+    cur = tnode
+    while cur is not None and not isinstance(cur, c.IdentifierType):
+        cur = getattr(cur, "type", None)
+    if isinstance(cur, c.IdentifierType):
+        return "unsigned" in cur.names
+    return False
+
+
+def _expr_is_unsigned(expr: c.Node, ctx: _Ctx) -> bool:
+    """Inferenza conservativa: l'espressione ha tipo unsigned in C?
+
+    Usata solo per il fold di `unsigned {<,<=,>,>=} 0` (le usual arithmetic
+    conversions rendono il confronto unsigned → `< 0` sempre falso). In dubbio
+    ritorna False (nessun fold = comportamento attuale).
+    """
+    if isinstance(expr, c.Constant):
+        return "unsigned" in (expr.type or "")
+    if isinstance(expr, c.ID):
+        log = _scope_resolve(ctx, expr.name)
+        return _type_node_is_unsigned(ctx.var_types.get(log))
+    if isinstance(expr, c.Cast):
+        return _type_node_is_unsigned(getattr(expr.to_type, "type", None))
+    if isinstance(expr, c.UnaryOp) and expr.op in ("+", "-", "~"):
+        return _expr_is_unsigned(expr.expr, ctx)
+    if isinstance(expr, c.BinaryOp) and expr.op in (
+        "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>",
+    ):
+        # Usual arithmetic conversions: se un operando è unsigned, il risultato
+        # è unsigned (per int/unsigned di pari rango — Mnemo è tutto rango int).
+        return _expr_is_unsigned(expr.left, ctx) or _expr_is_unsigned(
+            expr.right, ctx
+        )
+    return False
+
+
+def _fold_unsigned_cmp_zero(
+    expr: c.BinaryOp, ctx: _Ctx
+) -> tuple[list[Instr], tuple[str, CmpOp, str], list[str]] | None:
+    """Fold di `U {<,<=,>,>=} 0` (e simmetrico `0 op U`) con U unsigned.
+    Ritorna (pre, guard, tm) oppure None se non applicabile. U viene comunque
+    valutato (effetti collaterali preservati)."""
+    def is_zero(n: c.Node) -> bool:
+        return isinstance(n, c.Constant) and _literal_int_widen(n) == 0
+
+    op = expr.op
+    if is_zero(expr.right) and _expr_is_unsigned(expr.left, ctx):
+        u_expr, o = expr.left, op
+    elif is_zero(expr.left) and _expr_is_unsigned(expr.right, ctx):
+        u_expr = expr.right
+        o = {"<": ">", ">": "<", "<=": ">=", ">=": "<="}.get(op, op)
+    else:
+        return None
+    if o not in ("<", "<=", ">", ">="):
+        return None
+    pre, vn, tm = _eval_to_var(u_expr, ctx)
+    if o == "<":      # U < 0 → sempre falso
+        return pre, ("0", "==", "1"), tm
+    if o == ">=":     # U >= 0 → sempre vero
+        return pre, ("0", "==", "0"), tm
+    if o == ">":      # U > 0 → U != 0
+        return pre, (vn, "!=", "0"), tm
+    # o == "<=":      U <= 0 → U == 0
+    return pre, (vn, "==", "0"), tm
+
+
 def _lower_predicate_simple(
     expr: c.Node, ctx: _Ctx
 ) -> tuple[list[Instr], tuple[str, CmpOp, str], list[str]]:
@@ -8344,6 +8411,13 @@ def _lower_predicate_simple(
         if expr.op in ("&&", "||"):
             raise MnemoCompileError("&&/||: usa _lower_if_from_expr / _build_truth_incr_lc")
         if expr.op in _CMP_OPS:
+            # Confronto unsigned-vs-0: in C un'espressione unsigned non è mai < 0.
+            # Mnemo è all-signed-int e farebbe un confronto signed (bug su
+            # `(a+b)<0` con a unsigned). Fold C-esatto quando un lato è il
+            # letterale 0 e l'altro è unsigned.
+            folded = _fold_unsigned_cmp_zero(expr, ctx)
+            if folded is not None:
+                return folded
             pre_l, lhs_s, tm_l = _kairos_atom(expr.left, ctx)
             pre_r, rhs_s, tm_r = _kairos_atom(expr.right, ctx)
             op = expr.op
