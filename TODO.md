@@ -1,6 +1,24 @@
 # TODO
 
+## Bug aperti (verificati, fix rischioso/non banale)
+
+- **Bitwise OR/AND/XOR perdono il bit 31 (segno).** `lib/bits.kairos`
+  `__mn_and_into`/`__mn_or_into` iterano 31 bit (`until k==31`): il bit 31 non
+  è mai impostato e manca la sign-extension. `-5|8` → 2147483643 invece di -5;
+  `-1&-1` → 2147483647 invece di -1. Latente per AND/XOR quando l'operando con
+  bit31 dà 0 nel risultato (passano -5^1, -5&8). Fix dipende dalla signedness
+  (signed → sign-extend a -2^31; unsigned → +2^31 + mask u32) e bits.kairos è
+  core per encrypt/des → riverificare round-trip + invertibility. Repro
+  `c_test/bug_bitwise_or_sign.c`.
+- **`char`/`unsigned char`: aritmetica non wrappa a 8 bit.** char aliasato a
+  `int` → `unsigned char c=250; c+=10;` dà 260 invece di 4. Servirebbe mask
+  0xFF sugli assegnamenti a var char; impatta string-ops → valutare. Repro
+  `c_test/bug_uchar_wrap.c`.
+
 ## Migliorie / limiti noti (non bloccanti)
+
+- **Indice array commutato `2[a]`** (== `a[2]`) non supportato: `array: la base
+  dell'indicizzazione deve essere un nome` (probe `r17`). Sintassi rara.
 
 - **Ricorsione mista self+mutua: possibile collisione di frame-key.** Il clone
   per la mutua usa `Frame.active` come depth, la self-rec usa il parsing `@N`
