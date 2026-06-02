@@ -16,14 +16,64 @@ from mnemo.errors import MnemoCompileError
 from mnemo.kairos_limits import MONOLITHIC_POOL_MEM_MAX, POOL_BANK_SIZE, PTR_POOL_MAX
 
 
-def emit_ptr_pool_kairos(n: int) -> str:
-    if n < 1 or n > PTR_POOL_MAX:
+def emit_ptr_pool_kairos(n: int, heap_base: int | None = None) -> str:
+    """`n` = numero di celle statiche su cui fa dispatch `if slot==k` (la
+    memoria nominata del programma: array stack, globali, struct — celle
+    `__mn_mem0..n-1`). Gli slot >= `heap_base` (heap da malloc, senza alias
+    nominato) sono serviti dalle procedure `__mn_pool_*_dyn` che indicizzano
+    l'heap VM dinamico `vm->mn_pool` → crescita on-demand, niente
+    `--ptr-pool-size`. Se `heap_base` è None il modello dinamico è disattivato
+    (compat: solo dispatch statico sull'intero `n`)."""
+    if n > PTR_POOL_MAX:
+        raise MnemoCompileError(
+            f"celle pool statiche {n} > max {PTR_POOL_MAX}"
+        )
+    if heap_base is None and n < 1:
         raise MnemoCompileError(
             f"ptr_pool_size deve essere tra 1 e {PTR_POOL_MAX}, non {n}"
         )
-    if n <= MONOLITHIC_POOL_MEM_MAX:
-        return _emit_monolithic_ptr_pool_kairos(n)
-    return _emit_banked_ptr_pool_kairos(n)
+    static = ""
+    if n >= 1:
+        if n <= MONOLITHIC_POOL_MEM_MAX:
+            static = _emit_monolithic_ptr_pool_kairos(n)
+        else:
+            static = _emit_banked_ptr_pool_kairos(n)
+    if heap_base is None:
+        return static
+    dyn = _emit_dynamic_pool_procs(heap_base)
+    if not static:
+        return dyn
+    return static.rstrip() + "\n\n" + dyn
+
+
+def _emit_dynamic_pool_procs(heap_base: int) -> str:
+    """Procedure heap dinamico: slot >= heap_base → `vm->mn_pool[slot]` via ops
+    VM POOLPUSH/POOLADD/POOLGET (indice runtime, pool cresce on-demand). Guardia
+    `if slot >= heap_base` → no-op per gli slot statici (serviti dal dispatch
+    `if slot==k`); mutuamente esclusive, quindi store/load chiamano entrambe."""
+    hb = heap_base
+    return "\n".join(
+        [
+            f"// Heap dinamico (vm->mn_pool): slot >= {hb} (heap malloc, no alias nominato).",
+            "// Cresce on-demand → niente --ptr-pool-size per malloc-in-loop runtime.",
+            "procedure __mn_pool_store_dyn(int slot, int val, stack __mn_hist, stack __mn_scratch)",
+            f"    if slot >= {hb} then",
+            "        poolpush(slot, __mn_hist)",
+            "        pooladd(slot, val)",
+            f"    fi slot >= {hb}",
+            "",
+            "procedure __mn_pool_load_dyn(int slot, int out, stack __mn_hist, stack __mn_scratch)",
+            f"    if slot >= {hb} then",
+            "        local int t = 0",
+            "            poolget(slot, t)",
+            "            push(out, __mn_hist)",
+            "            out += t",
+            "            push(t, __mn_hist)",
+            "        delocal int t = 0",
+            f"    fi slot >= {hb}",
+            "",
+        ]
+    ).rstrip() + "\n"
 
 
 def _pool_alloc_free_src() -> str:

@@ -966,9 +966,19 @@ def _scope_declare(ctx: _Ctx, source: str) -> str:
     return logical
 
 
+def _pool_static_n(ctx: _Ctx) -> int:
+    """Numero di celle "nominate" (memoria statica del programma: array stack,
+    globali, struct) su cui il pool fa dispatch `if slot==k` → celle
+    `__mn_mem0..n-1`. Gli slot >= heap_base (heap da malloc, senza alias
+    nominato) NON sono qui: vanno alle procedure `__mn_pool_*_dyn` (heap VM
+    dinamico). Senza layout (path legacy) fallback a ptr_pool_size."""
+    if ctx.mem_layout is not None:
+        return ctx.heap_base
+    return ctx.ptr_pool_size
+
+
 def _ptr_pool_mem_names(ctx: _Ctx) -> tuple[str, ...]:
-    n = ctx.total_mem_cells if ctx.mem_layout is not None else ctx.ptr_pool_size
-    return tuple(f"__mn_mem{i}" for i in range(n))
+    return tuple(f"__mn_mem{i}" for i in range(_pool_static_n(ctx)))
 
 
 def _malloc_block_cells(call: c.FuncCall) -> int:
@@ -1068,11 +1078,11 @@ def _pool_call_slot_arg(
 def _pool_uses_banking(ctx: _Ctx) -> bool:
     if ctx.mem_layout is None:
         return False
-    return ctx.total_mem_cells > MONOLITHIC_POOL_MEM_MAX
+    return _pool_static_n(ctx) > MONOLITHIC_POOL_MEM_MAX
 
 
 def _n_pool_banks(ctx: _Ctx) -> int:
-    return math.ceil(ctx.total_mem_cells / POOL_BANK_SIZE)
+    return math.ceil(_pool_static_n(ctx) / POOL_BANK_SIZE)
 
 
 def _ir_pool_divmod_slot(
@@ -1116,7 +1126,14 @@ def _bank_chain_pool_calls(
     return tree(0, nb)
 
 
-def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
+def _pool_dyn_active(ctx: _Ctx) -> bool:
+    """True se l'heap dinamico (vm->mn_pool) è in uso: gli slot >= heap_base
+    vanno alle procedure `__mn_pool_*_dyn`. Disattivo solo nel path legacy
+    senza layout (ctx.mem_layout None)."""
+    return ctx.mem_layout is not None
+
+
+def _ir_pool_store_static(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
     if not _pool_uses_banking(ctx):
         return [
             ICall(
@@ -1130,13 +1147,13 @@ def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
 
     def args_for(bi: int) -> list[str]:
         s0 = bi * POOL_BANK_SIZE
-        s1 = min(ctx.total_mem_cells, s0 + POOL_BANK_SIZE)
+        s1 = min(_pool_static_n(ctx), s0 + POOL_BANK_SIZE)
         return [t_r, val_var] + [f"__mn_mem{i}" for i in range(s0, s1)]
 
     return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_store", args_for)
 
 
-def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
+def _ir_pool_load_static(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
     if not _pool_uses_banking(ctx):
         return [
             ICall(
@@ -1151,10 +1168,40 @@ def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
 
     def args_for(bi: int) -> list[str]:
         s0 = bi * POOL_BANK_SIZE
-        s1 = min(ctx.total_mem_cells, s0 + POOL_BANK_SIZE)
+        s1 = min(_pool_static_n(ctx), s0 + POOL_BANK_SIZE)
         return [t_r] + [f"__mn_mem{i}" for i in range(s0, s1)] + [out_var]
 
     return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_load", args_for)
+
+
+def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
+    """Routing slot → memoria: slot < heap_base = cella nominata `__mn_mem*`
+    (dispatch statico), slot >= heap_base = heap VM dinamico (cresce on-demand,
+    proc `_dyn`). Guardia runtime `if slot < heap_base` perché lo slot è il
+    valore di un puntatore (noto solo a runtime)."""
+    dyn = [
+        ICall("__mn_pool_store_dyn", [slot_var, val_var] + _kairos_stack_actuals(ctx))
+    ]
+    if not _pool_dyn_active(ctx):
+        return _ir_pool_store_static(ctx, slot_var, val_var)
+    sn = _pool_static_n(ctx)
+    if sn <= 0:
+        return dyn  # nessuna memoria nominata: tutto heap dinamico
+    return [IIfKairos(slot_var, "<", str(sn),
+                      _ir_pool_store_static(ctx, slot_var, val_var), dyn)]
+
+
+def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
+    dyn = [
+        ICall("__mn_pool_load_dyn", [slot_var, out_var] + _kairos_stack_actuals(ctx))
+    ]
+    if not _pool_dyn_active(ctx):
+        return _ir_pool_load_static(ctx, slot_var, out_var)
+    sn = _pool_static_n(ctx)
+    if sn <= 0:
+        return dyn
+    return [IIfKairos(slot_var, "<", str(sn),
+                      _ir_pool_load_static(ctx, slot_var, out_var), dyn)]
 
 
 def _ir_pool_free_call(ctx: _Ctx, slot_var: str) -> list[Instr]:

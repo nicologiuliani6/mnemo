@@ -83,19 +83,28 @@ def load_prelude_kairos(
     *,
     ptr_pool_size: int = 4,
     total_mem_cells: int | None = None,
+    heap_base: int | None = None,
 ) -> str:
     """
-    Se `total_mem_cells` è impostato, genera `__mn_pool_*` con quella N (stack+heap);
-    altrimenti usa `ptr_pool_size` (solo heap, comportamento legacy).
+    Genera `__mn_pool_*`. Con `heap_base` impostato (path con layout): dispatch
+    statico `if slot==k` sulle celle nominate `__mn_mem0..heap_base-1`, e
+    procedure `_dyn` per gli slot >= heap_base (heap VM dinamico `vm->mn_pool`,
+    cresce on-demand). Senza `heap_base` (legacy): solo dispatch statico su
+    `total_mem_cells`/`ptr_pool_size`.
     """
     if not lib_filenames:
         return ""
-    pool_n = total_mem_cells if total_mem_cells is not None else ptr_pool_size
+    if heap_base is not None:
+        static_n = heap_base
+    elif total_mem_cells is not None:
+        static_n = total_mem_cells
+    else:
+        static_n = ptr_pool_size
     root = lib_dir()
     chunks: list[str] = []
     for lf in lib_filenames:
         if lf == _VPTR_LIB:
-            chunks.append(emit_ptr_pool_kairos(pool_n).rstrip())
+            chunks.append(emit_ptr_pool_kairos(static_n, heap_base).rstrip())
             continue
         path = root / lf
         if not path.is_file():

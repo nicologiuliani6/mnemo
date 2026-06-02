@@ -1,10 +1,9 @@
 """Regression: malloc/calloc dentro un loop a bound RUNTIME senza free.
 
-Il numero di allocazioni non è noto a compile-time → il pool puntatori statico
-non è dimensionabile (la crescita on-demand richiede un modello di memoria VM
-dinamico, gated su [[1. VM Kairos: allocazione dinamica]]). Prima Mnemo
-sottodimensionava il pool e produceva output ERRATO in silenzio; ora emette un
-errore chiaro. Escape hatch: `--ptr-pool-size N` esplicito.
+Il pool puntatori vive su un heap VM dinamico (`vm->mn_pool`) che cresce
+on-demand: il numero di allocazioni NON deve essere noto a compile-time.
+Prima questo caso o miscompilava in silenzio o (dopo la diagnostica) richiedeva
+`--ptr-pool-size`; ora funziona senza flag, forward E `--check-invertibility`.
 """
 
 from __future__ import annotations
@@ -16,7 +15,8 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# malloc in loop a bound runtime (n = argc+4), nessun free → non dimensionabile.
+# n = argc + 4 (bound runtime), nessun free → allocazioni accumulate.
+# s = sum_{i=0}^{n-1} (i + i*10) = 11 * n(n-1)/2.  argc=4 → n=8 → 11*28 = 308.
 _SRC_BAD = """#include <stdlib.h>
 int main(int argc, char **argv) {
     int n = argc + 4;
@@ -26,52 +26,50 @@ int main(int argc, char **argv) {
         p[0] = i; p[1] = i * 10;
         s += p[0] + p[1];
     }
-    return s & 255;
-}
-"""
-
-# Stesso loop ma con free nel corpo → riuso LIFO, pool piccolo, OK.
-_SRC_FREE = """#include <stdlib.h>
-int main(int argc, char **argv) {
-    int n = argc + 4;
-    int s = 0, i;
-    for (i = 0; i < n; i++) {
-        int *p = (int *)malloc(sizeof(int) * 2);
-        p[0] = i; p[1] = i * 10;
-        s += p[0] + p[1];
-        free(p);
-    }
-    return s & 255;
+    printf("%d\\n", s);
+    return 0;
 }
 """
 
 
 class TestPoolRuntimeLoop(unittest.TestCase):
-    def _compile(self, src: str, *extra: str) -> subprocess.CompletedProcess:
+    def _run(self, src: str, *extra: str) -> subprocess.CompletedProcess:
         with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
             f.write(src)
             path = f.name
         try:
             return subprocess.run(
-                [".venv/bin/mnemo", "dump-kairos", path, "--stdout", *extra],
+                [".venv/bin/mnemo", "run", path, "--main-argc", "4", *extra],
                 capture_output=True, text=True, cwd=ROOT, timeout=120,
             )
         finally:
             os.unlink(path)
 
-    def test_unbounded_loop_malloc_errors(self) -> None:
-        res = self._compile(_SRC_BAD)
-        self.assertNotEqual(res.returncode, 0, "deve fallire, non miscompilare")
-        self.assertIn("bound runtime", res.stderr)
-        self.assertIn("--ptr-pool-size", res.stderr)
-
-    def test_explicit_pool_size_compiles(self) -> None:
-        res = self._compile(_SRC_BAD, "--ptr-pool-size", "50")
+    def test_runtime_loop_no_flag(self) -> None:
+        """Nessun --ptr-pool-size: il pool dinamico cresce da solo."""
+        res = self._run(_SRC_BAD)
         self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("308", res.stdout)
 
-    def test_free_in_loop_compiles(self) -> None:
-        res = self._compile(_SRC_FREE)
+    def test_runtime_loop_invertible(self) -> None:
+        res = self._run(_SRC_BAD, "--check-invertibility")
         self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("308", res.stdout)
+
+    def test_runtime_loop_larger(self) -> None:
+        """argc=20 → n=24 → 11 * 24*23/2 = 11*276 = 3036 (pool cresce oltre l'iniziale)."""
+        with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+            f.write(_SRC_BAD)
+            path = f.name
+        try:
+            res = subprocess.run(
+                [".venv/bin/mnemo", "run", path, "--main-argc", "20"],
+                capture_output=True, text=True, cwd=ROOT, timeout=120,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn("3036", res.stdout)
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":
