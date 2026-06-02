@@ -26,10 +26,6 @@
 
 ## Migliorie / limiti noti (non bloccanti)
 
-- **Bitwise in interprete puro O(value) sugli operandi grandi**: `2147483647|1`
-  in interprete è lentissimo/hang (le halving reversibili sono O(value)). Usare
-  `--native-arith` (bypassa `lib/bits.kairos`, C O(1)). Perf pre-esistente, non
-  correttezza.
 - **`struct P *p = arr` (puntatore a base array-di-struct)** non supportato
   (`identificatore non dichiarato` sul nome array, probe `s10`). L'init
   dell'array-di-struct invece ora funziona.

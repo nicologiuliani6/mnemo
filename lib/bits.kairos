@@ -4,11 +4,11 @@
 
 // Chiamate con divisore 2: le `call` Kairos accettano solo identificatori, non `2` letterale.
 procedure __mn_divmod_nonneg_div2(int a, int q, int r, stack __mn_hist, stack __mn_scratch)
-    local int two = 0
-    two += 1
-    two += 1
-    call __mn_divmod_nonneg(a, two, q, r, __mn_hist, __mn_scratch)
-    delocal int two = 2
+    // O(1) via op nativa MNHALVE (q += a/2, r += a%2, a = 0). Prima usava
+    // __mn_divmod_nonneg(a,2) = O(a) → bitwise O(value) sugli operandi grandi
+    // (hang). NB: consuma `a` (=0), come si attendono i caller (floor_div2 →
+    // `t += q` per ottenere t/2). mnhalve è reversibile (op_mnhalve_inv).
+    mnhalve(a, q, r)
 
 // q = floor(t/2) con semantica divisione intera C su int; azzera t.
 // `ts` copia stabile di t per il guard if/fi: nel ramo else t viene azzerato
