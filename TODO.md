@@ -22,10 +22,11 @@
 
 - **Campo union/struct annidato `u.s.a`** non supportato: `union: un solo
   livello di campo` (probe `v03`).
-- **`char *n; n = "literal";` (riassegnazione da letterale) + `printf("%s",n)`**
-  non supportato in alcuni contesti (es. dentro `switch`): `letterale stringa
-  non è un valore intero` (probe `v12`). L'init diretto `char *p="..."` invece
-  funziona.
+- **`char *n; n = "literal";` riassegnata + ritorno cross-funzione**: la
+  riassegnazione in-funzione (incluso dentro `if`/`switch`/loop) ora funziona
+  (ROS array per letterale, dispatch runtime su `printf("%s", n)`). Resta non
+  supportato `return n` di un char* + `printf("%s", f(...))` (arg FuncCall) in
+  un'altra funzione.
 - **`_Generic` non distingue `char` da `int`.** Mnemo aliasa `char` a `int`
   nel type-system → `_Generic((c), char:…, int:…)` sceglie sempre `int`.
   Probe `p22`. Richiede un tag di tipo `char` separato nel lowering.

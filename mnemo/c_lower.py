@@ -21,6 +21,7 @@ Lowering pycparser AST → IR Mnemo.
 from __future__ import annotations
 
 import ast as pyast
+import hashlib
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -3718,6 +3719,31 @@ def _literal_c_string(node: c.Constant) -> str:
     if not isinstance(out, str):
         raise MnemoCompileError(f"stringa non valida: {node.value!r}")
     return out
+
+
+def _string_constant_bytes(node: c.Constant) -> bytes:
+    """Byte UTF-8 di un letterale stringa + NUL terminatore."""
+    return _literal_c_string(node).encode("utf-8", errors="replace") + b"\x00"
+
+
+def _assign_string_ros_base(fn: str, raw: bytes) -> str:
+    """Nome ROS deterministico per `n = "lit"` (riassegnazione da letterale).
+    Chiave = hash del contenuto: letterali identici condividono la cella, e
+    layout_collect e c_lower derivano lo stesso nome senza dipendere dall'ordine."""
+    h = hashlib.sha1(raw).hexdigest()[:10]
+    return f"__mn_ros_{fn}_lit_{h}"
+
+
+def _assignment_string_literal(node: c.Node) -> tuple[str, c.Constant] | None:
+    """`id = "lit"` → (nome-lvalue, Constant). Solo `=` su lvalue ID."""
+    if not isinstance(node, c.Assignment) or node.op != "=":
+        return None
+    if not isinstance(node.lvalue, c.ID):
+        return None
+    rv = node.rvalue
+    if isinstance(rv, c.Constant) and rv.type == "string":
+        return node.lvalue.name, rv
+    return None
 
 
 def _decl_is_char_pointer(node: c.Decl, td: dict[str, c.Node]) -> bool:
@@ -8473,6 +8499,45 @@ def _lower_deref_assign(p_name: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
     return _lower_deref_assign_phys(_phys(ctx, p_name), rhs, ctx)
 
 
+def _lower_charptr_string_assign(
+    lhs_logical: str, lit: c.Constant, ctx: _Ctx
+) -> list[Instr]:
+    """`n = "lit"` (riassegnazione char* da letterale). Materializza i byte in
+    una ROS array dedicata (slot allocati da layout_collect) e punta `n` alla
+    base. NON registra char_ptr_string_base[n] → `printf("%s", n)` usa il
+    dispatch runtime sul valore del puntatore (supporta più valori a runtime)."""
+    raw = _string_constant_bytes(lit)
+    tot = len(raw)
+    sbase = _assign_string_ros_base(ctx.fn_name, raw)
+    if sbase not in ctx.array_info:
+        ctx.array_info[sbase] = _ArrayInfo(dims=(tot,), total=tot, elem_size=1)
+        for i in range(tot):
+            cell = _array_elem_local(sbase, i)
+            ctx.int_locals.add(cell)
+    first = _array_elem_local(sbase, 0)
+    k = ctx.slot_index.get(first)
+    if k is None and ctx.mem_layout is not None:
+        k = ctx.mem_layout.slot_of.get(("__file__", first))
+    if k is None:
+        raise MnemoCompileError(
+            f"riassegnazione char* da letterale: slot base mancante per {sbase!r} "
+            "(layout non allocato)"
+        )
+    out: list[Instr] = []
+    for i, byte in enumerate(raw):
+        out.extend(
+            _lower_assign(
+                _phys(ctx, _array_elem_local(sbase, i)),
+                c.Constant("int", str(byte)),
+                ctx,
+            )
+        )
+    ctx.use_hist = True
+    phy = _phys(ctx, lhs_logical)
+    out.extend([IHistPush(ctx.hist, phy), IAddEq(phy, Imm(k))])
+    return out
+
+
 def _lower_struct_arrow_assign(lhs: c.StructRef, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
     """`p->campo = rhs` tramite pool store con offset campo (come lettura `->` in _eval_expr)."""
     if lhs.type != "->":
@@ -10875,6 +10940,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 f"assegnamento a variabile non dichiarata: {node.lvalue.name}"
             )
         if node.op == "=":
+            slit = _assignment_string_literal(node)
+            if slit is not None:
+                return _lower_charptr_string_assign(lhs, slit[1], ctx)
             return _lower_assign(_phys(ctx, lhs), node.rvalue, ctx)
         if node.op in _COMPOUND_ASSIGN_OPS:
             coord = node.coord
