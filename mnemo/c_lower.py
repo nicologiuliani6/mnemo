@@ -7260,6 +7260,11 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             t_sink = ctx.fresh_temp()
             ins_d = _emit_fp_runtime_dispatch(expr, ctx, fp_log_e, t_sink)
             return ins_d, Var(t_sink), [t_sink]
+        arr_log_rt_e = _is_runtime_fnptr_array_call(expr, ctx)
+        if arr_log_rt_e is not None:
+            t_sink = ctx.fresh_temp()
+            ins_d = _emit_fnptr_array_runtime_dispatch(expr, ctx, arr_log_rt_e, t_sink)
+            return ins_d, Var(t_sink), [t_sink]
         expr, name = _resolve_indirect_callee(expr, ctx)
         if name == "malloc":
             if name not in ctx.extern_procs:
@@ -8173,6 +8178,49 @@ def _emit_fp_runtime_dispatch(
     return out
 
 
+def _is_runtime_fnptr_array_call(node: c.FuncCall, ctx: _Ctx) -> str | None:
+    """`ops[i](…)` con `ops` array di fn-ptr e `i` NON costante → logical-name
+    dell'array (per il dispatch runtime); altrimenti None."""
+    nm = node.name
+    if (
+        isinstance(nm, c.ArrayRef)
+        and isinstance(nm.name, c.ID)
+        and not isinstance(nm.subscript, c.Constant)
+    ):
+        log = _scope_resolve(ctx, nm.name.name)
+        if log in ctx.func_ptr_array:
+            return log
+    return None
+
+
+def _emit_fnptr_array_runtime_dispatch(
+    node: c.FuncCall, ctx: _Ctx, arr_log: str, ret_sink: str | list[str] | None
+) -> list[Instr]:
+    """Dispatch runtime per `ops[i](…)`: chain `if idx == k then call names[k](…)`.
+    L'indice è snapshottato in un temp stabile (le sub-call non lo mutano)."""
+    names = ctx.func_ptr_array[arr_log]
+    coord = getattr(node, "coord", None)
+    assert isinstance(node.name, c.ArrayRef)
+    pre, op, tm = _eval_expr(node.name.subscript, ctx)
+    ctx.use_hist = True
+    t_idx = ctx.fresh_temp()
+    out: list[Instr] = list(pre)
+    if isinstance(op, Imm):
+        out.append(IConst(t_idx, op.value))
+    else:
+        out += [IHistPush(ctx.hist, t_idx), IAddEq(t_idx, op)]
+    for k, fn_name in enumerate(names):
+        if not fn_name:
+            continue
+        sub_call = c.FuncCall(c.ID(fn_name, coord), node.args, coord)
+        sub_ir = _lower_funccall_with_ret(sub_call, ctx, ret_sink)
+        out.append(IIfKairos(t_idx, "==", str(k), sub_ir, None))
+    ctx.use_scratch = True
+    out += [IHistPush(ctx.scratch, x) for x in reversed(tm)]
+    out.append(IHistPush(ctx.scratch, t_idx))
+    return out
+
+
 def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
     if isinstance(expr, c.UnaryOp) and expr.op == "&" and isinstance(expr.expr, c.ID):
         return _phys(ctx, expr.expr.name)
@@ -8199,6 +8247,9 @@ def _lower_funccall_with_ret(
             fp_log = cand_log
     if fp_log is not None:
         return _emit_fp_runtime_dispatch(node, ctx, fp_log, ret_sink)
+    arr_log_rt = _is_runtime_fnptr_array_call(node, ctx)
+    if arr_log_rt is not None:
+        return _emit_fnptr_array_runtime_dispatch(node, ctx, arr_log_rt, ret_sink)
     node, name = _resolve_indirect_callee(node, ctx)
     assert isinstance(node.name, c.ID)
     if name == "putchar":
@@ -11231,6 +11282,10 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         return _lower_expr_as_stmt(node, ctx)
 
     if isinstance(node, c.FuncCall):
+        arr_log_rt_s = _is_runtime_fnptr_array_call(node, ctx)
+        if arr_log_rt_s is not None:
+            # `ops[i](…);` statement (risultato scartato) → dispatch runtime.
+            return _emit_fnptr_array_runtime_dispatch(node, ctx, arr_log_rt_s, None)
         node, nm = _resolve_indirect_callee(node, ctx)
         # `memcpy(dst, src, N)` / `memset(dst, v, N)` con dst/src array
         # Mnemo e N const multiplo di sizeof(int): espandi per-slot.
