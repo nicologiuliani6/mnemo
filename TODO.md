@@ -20,9 +20,6 @@
 
 ## Migliorie / limiti noti (non bloccanti)
 
-- **`struct P *p = arr` (puntatore a base array-di-struct)** non supportato
-  (`identificatore non dichiarato` sul nome array, probe `s10`). L'init
-  dell'array-di-struct invece ora funziona.
 - **Campo union/struct annidato `u.s.a`** non supportato: `union: un solo
   livello di campo` (probe `v03`).
 - **`char *n; n = "literal";` (riassegnazione da letterale) + `printf("%s",n)`**

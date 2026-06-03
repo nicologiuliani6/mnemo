@@ -897,21 +897,32 @@ procedure __mn_puto_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     push(d, __mn_hist)
     delocal int d = 0
 
-// Pool puntatori Mnemo — generato, N=7 celle (__mn_mem0..__mn_mem6).
-// `__mn_pool_free`: azzera cella; se slot è l’ultima alloc (LIFO), dec ctr.
-// `__mn_pool_alloc`: non fare push(ctr) prima di ctr+=1 — la VM azzera ctr al push
-// e il secondo malloc vedrebbe un contatore corrotto (handle duplicati / slot errati).
+// Pool puntatori Mnemo — generato, N=3 celle (__mn_mem0..__mn_mem2).
+// Header per-blocco (scritto dal lowering): mem{ctr}=nblk; ptr=ctr+1.
 
-procedure __mn_pool_alloc(int ctr, int out_slot, stack __mn_hist, stack __mn_scratch)
-    local int t = 0
-        t += ctr
-        push(out_slot, __mn_hist)
-        out_slot += t
-        ctr += 1
-        push(t, __mn_hist)
-    delocal int t = 0
+procedure __mn_pool_alloc(int ctr, int out_slot, int nblk, stack __mn_hist, stack __mn_scratch)
+    push(out_slot, __mn_hist)
+    out_slot += ctr
+    out_slot += 1
+    ctr += nblk
+    ctr += 1
 
-procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, stack __mn_hist, stack __mn_scratch)
+procedure __mn_pool_free(int slot, int ctr, int nblk, stack __mn_hist, stack __mn_scratch)
+    local int ctr0 = 0
+        ctr0 += ctr
+    local int last = 0
+        last += slot
+        last += nblk
+        if ctr0 == last then
+            ctr -= nblk
+            ctr -= 1
+        fi ctr0 == last
+        push(last, __mn_hist)
+    delocal int last = 0
+        push(ctr0, __mn_hist)
+    delocal int ctr0 = 0
+
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         push(__mn_mem0, __mn_hist)
         __mn_mem0 += val
@@ -924,24 +935,8 @@ procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int _
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += val
     fi slot == 2
-    if slot == 3 then
-        push(__mn_mem3, __mn_hist)
-        __mn_mem3 += val
-    fi slot == 3
-    if slot == 4 then
-        push(__mn_mem4, __mn_hist)
-        __mn_mem4 += val
-    fi slot == 4
-    if slot == 5 then
-        push(__mn_mem5, __mn_hist)
-        __mn_mem5 += val
-    fi slot == 5
-    if slot == 6 then
-        push(__mn_mem6, __mn_hist)
-        __mn_mem6 += val
-    fi slot == 6
 
-procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int out, stack __mn_hist, stack __mn_scratch)
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int out, stack __mn_hist, stack __mn_scratch)
     if slot == 0 then
         local int t = 0
             t += __mn_mem0
@@ -966,107 +961,24 @@ procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, 
             push(t, __mn_hist)
         delocal int t = 0
     fi slot == 2
-    if slot == 3 then
-        local int t = 0
-            t += __mn_mem3
-            push(out, __mn_hist)
-            out += t
-            push(t, __mn_hist)
-        delocal int t = 0
-    fi slot == 3
-    if slot == 4 then
-        local int t = 0
-            t += __mn_mem4
-            push(out, __mn_hist)
-            out += t
-            push(t, __mn_hist)
-        delocal int t = 0
-    fi slot == 4
-    if slot == 5 then
-        local int t = 0
-            t += __mn_mem5
-            push(out, __mn_hist)
-            out += t
-            push(t, __mn_hist)
-        delocal int t = 0
-    fi slot == 5
-    if slot == 6 then
-        local int t = 0
-            t += __mn_mem6
-            push(out, __mn_hist)
-            out += t
-            push(t, __mn_hist)
-        delocal int t = 0
-    fi slot == 6
 
-procedure __mn_pool_free(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int __mn_mem5, int __mn_mem6, int ctr, stack __mn_hist, stack __mn_scratch)
-    local int ctr0 = 0
-        ctr0 += ctr
-        if slot == 0 then
-            push(__mn_mem0, __mn_hist)
-        fi slot == 0
-        if slot == 1 then
-            push(__mn_mem1, __mn_hist)
-        fi slot == 1
-        if slot == 2 then
-            push(__mn_mem2, __mn_hist)
-        fi slot == 2
-        if slot == 3 then
-            push(__mn_mem3, __mn_hist)
-        fi slot == 3
-        if slot == 4 then
-            push(__mn_mem4, __mn_hist)
-        fi slot == 4
-        if slot == 5 then
-            push(__mn_mem5, __mn_hist)
-        fi slot == 5
-        if slot == 6 then
-            push(__mn_mem6, __mn_hist)
-        fi slot == 6
-        if slot == 0 then
-            if ctr0 == 1 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 1
-        fi slot == 0
-        if slot == 1 then
-            if ctr0 == 2 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 2
-        fi slot == 1
-        if slot == 2 then
-            if ctr0 == 3 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 3
-        fi slot == 2
-        if slot == 3 then
-            if ctr0 == 4 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 4
-        fi slot == 3
-        if slot == 4 then
-            if ctr0 == 5 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 5
-        fi slot == 4
-        if slot == 5 then
-            if ctr0 == 6 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 6
-        fi slot == 5
-        if slot == 6 then
-            if ctr0 == 7 then
-                push(ctr, __mn_hist)
-                ctr -= 1
-            fi ctr0 == 7
-        fi slot == 6
-        push(ctr0, __mn_hist)
-    delocal int ctr0 = 0
+// Heap dinamico (vm->mn_pool): slot >= 3 (heap malloc, no alias nominato).
+// Cresce on-demand → niente --ptr-pool-size per malloc-in-loop runtime.
+procedure __mn_pool_store_dyn(int slot, int val, stack __mn_hist, stack __mn_scratch)
+    if slot >= 3 then
+        poolpush(slot, __mn_hist)
+        pooladd(slot, val)
+    fi slot >= 3
+
+procedure __mn_pool_load_dyn(int slot, int out, stack __mn_hist, stack __mn_scratch)
+    if slot >= 3 then
+        local int t = 0
+            poolget(slot, t)
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    fi slot >= 3
 
 procedure main()
     stack __mn_hist
@@ -1075,9 +987,6 @@ procedure main()
     local int __mn_mem1 = 0
     local int __mn_mem2 = 0
     local int __mn_mem3 = 0
-    local int __mn_mem4 = 0
-    local int __mn_mem5 = 0
-    local int __mn_mem6 = 0
     local int __mn_exit = 0
     local int __mn_pool_ctr = 0
     local int __mn_e0 = 0
@@ -1134,12 +1043,6 @@ procedure main()
     delocal int __mn_pool_ctr = 0
     push(__mn_exit, __mn_hist)
     delocal int __mn_exit = 0
-    push(__mn_mem6, __mn_hist)
-    delocal int __mn_mem6 = 0
-    push(__mn_mem5, __mn_hist)
-    delocal int __mn_mem5 = 0
-    push(__mn_mem4, __mn_hist)
-    delocal int __mn_mem4 = 0
     push(__mn_mem3, __mn_hist)
     delocal int __mn_mem3 = 0
     push(__mn_mem2, __mn_hist)

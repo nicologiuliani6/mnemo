@@ -5615,6 +5615,25 @@ def _is_incdec_lvalue_shape(lv: c.Node) -> bool:
     return False
 
 
+def _ptr_struct_stride_words(lv: c.Node, ctx: _Ctx) -> int:
+    """Passo (in word-cell) per aritmetica su puntatore-a-struct: `p++` su
+    `struct P *p` avanza di sizeof(struct P)/4 slot. Scalare → 1."""
+    if not isinstance(lv, c.ID):
+        return 1
+    log = _scope_resolve(ctx, lv.name)
+    pty = ctx.var_types.get(log)
+    if pty is None or _pointer_level(pty) < 1:
+        return 1
+    cur = pty
+    while isinstance(cur, c.PtrDecl):
+        cur = cur.type
+    tag = _struct_tag_for_decl_type(cur, ctx)
+    if tag is None or tag not in ctx.struct_specs:
+        return 1
+    words = _sizeof_struct_tag(tag, ctx) // _SIZEOF_SCALAR
+    return words if words > 0 else 1
+
+
 def _lvalue_inc_dec_prefix_postfix(
     lv: c.Node, op: str, ctx: _Ctx
 ) -> tuple[list[Instr], Var | Imm, list[str]]:
@@ -5625,7 +5644,7 @@ def _lvalue_inc_dec_prefix_postfix(
             "++/--: lvalue richiesto (`x`, `*p`, `s.campo`, `p->campo`, `a[i]`)"
         )
     coord = getattr(lv, "coord", None)
-    c1 = c.Constant("int", "1", coord)
+    c1 = c.Constant("int", str(_ptr_struct_stride_words(lv, ctx)), coord)
     binop = "+" if op in ("p++", "++") else "-"
     ctx.use_hist = True
     if op in ("++", "--"):
@@ -5841,6 +5860,23 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             return [], Var(_phys(ctx, log)), []
         if expr.name in ctx.enum_constants:
             return [], Imm(ctx.enum_constants[expr.name]), []
+        if log in ctx.struct_array_info:
+            # Decay array-di-struct → indirizzo elemento 0 (`&a[0]`): slot del
+            # primo campo del primo elemento.
+            sa_tag, _sa_dims, _sa_tot = ctx.struct_array_info[log]
+            spec = ctx.struct_specs.get(sa_tag, [])
+            if spec:
+                cell = f"{log}__0__{spec[0][0]}"
+                s0 = ctx.slot_index.get(cell)
+                if (
+                    s0 is None
+                    and ctx.mem_layout is not None
+                    and ("__file__", cell) in ctx.mem_layout.slot_of
+                ):
+                    s0 = ctx.mem_layout.slot_of[("__file__", cell)]
+                if s0 is not None:
+                    ctx.addr_taken_logicals.add(cell)
+                    return [], Imm(s0), []
         raise MnemoCompileError(f"identificatore non dichiarato: {expr.name!r}")
 
     if isinstance(expr, c.StructRef):
@@ -6410,6 +6446,63 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 ctx.addr_taken_logicals.add(cell)
                 return [], Imm(slot_id), []
             if isinstance(inner, c.ArrayRef) and isinstance(inner.name, c.ID):
+                # `&a[K]` con `a` array-di-struct: indirizzo = slot di
+                # `a__K__<primo_campo>` (puntatore a struct = slot base elemento).
+                sa_log, sa_meta = _resolve_struct_array_target(inner.name, ctx)
+                if sa_meta is not None:
+                    sa_tag, _sa_dims, sa_tot = sa_meta
+                    spec = ctx.struct_specs.get(sa_tag, [])
+                    if not spec:
+                        raise MnemoCompileError(
+                            f"&{sa_log}[..]: metadati struct {sa_tag!r} mancanti"
+                        )
+                    first_field = spec[0][0]
+
+                    def _sa_first_slot(idx: int) -> int | None:
+                        cell = f"{sa_log}__{idx}__{first_field}"
+                        s = ctx.slot_index.get(cell)
+                        if (
+                            s is None
+                            and ctx.mem_layout is not None
+                            and ("__file__", cell) in ctx.mem_layout.slot_of
+                        ):
+                            s = ctx.mem_layout.slot_of[("__file__", cell)]
+                        return s
+
+                    if isinstance(inner.subscript, c.Constant):
+                        i_const = int(inner.subscript.value)
+                        if i_const < 0 or i_const >= sa_tot:
+                            raise MnemoCompileError(
+                                f"&{sa_log}[{i_const}]: indice fuori range "
+                                f"(0..{sa_tot - 1})"
+                            )
+                        s0 = _sa_first_slot(i_const)
+                        if s0 is None:
+                            raise MnemoCompileError(
+                                f"&{sa_log}[{i_const}]: slot mancante"
+                            )
+                        ctx.addr_taken_logicals.add(
+                            f"{sa_log}__{i_const}__{first_field}"
+                        )
+                        return [], Imm(s0), []
+                    # Indice runtime: base + i*stride (stride = passo tra elementi).
+                    base_slot = _sa_first_slot(0)
+                    nxt_slot = _sa_first_slot(1) if sa_tot > 1 else None
+                    if base_slot is None:
+                        raise MnemoCompileError(
+                            f"&{sa_log}[i]: slot base mancante"
+                        )
+                    stride = (nxt_slot - base_slot) if nxt_slot is not None else len(spec)
+                    co = getattr(inner, "coord", None)
+                    idx_t: c.Node = inner.subscript
+                    if stride != 1:
+                        idx_t = c.BinaryOp(
+                            "*", idx_t, c.Constant("int", str(stride)), co
+                        )
+                    synth = c.BinaryOp(
+                        "+", c.Constant("int", str(base_slot)), idx_t, co
+                    )
+                    return _eval_expr(synth, ctx)
                 # `&a[K]` ≡ `a + K` (l-value indirizzo del K-esimo elemento).
                 synth = c.BinaryOp(op="+", left=inner.name, right=inner.subscript)
                 return _eval_expr(synth, ctx)
@@ -6558,6 +6651,28 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 ctx.use_scratch = True
             return ins + post, Var(t), tm1 + tm2 + [t]
         if expr.op in ("+", "-"):
+            # Aritmetica su puntatore-a-struct: `p ± i` scala `i` per il passo
+            # in word-cell (sizeof(struct)/4). `p`/`q` scalari → stride 1 (no-op).
+            _sw_l = _ptr_struct_stride_words(expr.left, ctx)
+            _sw_r = _ptr_struct_stride_words(expr.right, ctx)
+            _co = expr.coord
+            if _sw_l > 1 and _sw_r == 1:
+                scaled = c.BinaryOp(
+                    "*", expr.right, c.Constant("int", str(_sw_l), _co), _co
+                )
+                i1, o1, tm1 = _eval_expr(expr.left, ctx)
+                i2, o2, tm2 = _eval_expr(scaled, ctx)
+                t = ctx.fresh_temp()
+                op_eq = IAddEq(t, o2) if expr.op == "+" else ISubEq(t, o2)
+                return i1 + i2 + [IAddEq(t, o1), op_eq], Var(t), tm1 + tm2 + [t]
+            if _sw_r > 1 and _sw_l == 1 and expr.op == "+":
+                scaled = c.BinaryOp(
+                    "*", expr.left, c.Constant("int", str(_sw_r), _co), _co
+                )
+                i1, o1, tm1 = _eval_expr(scaled, ctx)
+                i2, o2, tm2 = _eval_expr(expr.right, ctx)
+                t = ctx.fresh_temp()
+                return i1 + i2 + [IAddEq(t, o1), IAddEq(t, o2)], Var(t), tm1 + tm2 + [t]
             # Due chiamate `f(...)+g(...)` condividono le celle __mn_mem*: la prima call
             # altera i parametri (es. `n` in mem0); senza ripristino, la seconda usa valori
             # sbagliati (es. `fib(n-1)+fib(n-2)` → il secondo argomento legge `n` già corrotto).
