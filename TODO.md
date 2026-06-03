@@ -1,11 +1,5 @@
 # TODO
 
-## Bug aperti (verificati, fix rischioso/non banale)
-
-- **Confronti unsigned vs valore non-zero con high-bit** (es. `u1 < u2` con
-  u1≥2^31): non coperti (Mnemo confronto signed). Il caso comune `unsigned <,>= 0`
-  e l'aritmetica char/unsigned-char (wrap 8 bit) sono ORA gestiti.
-
 ## Ottimizzazioni mancanti
 
 - **opt-uncall su funzioni pool che scrivono attraverso un ptr-param**:

@@ -9159,6 +9159,35 @@ def _fold_unsigned_cmp_zero(
     return pre, (vn, "==", "0"), tm
 
 
+def _u32_magnitude_var(
+    expr: c.Node, ctx: _Ctx
+) -> tuple[list[Instr], str, list[str]]:
+    """Riduce un'espressione unsigned alla sua magnitudo a 32 bit in [0, 2^32),
+    così un confronto SIGNED sui due valori ridotti dà l'ordine UNSIGNED corretto.
+    Costante → ridotta a compile-time; variabile → `m = v; if v < 0 then m += 2^32`
+    (i valori unsigned sono memorizzati sign-extended a 32 bit)."""
+    cv = _int_constant_value(expr)
+    if cv is not None:
+        t = ctx.fresh_temp()
+        return [IConst(t, cv & 0xFFFFFFFF)], t, [t]
+    pre, vn, tm = _eval_to_var(expr, ctx)
+    m = ctx.fresh_temp()
+    ctx.use_hist = True
+    out = list(pre) + [IHistPush(ctx.hist, m), IAddEq(m, Var(vn))]
+    out.append(IIfKairos(vn, "<", "0", [IAddEq(m, Imm(4294967296))], None))
+    return out, m, tm + [m]
+
+
+def _lower_unsigned_relational(
+    expr: c.BinaryOp, ctx: _Ctx
+) -> tuple[list[Instr], tuple[str, CmpOp, str], list[str]]:
+    """`a {<,<=,>,>=} b` con almeno un operando unsigned: confronto unsigned a
+    32 bit (gestisce il caso high-bit, es. 0xFFFFFFFF > 1)."""
+    pre_l, ml, tm_l = _u32_magnitude_var(expr.left, ctx)
+    pre_r, mr, tm_r = _u32_magnitude_var(expr.right, ctx)
+    return pre_l + pre_r, (ml, expr.op, mr), tm_l + tm_r  # type: ignore[return-value]
+
+
 def _lower_predicate_simple(
     expr: c.Node, ctx: _Ctx
 ) -> tuple[list[Instr], tuple[str, CmpOp, str], list[str]]:
@@ -9191,6 +9220,15 @@ def _lower_predicate_simple(
             folded = _fold_unsigned_cmp_zero(expr, ctx)
             if folded is not None:
                 return folded
+            # Confronto relazionale unsigned (32 bit): se un operando è unsigned
+            # (usual arithmetic conversions → confronto unsigned) e non è il caso
+            # banale `U op 0` (già foldato sopra), riduci a magnitudo 32-bit per
+            # gestire l'high-bit (es. 0xFFFFFFFF > 1 deve dare vero).
+            if expr.op in ("<", "<=", ">", ">=") and (
+                _expr_is_unsigned(expr.left, ctx)
+                or _expr_is_unsigned(expr.right, ctx)
+            ):
+                return _lower_unsigned_relational(expr, ctx)
             pre_l, lhs_s, tm_l = _kairos_atom(expr.left, ctx)
             pre_r, rhs_s, tm_r = _kairos_atom(expr.right, ctx)
             op = expr.op
