@@ -116,9 +116,11 @@ def _rewrite_generic(text: str) -> str:
         parts = _split_top_level_commas(inner)
         if len(parts) < 2:
             raise MnemoCompileError("_Generic: serve expr + almeno 1 clausola")
-        # parts[0] = expr, parts[1..] = "Type: value" o "default: value"
-        chosen: str | None = None
-        default_val: str | None = None
+        # parts[0] = expr, parts[1..] = "Type: value" o "default: value".
+        # Riscrittura in un marker parsabile da pycparser; la *risoluzione del
+        # tipo del selettore* avviene in c_lower (dove i tipi sono noti):
+        #   __mn_generic((EXPR), "T1", (V1), ..., "default", (VD))
+        marker_args: list[str] = ["(" + parts[0].strip() + ")"]
         for clause in parts[1:]:
             # split type from value on first top-level ':'
             colon_depth = 0
@@ -136,16 +138,11 @@ def _rewrite_generic(text: str) -> str:
             ty = clause[:colon_idx].strip()
             val = clause[colon_idx + 1:].strip()
             ty_norm = " ".join(ty.split())
-            if ty_norm == "default":
-                default_val = val
-            elif chosen is None and ty_norm in _GENERIC_INT_TYPES:
-                chosen = val
-        pick = chosen if chosen is not None else default_val
-        if pick is None:
-            raise MnemoCompileError(
-                "_Generic: nessuna clausola int-supportata e nessun default"
-            )
-        out.append("(" + pick + ")")
+            # Escape per il letterale stringa C (il tag-tipo non contiene `"`,
+            # ma `\` improbabile; normalizziamo gli spazi già fatti).
+            marker_args.append('"' + ty_norm.replace("\\", "\\\\") + '"')
+            marker_args.append("(" + val + ")")
+        out.append("__mn_generic(" + ", ".join(marker_args) + ")")
         pos = i + 1
     return "".join(out)
 

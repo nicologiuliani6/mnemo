@@ -4029,6 +4029,9 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
         raise MnemoCompileError("printf: callee non valido")
     el = node.args
     exprs = list(el.exprs) if el is not None else []
+    # Risolvi i marker `__mn_generic` (`_Generic`) negli argomenti, così gli
+    # ispettori di forma (%s/%d/%c) vedono il valore scelto e non il marker.
+    exprs = [_maybe_resolve_generic(e, ctx) for e in exprs]
     if not exprs:
         raise MnemoCompileError("printf: serve almeno la stringa di formato")
     fmt_ex = exprs[0]
@@ -5950,7 +5953,156 @@ def _resolve_indirect_callee(
     )
 
 
+_GENERIC_TYPE_ALIASES: dict[str, str] = {
+    "signed": "int", "signed int": "int", "int": "int",
+    "unsigned": "unsigned int", "unsigned int": "unsigned int",
+    "short": "short", "short int": "short",
+    "signed short": "short", "signed short int": "short",
+    "unsigned short": "unsigned short", "unsigned short int": "unsigned short",
+    "long": "long", "long int": "long",
+    "signed long": "long", "signed long int": "long",
+    "unsigned long": "unsigned long", "unsigned long int": "unsigned long",
+    "long long": "long long", "long long int": "long long",
+    "signed long long": "long long", "signed long long int": "long long",
+    "unsigned long long": "unsigned long long",
+    "unsigned long long int": "unsigned long long",
+    "char": "char", "signed char": "signed char", "unsigned char": "unsigned char",
+    "_Bool": "_Bool", "bool": "_Bool",
+    "void": "void", "float": "float", "double": "double",
+    "long double": "long double",
+}
+
+
+def _canon_type_str(s: str) -> str:
+    """Canonicalizza una stringa-tipo C per il match di `_Generic` (collassa gli
+    equivalenti: `unsigned`≡`unsigned int`, `signed int`≡`int`, ecc.)."""
+    s = " ".join(s.split())
+    if s.endswith("*"):
+        return _canon_type_str(s[:-1].strip()) + "*"
+    s = s.replace("const ", "").replace("volatile ", "").strip()
+    return _GENERIC_TYPE_ALIASES.get(s, s)
+
+
+def _type_node_canon(node: c.Node | None, ctx: _Ctx) -> str | None:
+    """Stringa-tipo canonica per un nodo-tipo (TypeDecl/PtrDecl/Typename)."""
+    if node is None:
+        return None
+    cur: c.Node = node.type if isinstance(node, c.Typename) else node
+    lvl = 0
+    while isinstance(cur, c.PtrDecl):
+        lvl += 1
+        cur = cur.type
+    while isinstance(cur, c.ArrayDecl):
+        lvl += 1
+        cur = cur.type
+    if isinstance(cur, c.TypeDecl):
+        cur = cur.type
+    if isinstance(cur, c.IdentifierType):
+        try:
+            names = _expand_typedef_names(list(cur.names), ctx.typedef_map)
+        except MnemoCompileError:
+            names = list(cur.names)
+        base = _canon_type_str(" ".join(names))
+    elif isinstance(cur, c.Struct):
+        base = "struct " + (cur.name or "?")
+    elif isinstance(cur, c.Union):
+        base = "union " + (cur.name or "?")
+    elif isinstance(cur, c.Enum):
+        base = "int"
+    else:
+        return None
+    return base + "*" * lvl
+
+
+def _generic_selector_canon(expr: c.Node, ctx: _Ctx) -> str:
+    """Tipo canonico dell'espressione di controllo di `_Generic`."""
+    if isinstance(expr, c.Cast):
+        ck = _type_node_canon(expr.to_type, ctx)
+        return ck if ck is not None else "int"
+    if isinstance(expr, c.Constant):
+        if expr.type == "char":
+            return "int"  # C: un carattere costante ha tipo int
+        if expr.type == "string":
+            return "char*"
+        if expr.type == "int":
+            v = expr.value.lower()
+            has_u = "u" in v
+            lc = v.count("l")
+            if has_u and lc >= 2:
+                return "unsigned long long"
+            if has_u and lc == 1:
+                return "unsigned long"
+            if has_u:
+                return "unsigned int"
+            if lc >= 2:
+                return "long long"
+            if lc == 1:
+                return "long"
+            return "int"
+        if expr.type in ("float", "double"):
+            return "float" if expr.value.lower().endswith("f") else "double"
+    if isinstance(expr, c.ID):
+        log = _scope_resolve(ctx, expr.name)
+        ty = ctx.var_types.get(log)
+        ck = _type_node_canon(ty, ctx)
+        if ck is not None:
+            return ck
+        if log in ctx.struct_tag_of_var:
+            return "struct " + ctx.struct_tag_of_var[log]
+        if log in ctx.union_tag_of_var:
+            return "union " + ctx.union_tag_of_var[log]
+    return "int"
+
+
+def _resolve_generic_call(expr: c.FuncCall, ctx: _Ctx) -> c.Node:
+    """Risolve il marker `__mn_generic((EXPR), "T1", (V1), …, "default", (VD))`
+    al ramo il cui tipo combacia col tipo di EXPR; altrimenti `default`."""
+    args = list(expr.args.exprs) if expr.args is not None else []
+    if len(args) < 3:
+        raise MnemoCompileError("_Generic: marker malformato")
+    key = _generic_selector_canon(args[0], ctx)
+    chosen: c.Node | None = None
+    default_val: c.Node | None = None
+    i = 1
+    while i + 1 < len(args) + 1 and i + 1 <= len(args):
+        tag_node = args[i]
+        val_node = args[i + 1]
+        i += 2
+        if not (isinstance(tag_node, c.Constant) and tag_node.type == "string"):
+            raise MnemoCompileError("_Generic: tag-tipo non valido")
+        tag = _literal_c_string(tag_node)
+        ctag = _canon_type_str(tag)
+        if ctag == "default":
+            default_val = val_node
+        elif chosen is None and ctag == key:
+            chosen = val_node
+    pick = chosen if chosen is not None else default_val
+    if pick is None:
+        raise MnemoCompileError(
+            f"_Generic: nessuna clausola compatibile col tipo {key!r} e nessun default"
+        )
+    return pick
+
+
+def _maybe_resolve_generic(expr: c.Node, ctx: _Ctx) -> c.Node:
+    """Se `expr` è il marker `__mn_generic` (da `_Generic`), risolvilo al ramo
+    scelto; risolve ricorsivamente in caso di marker annidati."""
+    while (
+        isinstance(expr, c.FuncCall)
+        and isinstance(expr.name, c.ID)
+        and expr.name.name == "__mn_generic"
+    ):
+        expr = _resolve_generic_call(expr, ctx)
+    return expr
+
+
 def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[str]]:
+    if (
+        isinstance(expr, c.FuncCall)
+        and isinstance(expr.name, c.ID)
+        and expr.name.name == "__mn_generic"
+    ):
+        return _eval_expr(_resolve_generic_call(expr, ctx), ctx)
     if isinstance(expr, c.Constant):
         if expr.type == "string":
             raise MnemoCompileError(
@@ -11998,6 +12150,10 @@ _PRINTF_LIKE_FORMAT_ARG0 = frozenset({
 # stringhe a compile-time per calcolare field-index.
 _STRING_LITERAL_RAW_ARG_CALLEES = frozenset({
     "__mn_offsetof_str",
+    # `_Generic` marker: i tag-tipo sono letterali stringa che il resolver
+    # (`_resolve_generic_call`) interpreta come nomi-tipo; non vanno hoistati
+    # a `char *`.
+    "__mn_generic",
     # memcpy/memmove copiano da letterale a char[] byte-per-byte (vedi
     # `_try_lower_memcpy_memset` ramo `Constant string`). Senza letterale
     # diretto la lowering fallisce / il rt-call inesiste.

@@ -25,9 +25,6 @@
   (ROS array per letterale, dispatch runtime su `printf("%s", n)`). Resta non
   supportato `return n` di un char* + `printf("%s", f(...))` (arg FuncCall) in
   un'altra funzione.
-- **`_Generic` non distingue `char` da `int`.** Mnemo aliasa `char` a `int`
-  nel type-system → `_Generic((c), char:…, int:…)` sceglie sempre `int`.
-  Probe `p22`. Richiede un tag di tipo `char` separato nel lowering.
 - **Array di fn-ptr a indice RUNTIME** (`ops[i](…)` con i variabile): solo
   l'indice COSTANTE è risolto a compile-time. Il runtime servirebbe una
   dispatch-chain sui candidati. Sintassi rara.
