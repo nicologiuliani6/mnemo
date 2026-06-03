@@ -20,8 +20,6 @@
 
 ## Migliorie / limiti noti (non bloccanti)
 
-- **Campo union/struct annidato `u.s.a`** non supportato: `union: un solo
-  livello di campo` (probe `v03`).
 - **`char *n; n = "literal";` riassegnata + ritorno cross-funzione**: la
   riassegnazione in-funzione (incluso dentro `if`/`switch`/loop) ora funziona
   (ROS array per letterale, dispatch runtime su `printf("%s", n)`). Resta non

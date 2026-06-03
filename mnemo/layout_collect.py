@@ -881,7 +881,9 @@ def compute_program_mem_layout(
         if isinstance(node.type, c.Union):
             un = node.type
             if un.decls and un.name:
-                ctx.union_specs[un.name] = L._union_scalar_fields(un)
+                ctx.union_specs[un.name] = L._union_scalar_fields(
+                    un, struct_specs=ctx.struct_specs, typedef_map=ctx.typedef_map
+                )
             return
 
         if isinstance(node.type, c.Enum) and node.type.values:
@@ -914,6 +916,12 @@ def compute_program_mem_layout(
             ctx.union_tag_of_var[logical] = ut
             ctx.int_locals.add(logical)
             alloc(fn, logical)
+            # Union multi-word (membro struct annidato `u.s.a`): celle extra
+            # `<logical>__w{k}` per gli offset > 0 (offset 0 = cella base).
+            for k in range(1, L._union_word_count(ut, ctx)):
+                cell = L._union_member_cell(logical, k)
+                ctx.int_locals.add(cell)
+                alloc(fn, cell)
             return
 
         st_tag = L._struct_tag_for_decl_type(node.type, ctx)
@@ -1040,10 +1048,11 @@ def compute_program_mem_layout(
         if isinstance(node, c.Typedef):
             ctx.typedef_map[node.name] = node.type
             L._maybe_register_struct_from_typedef(
-                node.name, node.type, ctx.struct_specs
+                node.name, node.type, ctx.struct_specs, typedef_map=ctx.typedef_map
             )
             L._maybe_register_union_from_typedef(
-                node.name, node.type, ctx.union_specs
+                node.name, node.type, ctx.union_specs,
+                struct_specs=ctx.struct_specs, typedef_map=ctx.typedef_map,
             )
             u = L._strip_typedecl(node.type)
             if isinstance(u, c.Enum) and u.values:

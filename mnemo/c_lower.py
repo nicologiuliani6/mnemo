@@ -629,8 +629,15 @@ def _flatten_struct_fields(
     return out
 
 
-def _union_flat_fields(un: c.Union, prefix: str = "") -> list[tuple[str, c.Node]]:
-    """Campi union appiattiti (struct/union annidati come per struct)."""
+def _union_flat_fields(
+    un: c.Union,
+    prefix: str = "",
+    struct_specs: dict[str, list[tuple[str, c.Node]]] | None = None,
+    typedef_map: dict[str, c.Node] | None = None,
+) -> list[tuple[str, c.Node]]:
+    """Campi union appiattiti (struct/union annidati come per struct). Risolve
+    i membri struct sia inline che per-tag (`struct Inner s` con Inner in
+    struct_specs) e via typedef, come `_flatten_struct_fields`."""
     out: list[tuple[str, c.Node]] = []
     for d in un.decls or []:
         if not isinstance(d, c.Decl) or not d.name:
@@ -638,9 +645,47 @@ def _union_flat_fields(un: c.Union, prefix: str = "") -> list[tuple[str, c.Node]
         fname = str(d.name)
         inner = _strip_typedecl(d.type)
         if isinstance(inner, c.Struct) and inner.decls:
-            out.extend(_flatten_struct_fields(inner, prefix + fname + "__"))
+            out.extend(
+                _flatten_struct_fields(
+                    inner, prefix + fname + "__",
+                    struct_specs=struct_specs, typedef_map=typedef_map,
+                )
+            )
+        elif (
+            struct_specs is not None
+            and isinstance(inner, c.Struct)
+            and inner.name
+            and inner.name in struct_specs
+        ):
+            for sub_fn, sub_fty in struct_specs[inner.name]:
+                out.append((prefix + fname + "__" + sub_fn, sub_fty))
+        elif (
+            struct_specs is not None
+            and typedef_map is not None
+            and isinstance(inner, c.IdentifierType)
+            and len(inner.names) == 1
+            and inner.names[0] in typedef_map
+        ):
+            leaf = _follow_typedef_chain(list(inner.names), typedef_map, set())
+            if isinstance(leaf, c.Struct) and leaf.name and leaf.name in struct_specs:
+                for sub_fn, sub_fty in struct_specs[leaf.name]:
+                    out.append((prefix + fname + "__" + sub_fn, sub_fty))
+            elif isinstance(leaf, c.Struct) and leaf.decls:
+                out.extend(
+                    _flatten_struct_fields(
+                        leaf, prefix + fname + "__",
+                        struct_specs=struct_specs, typedef_map=typedef_map,
+                    )
+                )
+            else:
+                out.append((prefix + fname, d.type))
         elif isinstance(inner, c.Union) and inner.decls:
-            out.extend(_union_flat_fields(inner, prefix + fname + "__"))
+            out.extend(
+                _union_flat_fields(
+                    inner, prefix + fname + "__",
+                    struct_specs=struct_specs, typedef_map=typedef_map,
+                )
+            )
         else:
             out.append((prefix + fname, d.type))
     if not out:
@@ -648,8 +693,12 @@ def _union_flat_fields(un: c.Union, prefix: str = "") -> list[tuple[str, c.Node]
     return out
 
 
-def _union_scalar_fields(un: c.Union) -> list[tuple[str, c.Node]]:
-    return _union_flat_fields(un)
+def _union_scalar_fields(
+    un: c.Union,
+    struct_specs: dict[str, list[tuple[str, c.Node]]] | None = None,
+    typedef_map: dict[str, c.Node] | None = None,
+) -> list[tuple[str, c.Node]]:
+    return _union_flat_fields(un, struct_specs=struct_specs, typedef_map=typedef_map)
 
 
 def _maybe_register_struct_from_typedef(
@@ -667,12 +716,18 @@ def _maybe_register_struct_from_typedef(
 
 
 def _maybe_register_union_from_typedef(
-    name: str, type_node: c.Node, union_specs: dict[str, list[tuple[str, c.Node]]]
+    name: str,
+    type_node: c.Node,
+    union_specs: dict[str, list[tuple[str, c.Node]]],
+    struct_specs: dict[str, list[tuple[str, c.Node]]] | None = None,
+    typedef_map: dict[str, c.Node] | None = None,
 ) -> None:
     u = _strip_typedecl(type_node)
     if isinstance(u, c.Union) and u.decls:
         tag = u.name if u.name else name
-        union_specs[tag] = _union_scalar_fields(u)
+        union_specs[tag] = _union_scalar_fields(
+            u, struct_specs=struct_specs, typedef_map=typedef_map
+        )
 
 
 def collect_file_typedefs_structs_unions_enums(
@@ -698,7 +753,9 @@ def collect_file_typedefs_structs_unions_enums(
     for ext in ast.ext:
         if isinstance(ext, c.Typedef):
             _maybe_register_struct_from_typedef(ext.name, ext.type, specs, typedef_map=td)
-            _maybe_register_union_from_typedef(ext.name, ext.type, union_specs)
+            _maybe_register_union_from_typedef(
+                ext.name, ext.type, union_specs, struct_specs=specs, typedef_map=td
+            )
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct):
             st = ext.type
             if st.decls and st.name:
@@ -708,7 +765,9 @@ def collect_file_typedefs_structs_unions_enums(
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Union):
             un = ext.type
             if un.decls and un.name:
-                union_specs[un.name] = _union_scalar_fields(un)
+                union_specs[un.name] = _union_scalar_fields(
+                    un, struct_specs=specs, typedef_map=td
+                )
         elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Enum):
             en = ext.type
             if en.values:
@@ -3030,6 +3089,38 @@ def _structref_base_and_path(expr: c.StructRef) -> tuple[str, list[str]]:
     if not isinstance(cur, c.ID):
         raise MnemoCompileError("la base di `.campo` deve essere un identificatore")
     return cur.name, parts
+
+
+def _union_member_word_offset(tag: str, mangled: str, ctx: _Ctx) -> int:
+    """Offset (in word-cell) di un campo union FLATTENATO `<membro>__<sub>`.
+    Tutti i membri union partono a offset 0; dentro un membro-struct i sotto-campi
+    hanno l'offset di struct. Lo spec è già appiattito (`_union_flat_fields`),
+    in ordine di memoria → offset = somma cumulativa dei sizeof nel gruppo-membro."""
+    spec = ctx.union_specs.get(tag)
+    if not spec:
+        raise MnemoCompileError(f"union {tag!r}: metadati mancanti")
+    cur_member: str | None = None
+    off_b = 0
+    for fn, fty in spec:
+        member = fn.split("__", 1)[0]
+        if member != cur_member:
+            cur_member = member
+            off_b = 0
+        if fn == mangled:
+            return off_b // _SIZEOF_SCALAR
+        off_b += _sizeof_of_c_type_node(fty, ctx)
+    raise MnemoCompileError(f"union {tag}: campo {mangled!r} assente")
+
+
+def _union_word_count(tag: str, ctx: _Ctx) -> int:
+    """Numero di word-cell di una union = ceil(sizeof_union / 4)."""
+    return (_sizeof_union_tag(tag, ctx) + _SIZEOF_SCALAR - 1) // _SIZEOF_SCALAR
+
+
+def _union_member_cell(base_log: str, off_w: int) -> str:
+    """Cella per il campo a offset `off_w`: la base resta la cella `base_log`
+    (offset 0, retro-compat con union a cella singola); offset>0 → `<base>__w{k}`."""
+    return base_log if off_w == 0 else f"{base_log}__w{off_w}"
 
 
 def _field_word_offset(tag: str, mangled: str, ctx: _Ctx) -> int:
@@ -5437,7 +5528,14 @@ def _sizeof_union_tag(tag: str, ctx: _Ctx) -> int:
         raise MnemoCompileError(
             f"sizeof(union …): tag {tag!r} sconosciuto o definizione mancante"
         )
-    return max(_sizeof_of_c_type_node(fty, ctx) for _fn, fty in fields)
+    # Lo spec è appiattito (`s__a`, `s__b`, `raw`): la dimensione di un membro
+    # struct = somma dei suoi sotto-campi. Raggruppa per membro top-level,
+    # somma dentro al gruppo, prendi il massimo.
+    by_member: dict[str, int] = {}
+    for fn, fty in fields:
+        member = fn.split("__", 1)[0]
+        by_member[member] = by_member.get(member, 0) + _sizeof_of_c_type_node(fty, ctx)
+    return max(by_member.values())
 
 
 def _sizeof_of_c_type_node(node: c.Node, ctx: _Ctx) -> int:
@@ -5993,19 +6091,18 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         base_log = _scope_resolve(ctx, base)
         mangled = "__".join(path)
         if base_log in ctx.union_tag_of_var:
-            if len(path) != 1:
-                raise MnemoCompileError("union: un solo livello di campo")
-            field = path[0]
             tag = ctx.union_tag_of_var[base_log]
             spec = ctx.union_specs.get(tag)
             if not spec:
                 raise MnemoCompileError(f"union {tag!r}: metadati mancanti")
             fnames = [fn for fn, _ in spec]
-            if field not in fnames:
-                raise MnemoCompileError(f"union {tag}: membro {field!r} assente")
+            if mangled not in fnames:
+                raise MnemoCompileError(f"union {tag}: membro {mangled!r} assente")
             if base_log not in ctx.int_locals:
                 raise MnemoCompileError(f"union {base!r}: storage mancante")
-            return [], Var(_phys(ctx, base_log)), []
+            off_w = _union_member_word_offset(tag, mangled, ctx)
+            cell = _union_member_cell(base_log, off_w)
+            return [], Var(_phys(ctx, cell)), []
         if base_log not in ctx.struct_tag_of_var:
             raise MnemoCompileError(f"{base!r} non è una variabile struct")
         tag = ctx.struct_tag_of_var[base_log]
@@ -9675,8 +9772,13 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
 
     if isinstance(node, c.Typedef):
         ctx.typedef_map[node.name] = node.type
-        _maybe_register_struct_from_typedef(node.name, node.type, ctx.struct_specs)
-        _maybe_register_union_from_typedef(node.name, node.type, ctx.union_specs)
+        _maybe_register_struct_from_typedef(
+            node.name, node.type, ctx.struct_specs, typedef_map=ctx.typedef_map
+        )
+        _maybe_register_union_from_typedef(
+            node.name, node.type, ctx.union_specs,
+            struct_specs=ctx.struct_specs, typedef_map=ctx.typedef_map,
+        )
         u = _strip_typedecl(node.type)
         if isinstance(u, c.Enum) and u.values:
             ctx.enum_constants.update(_enum_constants_from_enum(u))
@@ -9687,7 +9789,10 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             un = node.type
             if un.decls:
                 if un.name:
-                    ctx.union_specs[un.name] = _union_scalar_fields(un)
+                    ctx.union_specs[un.name] = _union_scalar_fields(
+                        un, struct_specs=ctx.struct_specs,
+                        typedef_map=ctx.typedef_map,
+                    )
                 return []
             return []
 
@@ -9728,6 +9833,12 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             ctx.int_locals.add(logical)
             if ctx.mem_layout is None:
                 ctx.decl_order.append(logical)
+            # Celle extra per union multi-word (membro struct annidato).
+            for _k in range(1, _union_word_count(ut, ctx)):
+                _ucell = _union_member_cell(logical, _k)
+                ctx.int_locals.add(_ucell)
+                if ctx.mem_layout is None:
+                    ctx.decl_order.append(_ucell)
             ctx.var_types[logical] = node.type
             if node.init is not None:
                 ini_u = node.init
@@ -10511,15 +10622,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             base_log = _scope_resolve(ctx, base)
             mangled = "__".join(path)
             if base_log in ctx.union_tag_of_var:
-                if len(path) != 1:
-                    raise MnemoCompileError("union: un solo livello di campo")
-                field = path[0]
                 tag = ctx.union_tag_of_var[base_log]
                 spec = ctx.union_specs.get(tag)
-                if not spec or field not in [fn for fn, _ in spec]:
-                    raise MnemoCompileError(f"union {tag}: membro {field!r} assente")
+                if not spec or mangled not in [fn for fn, _ in spec]:
+                    raise MnemoCompileError(f"union {tag}: membro {mangled!r} assente")
+                off_w = _union_member_word_offset(tag, mangled, ctx)
+                cell = _union_member_cell(base_log, off_w)
                 if node.op == "=":
-                    return _lower_assign(_phys(ctx, base_log), node.rvalue, ctx)
+                    return _lower_assign(_phys(ctx, cell), node.rvalue, ctx)
                 if node.op in _COMPOUND_ASSIGN_OPS:
                     rhs = c.BinaryOp(
                         _COMPOUND_ASSIGN_OPS[node.op],
@@ -10527,7 +10637,7 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         node.rvalue,
                         node.coord,
                     )
-                    return _lower_assign(_phys(ctx, base_log), rhs, ctx)
+                    return _lower_assign(_phys(ctx, cell), rhs, ctx)
                 raise MnemoCompileError(f"assegnamento union con {node.op!r} non supportato")
             if base_log not in ctx.struct_tag_of_var:
                 raise MnemoCompileError(f"{base!r} non è una variabile struct")
