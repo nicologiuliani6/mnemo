@@ -1,5 +1,28 @@
 # TODO
 
+## Stato
+
+Nessun gap funzionale aperto. Mnemo è **1:1 con gcc** sull'intero subset C
+reversibile, verificato a corpus (`c_probe/`: 155/155 byte-byte, 0 mismatch) +
+gate (`make test-gcc-compat` 189/189, pytest 25/25, encrypt/des invertibili).
+Coperto: puntatori (multi-livello, aritmetica, callback/fn-ptr-param,
+row-pointer `int(*r)[N]`, doppia-indirezione), strutture (annidate,
+array-di-struct + `a[i].field` su puntatore, union/union-in-struct, copia,
+ritorno, campo-array annidato `g.rows[i].cells[j]`), passaggio (valore/ptr/
+array/struct, ricorsione), aritmetica interi (unsigned wrap mod 2^32, shift
+signed aritmetico), stringhe char*/char[] (riassegnazione, return, `printf("%s",
+f())`), control flow completo (switch+return, fn-ptr array a indice runtime).
+
+Restano solo le divergenze qui sotto.
+
+## Divergenze per design / comportamento non-definito (non bug)
+
+- **`int` è 64-bit**: l'overflow `int` signed (UB in C) non wrappa a 32-bit.
+  L'`unsigned` invece wrappa correttamente mod 2^32.
+- **`sizeof(T*)` = 4** (modello a word: puntatore = 1 cella).
+- **Ordine di valutazione degli argomenti** L-to-R (gcc x86-64 R-to-L) —
+  unspecified in C; rileva solo con argomenti che hanno side-effect.
+
 ## Bounded-by-design (non bug)
 
 - **`STACK_MAX=4096`** (`stack.h`, lo `Stack` di `Var*` usato da
