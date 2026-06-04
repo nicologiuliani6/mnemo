@@ -1,4 +1,3 @@
-// SKIP: struct-array annidato con campo-array (g.rows[i].cells[j]) niche
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

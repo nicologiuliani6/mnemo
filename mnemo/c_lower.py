@@ -6381,6 +6381,68 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
+        # `arr[i].arrfield[j]` con arr array-di-struct e arrfield campo-ARRAY
+        # dell'elemento (es. `g.rows[i].cells[j]`). Cella flat
+        # `<arr>__<i>__<field>__<j>`; const → diretta, runtime → pool load a
+        # base + i*row_words + j.
+        nmn = expr.name
+        if (
+            isinstance(nmn, c.StructRef)
+            and nmn.type == "."
+            and isinstance(nmn.name, c.ArrayRef)
+            and isinstance(nmn.field, c.ID)
+        ):
+            na_log, na_meta = _resolve_struct_array_target(nmn.name.name, ctx)
+            if na_meta is not None:
+                na_tag, _na_dims, na_tot = na_meta
+                afield = nmn.field.name
+                na_spec = ctx.struct_specs.get(na_tag, [])
+                na_fnames = [fn for fn, _ in na_spec]
+                if (afield + "__0") in na_fnames:
+                    atot = 0
+                    while (afield + "__" + str(atot)) in na_fnames:
+                        atot += 1
+                    row_words = len(na_spec)
+                    off_cells = _field_word_offset(na_tag, afield + "__0", ctx)
+                    iex, jex = nmn.name.subscript, expr.subscript
+                    if isinstance(iex, c.Constant) and isinstance(jex, c.Constant):
+                        ic, jc = int(iex.value), int(jex.value)
+                        if 0 <= ic < na_tot and 0 <= jc < atot:
+                            cell = f"{na_log}__{ic}__{afield}__{jc}"
+                            if cell in ctx.int_locals or (
+                                ctx.mem_layout is not None
+                                and ("__file__", cell) in ctx.mem_layout.slot_of
+                            ):
+                                return [], Var(_phys(ctx, cell)), []
+                    # Runtime: slot = base(arr__0__field__0) + i*row_words + j.
+                    base_cell = f"{na_log}__0__{afield}__0"
+                    base_slot = ctx.slot_index.get(base_cell)
+                    if base_slot is None and ctx.mem_layout is not None:
+                        base_slot = ctx.mem_layout.slot_of.get(("__file__", base_cell))
+                    if base_slot is not None:
+                        _register_ptr_pool_locals(ctx)
+                        co = getattr(expr, "coord", None)
+                        slot_e: c.Node = c.Constant("int", str(base_slot), co)
+                        rowmul: c.Node = iex if row_words == 1 else c.BinaryOp(
+                            "*", iex, c.Constant("int", str(row_words), co), co
+                        )
+                        slot_e = c.BinaryOp("+", slot_e, rowmul, co)
+                        slot_e = c.BinaryOp("+", slot_e, jex, co)
+                        if off_cells != 0:
+                            slot_e = c.BinaryOp(
+                                "+", slot_e, c.Constant("int", str(off_cells), co), co
+                            )
+                        pre_s, op_s, tm_s = _eval_expr(slot_e, ctx)
+                        if isinstance(op_s, Imm):
+                            ts = ctx.fresh_temp()
+                            pre_s = pre_s + [IConst(ts, op_s.value)]
+                            slot_n = ts
+                            tm_s = tm_s + [ts]
+                        else:
+                            slot_n = op_s.name
+                        tout = ctx.fresh_temp()
+                        ins = pre_s + _ir_pool_load_call(ctx, slot_n, tout)
+                        return ins, Var(tout), tm_s + [tout]
         # Indice commutato `N[a]` ≡ `a[N]` (C: `E1[E2]` = `*(E1+E2)`). pycparser
         # mette il letterale come `.name`: se la base è una costante INTERA,
         # scambia base/indice. (Letterale stringa `"…"[i]` non è commutabile qui.)
@@ -11210,6 +11272,76 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             )
         if isinstance(node.lvalue, c.ArrayRef):
             lv = node.lvalue
+            # `arr[i].arrfield[j] = X` (campo-array dell'elemento di struct-array,
+            # es. `g.rows[i].cells[j] = X`): const → cella diretta; runtime →
+            # pool store a base + i*row_words + j.
+            if (
+                isinstance(lv.name, c.StructRef)
+                and lv.name.type == "."
+                and isinstance(lv.name.name, c.ArrayRef)
+                and isinstance(lv.name.field, c.ID)
+            ):
+                _nl, _nm = _resolve_struct_array_target(lv.name.name.name, ctx)
+                if _nm is not None:
+                    _ntag, _, _ntot = _nm
+                    _af = lv.name.field.name
+                    _nsp = ctx.struct_specs.get(_ntag, [])
+                    _nfn = [fn for fn, _ in _nsp]
+                    if (_af + "__0") in _nfn:
+                        _at = 0
+                        while (_af + "__" + str(_at)) in _nfn:
+                            _at += 1
+                        _rw = len(_nsp)
+                        _ofc = _field_word_offset(_ntag, _af + "__0", ctx)
+                        _iex, _jex = lv.name.name.subscript, lv.subscript
+                        _co = node.coord
+                        if isinstance(_iex, c.Constant) and isinstance(_jex, c.Constant):
+                            _ic, _jc = int(_iex.value), int(_jex.value)
+                            _cell = f"{_nl}__{_ic}__{_af}__{_jc}"
+                            if _cell in ctx.int_locals or (
+                                ctx.mem_layout is not None
+                                and ("__file__", _cell) in ctx.mem_layout.slot_of
+                            ):
+                                rhs_d = node.rvalue
+                                if node.op in _COMPOUND_ASSIGN_OPS:
+                                    rhs_d = c.BinaryOp(
+                                        _COMPOUND_ASSIGN_OPS[node.op], lv, node.rvalue, _co
+                                    )
+                                return _lower_assign(_phys(ctx, _cell), rhs_d, ctx)
+                        _bc = f"{_nl}__0__{_af}__0"
+                        _bs = ctx.slot_index.get(_bc)
+                        if _bs is None and ctx.mem_layout is not None:
+                            _bs = ctx.mem_layout.slot_of.get(("__file__", _bc))
+                        if _bs is not None:
+                            _register_ptr_pool_locals(ctx)
+                            _se: c.Node = c.Constant("int", str(_bs), _co)
+                            _rm: c.Node = _iex if _rw == 1 else c.BinaryOp(
+                                "*", _iex, c.Constant("int", str(_rw), _co), _co
+                            )
+                            _se = c.BinaryOp("+", _se, _rm, _co)
+                            _se = c.BinaryOp("+", _se, _jex, _co)
+                            if _ofc != 0:
+                                _se = c.BinaryOp("+", _se, c.Constant("int", str(_ofc), _co), _co)
+                            _ps, _os, _tms = _eval_expr(_se, ctx)
+                            if isinstance(_os, Imm):
+                                _ts = ctx.fresh_temp(); _ps = _ps + [IConst(_ts, _os.value)]; _sn = _ts; _tms = _tms + [_ts]
+                            else:
+                                _sn = _os.name
+                            _rhs = node.rvalue
+                            if node.op in _COMPOUND_ASSIGN_OPS:
+                                _rhs = c.BinaryOp(_COMPOUND_ASSIGN_OPS[node.op], lv, node.rvalue, _co)
+                            _er, _or, _tmr = _eval_expr(_rhs, ctx)
+                            if isinstance(_or, Imm):
+                                _tv = ctx.fresh_temp(); _er = _er + [IConst(_tv, _or.value)]; _vn = _tv; _tmr = _tmr + [_tv]
+                            else:
+                                _vn = _or.name
+                            _psl, _sa, _tsl = _pool_call_slot_arg(ctx, _sn)
+                            _out = _ps + _er + _psl + _ir_pool_store_call(ctx, _sa, _vn)
+                            _allt = _tms + _tmr + _tsl + [_sn]
+                            if _allt:
+                                ctx.use_scratch = True
+                            _out += [IHistPush(ctx.scratch, x) for x in reversed(_allt)]
+                            return _out
             # `(*p)[i] = X` → `*(p + i) = X`
             if (
                 isinstance(lv.name, c.UnaryOp) and lv.name.op == "*"
