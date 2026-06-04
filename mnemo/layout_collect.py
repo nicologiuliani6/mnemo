@@ -1099,6 +1099,19 @@ def compute_program_mem_layout(
                     for s in it.stmts or []:
                         walk_stmt(s, fn, ctx)
             return
+        rlit = L._return_string_literal(node)
+        if rlit is not None:
+            raw = L._string_constant_bytes(rlit)
+            sbase = L._assign_string_ros_base(fn, raw)
+            if sbase not in ctx.array_info:
+                ctx.array_info[sbase] = L._ArrayInfo(
+                    dims=(len(raw),), total=len(raw), elem_size=1
+                )
+                for i in range(len(raw)):
+                    cell = L._array_elem_local(sbase, i)
+                    ctx.int_locals.add(cell)
+                    alloc(fn, cell)
+            return
         slit = L._assignment_string_literal(node)
         if slit is not None:
             # `n = "lit"`: alloca una ROS array per il letterale (riassegnazione

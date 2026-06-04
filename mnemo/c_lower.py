@@ -3837,6 +3837,13 @@ def _assignment_string_literal(node: c.Node) -> tuple[str, c.Constant] | None:
     return None
 
 
+def _return_string_literal(node: c.Node) -> c.Constant | None:
+    """`return "lit"` → la Constant; altrimenti None."""
+    if isinstance(node, c.Return) and isinstance(node.expr, c.Constant) and node.expr.type == "string":
+        return node.expr
+    return None
+
+
 def _decl_is_char_pointer(node: c.Decl, td: dict[str, c.Node]) -> bool:
     cur = node.type
     if not isinstance(cur, c.PtrDecl):
@@ -4588,23 +4595,35 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     for _sbase, cells in ros_by_base.items():
                         add_candidate(cells)
 
-                if not isinstance(ex, c.ID) or not candidates_runtime:
+                if not candidates_runtime:
                     raise MnemoCompileError(
                         'printf %s: letterale "…" oppure char* da `char *x = "…";` '
                         'o `char s[] = "…";`'
                     )
-                ptr_log = _scope_resolve(ctx, ex.name)
-                if ptr_log not in ctx.int_locals:
-                    raise MnemoCompileError(
-                        f"printf %s runtime: ptr {ex.name!r} non in int_locals"
-                    )
-                ptr_phys = _phys(ctx, ptr_log)
+                # Valore del puntatore (slot). ID diretto → cella; altrimenti
+                # (es. `printf("%s", f(...))` con f che ritorna char*) valuta
+                # l'espressione in un temp stabile.
+                if isinstance(ex, c.ID) and _scope_resolve(ctx, ex.name) in ctx.int_locals:
+                    ptr_phys = _phys(ctx, _scope_resolve(ctx, ex.name))
+                    ptr_tmps: list[str] = []
+                else:
+                    pe, pop, ptm = _eval_expr(ex, ctx)
+                    out.extend(pe)
+                    if isinstance(pop, Imm):
+                        t_ptr = ctx.fresh_temp()
+                        out.append(IConst(t_ptr, pop.value))
+                        ptr_phys = t_ptr
+                        ptr_tmps = ptm + [t_ptr]
+                    else:
+                        ptr_phys = pop.name
+                        ptr_tmps = ptm
                 for c0, cells in candidates_runtime:
                     body_b: list[Instr] = []
                     # Stampa cells[0..total-2] (skip terminatore NUL finale).
                     for i, idx_c in cells[:-1]:
                         body_b.append(IShow(f"__mn_mem{idx_c}", True))
                     out.append(IIfKairos(ptr_phys, "==", str(c0), body_b, None))
+                tm_acc.extend(ptr_tmps)
         else:
             raise MnemoCompileError("printf: segmento interno non valido")
     if tm_acc:
@@ -8817,6 +8836,38 @@ def _lower_deref_assign(p_name: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
     return _lower_deref_assign_phys(_phys(ctx, p_name), rhs, ctx)
 
 
+def _materialize_string_literal_ros(
+    lit: c.Constant, ctx: _Ctx
+) -> tuple[list[Instr], int]:
+    """Scrive i byte di un letterale stringa nella sua ROS array (slot allocati
+    da layout_collect) e ritorna (instrs, slot_base). Usato da `return "lit"`."""
+    raw = _string_constant_bytes(lit)
+    tot = len(raw)
+    sbase = _assign_string_ros_base(ctx.fn_name, raw)
+    if sbase not in ctx.array_info:
+        ctx.array_info[sbase] = _ArrayInfo(dims=(tot,), total=tot, elem_size=1)
+        for i in range(tot):
+            ctx.int_locals.add(_array_elem_local(sbase, i))
+    first = _array_elem_local(sbase, 0)
+    k = ctx.slot_index.get(first)
+    if k is None and ctx.mem_layout is not None:
+        k = ctx.mem_layout.slot_of.get(("__file__", first))
+    if k is None:
+        raise MnemoCompileError(
+            f"return char* da letterale: slot base mancante per {sbase!r}"
+        )
+    out: list[Instr] = []
+    for i, byte in enumerate(raw):
+        out.extend(
+            _lower_assign(
+                _phys(ctx, _array_elem_local(sbase, i)),
+                c.Constant("int", str(byte)),
+                ctx,
+            )
+        )
+    return out, k
+
+
 def _lower_charptr_string_assign(
     lhs_logical: str, lit: c.Constant, ctx: _Ctx
 ) -> list[Instr]:
@@ -11471,6 +11522,16 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             if rw > 1:
                 return _lower_return_aggregate(node.expr, ctx)
             assert ctx.ret_var is not None
+            ret_lit = _return_string_literal(node)
+            if ret_lit is not None:
+                # `return "lit"`: materializza ROS, ritorna lo slot base.
+                mi, slot_k = _materialize_string_literal_ros(ret_lit, ctx)
+                ctx.use_hist = True
+                return mi + [
+                    IHistPush(ctx.hist, ctx.ret_var),
+                    IAddEq(ctx.ret_var, Imm(slot_k)),
+                    IReturn(),
+                ]
             ei, op, temps = _eval_expr(node.expr, ctx)
             ctx.use_hist = True
             if temps:

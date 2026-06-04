@@ -1,12 +1,5 @@
 # TODO
 
-## Migliorie / limiti noti (non bloccanti)
-
-- **`char *n; n = "literal";` riassegnata + ritorno cross-funzione**: la
-  riassegnazione in-funzione (incluso dentro `if`/`switch`/loop) ora funziona
-  (ROS array per letterale, dispatch runtime su `printf("%s", n)`). Resta non
-  supportato `return n` di un char* + `printf("%s", f(...))` (arg FuncCall) in
-  un'altra funzione.
 ## Bounded-by-design (non bug)
 
 - **`STACK_MAX=4096`** (`stack.h`, lo `Stack` di `Var*` usato da
