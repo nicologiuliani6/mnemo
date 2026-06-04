@@ -970,6 +970,7 @@ class _Ctx:
     Solo scalari (gli array char = stringhe ASCII, mask = no-op, esclusi)."""
     char_trunc_signed: set[str] = field(default_factory=set)
     char_trunc_unsigned: set[str] = field(default_factory=set)
+    uint_trunc: set[str] = field(default_factory=set)
     """Fn ptr con >1 candidato runtime: nome logico → set di nomi fn possibili."""
     func_ptr_runtime: dict[str, set[str]] = field(default_factory=dict)
     """Tag intero per ogni fn addressable in modalità runtime-dispatch (file-level)."""
@@ -4156,28 +4157,18 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tm)
                     else:
                         if k == "u":
-                            # %u runtime: sign-fix wrap. Cell può essere neg
-                            # (cast int signed→unsigned interpretato). VM int64
-                            # + __mn_putd_uint_fast permettono add 2^32 e
-                            # stamp unsigned via divmod O(log n) reversibile.
+                            # %u runtime: maschera a 32 bit (val mod 2^32, non
+                            # negativo). Gestisce sia i negativi (cast signed→
+                            # unsigned, es. -1 → 4294967295) sia i positivi che
+                            # eccedono 2^32 (overflow unsigned non wrappato in
+                            # un'espressione). `__mn_mask_u32` = mnsplit32 O(1).
                             t_u = ctx.fresh_temp()
-                            t_sign = ctx.fresh_temp()
                             ctx.use_hist = True
                             out.append(IHistPush(ctx.hist, t_u))
                             out.append(IAddEq(t_u, Var(op.name)))
-                            out.append(IHistPush(ctx.hist, t_sign))
                             out.append(
-                                IIfKairos(
-                                    op.name, "<", "0",
-                                    [IAddEq(t_sign, Imm(1))],
-                                    None,
-                                )
-                            )
-                            out.append(
-                                IIfKairos(
-                                    t_sign, "==", "1",
-                                    [IAddEq(t_u, Imm(4294967296))],
-                                    None,
+                                ICall(
+                                    "__mn_mask_u32", [t_u] + _kairos_stack_actuals(ctx)
                                 )
                             )
                             out.extend(
@@ -4190,7 +4181,6 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                                 )
                             )
                             ctx.use_scratch = True
-                            out.append(IHistPush(ctx.scratch, t_sign))
                             out.append(IHistPush(ctx.scratch, t_u))
                             tm_acc.extend(tm)
                             continue
@@ -7197,6 +7187,31 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 ctx.use_scratch = True
             return pre + post, Var(t), [t]
         if expr.op == ">>":
+            # `>>` su operando SIGNED = shift aritmetico (sign-extending) =
+            # floor(a / 2^n). `__mn_shr_into` è logico (unsigned), corretto solo
+            # per operandi non-negativi → usalo solo se l'operando è unsigned.
+            # Per signed sintetizza floor-div: C `/` tronca verso zero, quindi
+            # `floor = a/d - (a<0 && a%d!=0 ? 1 : 0)` con d = 2^n.
+            if not _expr_is_unsigned(expr.left, ctx):
+                co = expr.coord
+                if isinstance(expr.right, c.Constant):
+                    nval = _literal_int_widen(expr.right)
+                    d_expr: c.Node = c.Constant("int", str(1 << nval), co)
+                else:
+                    d_expr = c.BinaryOp(
+                        "<<", c.Constant("int", "1", co), expr.right, co
+                    )
+                a = expr.left
+                q = c.BinaryOp("/", a, d_expr, co)
+                rem = c.BinaryOp("%", a, d_expr, co)
+                neg = c.BinaryOp("<", a, c.Constant("int", "0", co), co)
+                remnz = c.BinaryOp("!=", rem, c.Constant("int", "0", co), co)
+                cond = c.BinaryOp("&&", neg, remnz, co)
+                corr = c.TernaryOp(
+                    cond, c.Constant("int", "1", co), c.Constant("int", "0", co), co
+                )
+                synth = c.BinaryOp("-", q, corr, co)
+                return _eval_expr(synth, ctx)
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
@@ -9012,6 +9027,8 @@ def _lower_assign(lhs: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
         out.extend(_emit_char_trunc(lhs, signed=False, ctx=ctx))
     elif lhs in ctx.char_trunc_signed:
         out.extend(_emit_char_trunc(lhs, signed=True, ctx=ctx))
+    elif lhs in ctx.uint_trunc:
+        out.extend(_emit_uint32_trunc(lhs, ctx))
     return out
 
 
@@ -9130,6 +9147,35 @@ def _char_scalar_kind(tnode: c.Node | None) -> str | None:
     if nms == ["unsigned", "char"]:
         return "unsigned"
     return None
+
+
+def _uint32_scalar_kind(tnode: c.Node | None, td: dict[str, c.Node]) -> bool:
+    """True se `tnode` è uno scalare unsigned INTERO (non `unsigned char`):
+    `unsigned`, `unsigned int/short/long/...`, `uint*_t`, `size_t`. Mnemo
+    tratta l'aritmetica unsigned a 32 bit → wrap mod 2^32 alla scrittura."""
+    if not isinstance(tnode, c.TypeDecl):
+        return False
+    inner = tnode.type
+    if not isinstance(inner, c.IdentifierType):
+        return False
+    try:
+        ex = tuple(_expand_typedef_names(list(inner.names), td))
+    except MnemoCompileError:
+        ex = tuple(inner.names)
+    if ex == ("unsigned", "char"):
+        return False
+    if not _type_node_is_unsigned(tnode):
+        return False
+    # Solo tipi interi (esclude eventuali non-scalari già filtrati da TypeDecl).
+    return True
+
+
+def _emit_uint32_trunc(lhs: str, ctx: _Ctx) -> list[Instr]:
+    """Maschera la cella `lhs` a 32 bit (`lhs &= 0xFFFFFFFF`) dopo una scrittura
+    su variabile unsigned: wrap aritmetico mod 2^32 (op VM `mnsplit32`, O(1))."""
+    ctx.use_hist = True
+    ctx.use_scratch = True
+    return [ICall("__mn_mask_u32", [lhs] + _kairos_stack_actuals(ctx))]
 
 
 def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
@@ -10620,6 +10666,8 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 ctx.char_trunc_unsigned.add(_ccell)
             else:
                 ctx.char_trunc_signed.add(_ccell)
+        elif _uint32_scalar_kind(node.type, ctx.typedef_map):
+            ctx.uint_trunc.add(_phys(ctx, logical))
         if node.init is None:
             return []
         if isinstance(node.init, c.InitList):
@@ -12410,6 +12458,23 @@ def _hoist_string_literal_call_args_in_ast(ast: c.FileAST) -> None:
                                 exprs[i] = c.ID(name=nm, coord=a.coord)
                         child.args.exprs = exprs
                 rewrite(child)
+
+            def hoist_str(node_obj: object, attr: str) -> None:
+                v = getattr(node_obj, attr, None)
+                if isinstance(v, c.Constant) and v.type == "string":
+                    nm = dedup.get(v.value)
+                    if nm is None:
+                        nm = fresh()
+                        dedup[v.value] = nm
+                        new_decls.append(make_char_ptr_decl(nm, v.value))
+                    setattr(node_obj, attr, c.ID(name=nm, coord=v.coord))
+
+            # Letterali stringa nei rami di un ternario (`cond ? "a" : "b"`):
+            # promossi a char* sintetici → `return c?"a":"b"`, `x = c?"a":"b"`,
+            # `f(c?"a":"b")` funzionano riusando il binding char*.
+            if isinstance(node, c.TernaryOp):
+                hoist_str(node, "iftrue")
+                hoist_str(node, "iffalse")
 
         rewrite(body)
         if new_decls:

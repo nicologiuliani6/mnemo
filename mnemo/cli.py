@@ -341,7 +341,10 @@ def _stdout_without_vm_dump(stdout: str, *, keep_stats: bool = False) -> str:
     )
     if not sep:
         return head_filtered
-    out = head_filtered.rstrip() + ("\n" if head_filtered.strip() else "")
+    # Rimuovi solo i newline che precedono il separatore di dump, NON gli spazi
+    # finali dell'output reale (`printf("%d ", …)` deve conservare il trailing
+    # space, gcc-equivalente).
+    out = head_filtered.rstrip("\n") + ("\n" if head_filtered.strip() else "")
     if keep_stats:
         stats_marker = "=== VM stats ==="
         if stats_marker in tail:

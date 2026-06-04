@@ -763,7 +763,17 @@ def _transform_switch_returns(ast: c.FileAST) -> None:
         if ext.body is None or not isinstance(ext.body, c.Compound):
             continue
         items = ext.body.block_items or []
-        if len(items) != 1 or not isinstance(items[0], c.Switch):
+        # Body = `switch(...){...}` opzionalmente seguito da `return E;` (il
+        # default implicito quando nessun case matcha). Entrambi i pattern OK.
+        tail_default: c.Node | None = None
+        if (
+            len(items) == 2
+            and isinstance(items[0], c.Switch)
+            and isinstance(items[1], c.Return)
+            and items[1].expr is not None
+        ):
+            tail_default = items[1].expr
+        elif len(items) != 1 or not isinstance(items[0], c.Switch):
             continue
         sw = items[0]
         if not isinstance(sw.stmt, c.Compound):
@@ -799,7 +809,7 @@ def _transform_switch_returns(ast: c.FileAST) -> None:
                 declname=rv_name, quals=[], align=None,
                 type=c.IdentifierType(names=["int"]),
             ),
-            init=c.Constant(type="int", value="0"),
+            init=tail_default if tail_default is not None else c.Constant(type="int", value="0"),
             bitsize=None,
         )
         new_block_items.append(rv_decl)
