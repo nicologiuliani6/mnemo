@@ -69,21 +69,33 @@ mnemo emit-kairos src.c            # solo .kairos su stdout
 
 **Tipi scalari**: `int`, `unsigned`, `bool`/`_Bool`, `char` (variabile +
 literal), `short`/`long`/`long long` (alias a `int`), `size_t`,
-`int*_t`/`uint*_t` (via `mnemo/fake_include/`).
+`int*_t`/`uint*_t` (via `mnemo/fake_include/`). Confronti `unsigned`
+relazionali a 32 bit corretti anche con high-bit set (`0xFFFFFFFF > 1`).
+Aritmetica `char`/`unsigned char` wrappa a 8 bit.
 
 **No** floating-point (`float`/`double`/`_Complex`/`<math.h>`).
 
 **Puntatori**: indici in pool. `void *`, multi-level `int **p`, aritmetica
-`p+i`, `p++`, `*(p+i)`, `q-p` su array. `&id` e `&struct.field` ammessi.
+`p+i`, `p++`, `*(p+i)`, `q-p` su array. `&id`, `&struct.field`, `&a[i]`
+ammessi. Puntatore a base array-di-struct (`struct P *p = arr` / `&a[i]`,
+`p->campo`, `p++`/`p+i` con stride = `sizeof(struct)`).
 
-**Strutture**: `struct`, `union`, `enum`, bit-field NO, `__attribute__` NO.
+**Strutture**: `struct`, `union` (incluso campo annidato `u.s.a` con membro
+struct), `enum`, bit-field NO, `__attribute__` NO.
 
 **Controllo**: `if`/`else`, `switch`/`case` (body `{...}`), `while`, `do`,
-`for`. **No** `goto`, `setjmp`/`longjmp`, `_Atomic`, inline asm, VLA.
+`for`. `_Generic` risolto per tipo del selettore (distingue `char`/`int`/
+puntatori). **No** `goto`, `setjmp`/`longjmp`, `_Atomic`, inline asm, VLA.
 
-**Funzioni**: function pointer solo compile-time-resolved (`p = f`,
-`&f`, `f` stesso file). No variadic user-defined. `main` accetta `void`,
-`int argc`, o `int argc, char **argv` (argv stub sintattico).
+**Funzioni**: function pointer compile-time-resolved (`p = f`, `&f`, `f`
+stesso file) + array di fn-ptr a indice runtime (`ops[i](…)` → dispatch
+chain). No variadic user-defined. `main` accetta `void`, `int argc`, o
+`int argc, char **argv` (argv stub sintattico).
+
+**Stringhe `char *`**: init `char *p = "…"`, riassegnazione `n = "…"`
+(incluso in `if`/`switch`/loop), `return "…"`/`return n` da funzione, e
+`printf("%s", f(…))` con `f` che ritorna `char *` (dispatch runtime sul
+valore del puntatore).
 
 **Parallelismo**: `mnemo_pthread_parallel2(a, b)` con 2 worker distinti
 emette `par ... and ... rap`. `pthread_mutex_t` lowered a channel
