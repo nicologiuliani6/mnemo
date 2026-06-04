@@ -13,7 +13,30 @@ array/struct, ricorsione), aritmetica interi (unsigned wrap mod 2^32, shift
 signed aritmetico), stringhe char*/char[] (riassegnazione, return, `printf("%s",
 f())`), control flow completo (switch+return, fn-ptr array a indice runtime).
 
-Restano solo le divergenze qui sotto.
+Restano solo le divergenze qui sotto + ottimizzazioni di performance.
+
+## Ottimizzazioni future (performance, non correttezza)
+
+Collo di bottiglia principale: **indicizzazione array a indice RUNTIME**
+(`tbl[i]` con `i` variabile). Lowerata come dispatch lineare `if slot==0 …
+if slot==N` sul pool ibrido → O(celle) per accesso. Su programmi con molti
+accessi indicizzati (es. `custom_lib/des.c`: S-box/permute con tabelle globali
+indicizzate a runtime, migliaia di accessi su ~900 celle) il run è
+funzionalmente corretto (verificato: `permute(IP)` byte-1:1 con gcc) ma molto
+lento. Idee, in ordine di convenienza:
+
+1. **Dispatch ristretto al range dell'array noto.** `E[i]` con `E` array noto
+   e `i` runtime: lo slot è `base_E + i` con `i ∈ [0, N)` → fare il dispatch
+   solo sulle N celle di quell'array, non su tutte le `heap_base` celle. Oggi
+   `*(ptr+i)` è lowerato in modo generico (ptr-value runtime) → dispatch
+   globale. Restringere quando la base è un array statico noto → ~14× su des
+   (900→64). Puro lato-Mnemo, basso rischio.
+2. **Op VM nativa di accesso indicizzato** (`MEMGET/MEMSET` su `__mn_mem`):
+   read/write diretto O(1) sull'array delle celle nominate (come `POOLGET` ma
+   sui named-cell). Risolve alla radice; tocca VM + lowering + reversibilità
+   (push del valore vecchio per l'inverse). Più lavoro, più rischio.
+3. **Dispatch binary-search** invece che lineare → O(log N), ~10× su 900.
+   Alternativa più semplice a (2) se (1) non basta.
 
 ## Divergenze per design / comportamento non-definito (non bug)
 
