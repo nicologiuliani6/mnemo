@@ -3656,6 +3656,10 @@ def _func_param_storage_names(fd: c.FuncDecl, td: dict[str, c.Node], ctx: _Ctx) 
             if n is None:
                 n = _struct_pointer_param_name(p, ctx)
             if n is None:
+                _fpm = _func_ptr_decl_meta(p, td)
+                if _fpm is not None:
+                    n = _fpm[0]
+            if n is None:
                 raise MnemoCompileError("tipo parametro non supportato")
             out.append(n)
         else:
@@ -3721,6 +3725,10 @@ def _func_param_slot_groups(
                 n = _void_ptr_param_name(p)
             if n is None:
                 n = _struct_pointer_param_name(p, ctx)
+            if n is None:
+                _fpm = _func_ptr_decl_meta(p, td)
+                if _fpm is not None:
+                    n = _fpm[0]
             if n is None:
                 raise MnemoCompileError("tipo parametro non supportato")
             out.append([n])
@@ -6317,6 +6325,10 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 if s0 is not None:
                     ctx.addr_taken_logicals.add(cell)
                     return [], Imm(s0), []
+        # Nome di funzione usato come VALORE (es. passato a un param fn-ptr):
+        # → il suo tag runtime. La dispatch del param userà questo tag.
+        if expr.name in ctx.func_ptr_tags:
+            return [], Imm(ctx.func_ptr_tags[expr.name]), []
         raise MnemoCompileError(f"identificatore non dichiarato: {expr.name!r}")
 
     if isinstance(expr, c.StructRef):
@@ -13144,6 +13156,42 @@ def lower_file_to_program(
             runtime = _collect_fp_runtime_candidates(ext, du, file_td)
             if runtime:
                 fp_runtime_per_fn[ext.decl.name or ""] = runtime
+    # Fn-ptr PARAMETRI: i candidati vengono dai siti di chiamata (quale funzione
+    # è passata). Mappa fn → {posizione param fn-ptr → nome param}, poi scan di
+    # tutte le `CALL(fn, args)` per raccogliere `args[pos]` (nome funzione).
+    fp_param_pos: dict[str, dict[int, str]] = {}
+    for ext in ast.ext:
+        if isinstance(ext, c.FuncDef) and isinstance(ext.decl.type, c.FuncDecl):
+            args = ext.decl.type.args
+            if args is None:
+                continue
+            pmap: dict[int, str] = {}
+            for pi, p in enumerate(args.params or []):
+                if isinstance(p, c.Decl):
+                    fm = _func_ptr_decl_meta(p, file_td)
+                    if fm is not None:
+                        pmap[pi] = fm[0]
+            if pmap:
+                fp_param_pos[ext.decl.name or ""] = pmap
+    if fp_param_pos:
+        def _scan_calls(node: object) -> None:
+            if isinstance(node, c.FuncCall) and isinstance(node.name, c.ID):
+                callee = node.name.name
+                pmap = fp_param_pos.get(callee)
+                if pmap is not None and node.args is not None:
+                    aexprs = node.args.exprs
+                    for pos, pname in pmap.items():
+                        if pos < len(aexprs):
+                            fnm = _parse_function_designator_name_only(aexprs[pos])
+                            if fnm is not None and fnm in du:
+                                fp_runtime_per_fn.setdefault(callee, {}).setdefault(
+                                    pname, set()
+                                ).add(fnm)
+            if hasattr(node, "children"):
+                for _n, ch in node.children():
+                    _scan_calls(ch)
+        for ext in ast.ext:
+            _scan_calls(ext)
     all_fp_targets: set[str] = set()
     for runtime in fp_runtime_per_fn.values():
         for cands in runtime.values():
