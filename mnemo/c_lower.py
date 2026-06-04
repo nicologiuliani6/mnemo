@@ -3076,6 +3076,43 @@ def _resolve_struct_array_target(
     return "", None
 
 
+def _structptr_index_field_slot(
+    arr_ref: "c.ArrayRef", field: str, ctx: "_Ctx"
+) -> "tuple[list[Instr], str, list[str]] | None":
+    """`a[i].field` con `a` PUNTATORE a struct → calcola lo slot pool
+    `a + i*sizeof(struct)/4 + word_offset(field)` in un temp. Restituisce
+    (instrs, slot_temp, temps) oppure None se `a` non è puntatore-a-struct."""
+    if not isinstance(arr_ref.name, c.ID):
+        return None
+    log = _scope_resolve(ctx, arr_ref.name.name)
+    pty = ctx.var_types.get(log)
+    if pty is None or _pointer_level(pty) < 1:
+        return None
+    cur = pty
+    while isinstance(cur, c.PtrDecl):
+        cur = cur.type
+    tag = _struct_tag_for_decl_type(cur, ctx)
+    if tag is None or tag not in ctx.struct_specs:
+        return None
+    spec = ctx.struct_specs[tag]
+    if field not in [fn for fn, _ in spec]:
+        raise MnemoCompileError(f"struct {tag}: campo {field!r} assente")
+    off_w = _field_word_offset(tag, field, ctx)
+    co = getattr(arr_ref, "coord", None)
+    # `a + i`: il BinaryOp `+` su puntatore-a-struct applica già lo stride
+    # (sizeof/4) — NON ri-scalare l'indice qui (doppio conteggio). Poi
+    # `(a+i) + off_w`: il secondo `+` ha lhs non-struct-ptr → off_w raw.
+    elem = c.BinaryOp("+", arr_ref.name, arr_ref.subscript, co)
+    slot_expr: c.Node = elem
+    if off_w != 0:
+        slot_expr = c.BinaryOp("+", elem, c.Constant("int", str(off_w), co), co)
+    pre, op, tm = _eval_expr(slot_expr, ctx)
+    if isinstance(op, Imm):
+        t = ctx.fresh_temp()
+        return pre + [IConst(t, op.value)], t, tm + [t]
+    return pre, op.name, tm
+
+
 def _structref_base_and_path(expr: c.StructRef) -> tuple[str, list[str]]:
     """Es. `o.a.b` → (`o`, [`a`,`b`]); supporta `StructRef` annidati nel campo base."""
     parts: list[str] = []
@@ -6172,6 +6209,15 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             and isinstance(expr.name, c.ArrayRef)
             and isinstance(expr.field, c.ID)
         ):
+            # `a[i].field` con `a` PUNTATORE a struct (param o malloc):
+            # `(*(a+i)).field` = pool load a `a + i*stride + off`.
+            spf = _structptr_index_field_slot(expr.name, expr.field.name, ctx)
+            if spf is not None:
+                pre_s, slot_tmp, tm_s = spf
+                _register_ptr_pool_locals(ctx)
+                t_out = ctx.fresh_temp()
+                ins = pre_s + _ir_pool_load_call(ctx, slot_tmp, t_out)
+                return ins, Var(t_out), tm_s + [t_out]
             arr_log, sa_meta = _resolve_struct_array_target(expr.name.name, ctx)
             if sa_meta is not None:
                 arr_id = arr_log
@@ -10794,6 +10840,36 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 and isinstance(lvs.name, c.ArrayRef)
                 and isinstance(lvs.field, c.ID)
             ):
+                # `a[i].field = X` con `a` PUNTATORE a struct → pool store
+                # allo slot `a + i*stride + off`.
+                spf_w = _structptr_index_field_slot(lvs.name, lvs.field.name, ctx)
+                if spf_w is not None:
+                    pre_w, slot_w, tm_w = spf_w
+                    _register_ptr_pool_locals(ctx)
+                    rhs_w = node.rvalue
+                    if node.op in _COMPOUND_ASSIGN_OPS:
+                        rhs_w = c.BinaryOp(
+                            _COMPOUND_ASSIGN_OPS[node.op], lvs, node.rvalue, node.coord
+                        )
+                    elif node.op != "=":
+                        raise MnemoCompileError(
+                            f"a[i].campo: assegnamento con {node.op!r} non supportato"
+                        )
+                    ei_w, op_rw, tmr_w = _eval_expr(rhs_w, ctx)
+                    if isinstance(op_rw, Imm):
+                        tv = ctx.fresh_temp()
+                        ei_w = ei_w + [IConst(tv, op_rw.value)]
+                        valn = tv
+                        tmr_w = tmr_w + [tv]
+                    else:
+                        valn = op_rw.name
+                    pre_sl, slot_a, tm_sl = _pool_call_slot_arg(ctx, slot_w)
+                    out_w = pre_w + ei_w + pre_sl + _ir_pool_store_call(ctx, slot_a, valn)
+                    allt = tm_w + tmr_w + tm_sl
+                    if allt:
+                        ctx.use_scratch = True
+                    out_w += [IHistPush(ctx.scratch, x) for x in reversed(allt)]
+                    return out_w
                 arr_log_w, sa_meta_w = _resolve_struct_array_target(
                     lvs.name.name, ctx
                 )
@@ -11323,6 +11399,37 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         sub = c.Assignment("=", lhs_ref, rhs_ref, node.coord)
                         out_struct.extend(_lower_stmt(sub, ctx))
                     return out_struct
+            # `*q = s;` con `s` variabile struct dello stesso tag → copia
+            # per-campo `q->f = s.f`.
+            if (
+                node.op == "="
+                and isinstance(node.lvalue.expr, c.ID)
+                and isinstance(node.rvalue, c.ID)
+            ):
+                q_log2 = _scope_resolve(ctx, node.lvalue.expr.name)
+                s_log2 = _scope_resolve(ctx, node.rvalue.name)
+                tag_q2 = _ptr_struct_tag(ctx.var_types.get(q_log2), ctx)
+                if (
+                    tag_q2 is not None
+                    and ctx.struct_tag_of_var.get(s_log2) == tag_q2
+                    and tag_q2 in ctx.struct_specs
+                ):
+                    out_s2: list[Instr] = []
+                    for fname, _fty in ctx.struct_specs[tag_q2]:
+                        if _type_node_is_pthread_mutex(_fty, ctx.typedef_map):
+                            continue
+                        lhs_ref = c.StructRef(
+                            c.ID(node.lvalue.expr.name, node.coord), "->",
+                            c.ID(fname, node.coord), node.coord,
+                        )
+                        rhs_ref = c.StructRef(
+                            c.ID(node.rvalue.name, node.coord), ".",
+                            c.ID(fname, node.coord), node.coord,
+                        )
+                        out_s2.extend(_lower_stmt(
+                            c.Assignment("=", lhs_ref, rhs_ref, node.coord), ctx
+                        ))
+                    return out_s2
             ei_p, op_p, tm_p = _eval_expr(node.lvalue.expr, ctx)
             if isinstance(op_p, Imm):
                 tmp = ctx.fresh_temp()
