@@ -4388,23 +4388,36 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         tm_acc.extend(tt)
                     tm_acc.extend(tm)
                 elif isinstance(op, Var):
-                    if is_upper:
-                        raise MnemoCompileError(
-                            "printf %X: solo costanti supportate per runtime "
-                            "(usa %x e converti manualmente in uppercase)"
-                        )
+                    # Prefisso proc: putx (lowercase) o putX (uppercase, %X/%llX).
+                    _px = "__mn_putX" if is_upper else "__mn_putx"
                     if (
+                        width > 0
+                        and "+" not in flags
+                        and " " not in flags
+                        and is_u64
+                        and "0" in flags
+                    ):
+                        # `%0Wllx`/`%0WllX`: u64 zero-pad a W (es. des `%016llX`).
+                        callee_x = _px + "_u64_width_zero"
+                        t_w = ctx.fresh_temp()
+                        out.append(IConst(t_w, width))
+                        out.extend(_io_opt_uncall_wrap(
+                            ctx, ICall(callee_x, [op.name, t_w] + _kairos_stack_actuals(ctx))
+                        ))
+                        out.append(ISubEq(t_w, Imm(width)))
+                        tm_acc.extend(tm)
+                    elif (
                         width > 0
                         and "+" not in flags
                         and " " not in flags
                         and not is_u64
                     ):
-                        if "-" in flags:
+                        if "-" in flags and not is_upper:
                             callee_x = "__mn_putx_width_left"
                         elif "0" in flags:
-                            callee_x = "__mn_putx_width_zero"
+                            callee_x = _px + "_width_zero"
                         else:
-                            callee_x = "__mn_putx_width"
+                            callee_x = _px + "_width"
                         t_w = ctx.fresh_temp()
                         out.append(IConst(t_w, width))
                         out.extend(
@@ -4419,7 +4432,7 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         out.append(ISubEq(t_w, Imm(width)))
                         tm_acc.extend(tm)
                     else:
-                        callee_x = "__mn_putx_u64" if is_u64 else "__mn_putx"
+                        callee_x = (_px + "_u64") if is_u64 else _px
                         out.extend(
                             _io_opt_uncall_wrap(
                                 ctx,
@@ -7749,6 +7762,8 @@ def _prepare_call_arg(
                 return [], _phys(ctx, expr.name), []
             first = _array_elem_local(expr.name, 0)
             k = ctx.slot_index.get(first)
+            if k is None and ctx.mem_layout is not None:
+                k = ctx.mem_layout.slot_of.get(("__file__", first))
             if k is None:
                 raise MnemoCompileError(
                     f"passaggio array {expr.name!r}: indirizzo base assente nel layout"
@@ -9303,6 +9318,8 @@ def _lower_assign(lhs: str, rhs: c.Node, ctx: _Ctx) -> list[Instr]:
     if ainf is not None and isinstance(rhs, c.ID) and not ainf.array_decay_pointer:
         first = _array_elem_local(rlog, 0)
         k = ctx.slot_index.get(first)
+        if k is None and ctx.mem_layout is not None:
+            k = ctx.mem_layout.slot_of.get(("__file__", first))
         if k is None:
             raise MnemoCompileError(
                 f"array {rhs.name!r}: indirizzo base assente nel layout"
@@ -9458,7 +9475,11 @@ def _uint32_scalar_kind(tnode: c.Node | None, td: dict[str, c.Node]) -> bool:
         ex = tuple(inner.names)
     if ex == ("unsigned", "char"):
         return False
-    if not _type_node_is_unsigned(tnode):
+    if "unsigned" not in ex:
+        return False
+    # Tipi a 64 bit (`long long` / uint64_t / uintmax_t) NON vanno mascherati a
+    # 32 bit: la cella int64 li ospita pieni e il wrap C è a 2^64.
+    if list(ex).count("long") >= 2:
         return False
     # Solo tipi interi (esclude eventuali non-scalari già filtrati da TypeDecl).
     return True
@@ -9525,17 +9546,35 @@ def _expr_is_unsigned(expr: c.Node, ctx: _Ctx) -> bool:
     conversions rendono il confronto unsigned → `< 0` sempre falso). In dubbio
     ritorna False (nessun fold = comportamento attuale).
     """
+    def _tnode_uns(tn: c.Node | None) -> bool:
+        # Espande i typedef (uint64_t/size_t/… → `unsigned …`) prima del check.
+        cur = tn
+        while cur is not None and not isinstance(cur, c.IdentifierType):
+            cur = getattr(cur, "type", None)
+        if not isinstance(cur, c.IdentifierType):
+            return False
+        if "unsigned" in cur.names:
+            return True
+        try:
+            ex = _expand_typedef_names(list(cur.names), ctx.typedef_map)
+        except MnemoCompileError:
+            return False
+        return "unsigned" in ex
+
     if isinstance(expr, c.Constant):
         return "unsigned" in (expr.type or "")
     if isinstance(expr, c.ID):
         log = _scope_resolve(ctx, expr.name)
-        return _type_node_is_unsigned(ctx.var_types.get(log))
+        return _tnode_uns(ctx.var_types.get(log))
     if isinstance(expr, c.Cast):
-        return _type_node_is_unsigned(getattr(expr.to_type, "type", None))
+        return _tnode_uns(getattr(expr.to_type, "type", None))
     if isinstance(expr, c.UnaryOp) and expr.op in ("+", "-", "~"):
         return _expr_is_unsigned(expr.expr, ctx)
+    if isinstance(expr, c.BinaryOp) and expr.op in ("<<", ">>"):
+        # Tipo del risultato di uno shift = tipo dell'operando SINISTRO (promosso).
+        return _expr_is_unsigned(expr.left, ctx)
     if isinstance(expr, c.BinaryOp) and expr.op in (
-        "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>",
+        "+", "-", "*", "/", "%", "&", "|", "^",
     ):
         # Usual arithmetic conversions: se un operando è unsigned, il risultato
         # è unsigned (per int/unsigned di pari rango — Mnemo è tutto rango int).
