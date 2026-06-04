@@ -3076,6 +3076,28 @@ def _resolve_struct_array_target(
     return "", None
 
 
+def _pointer_expr_struct_tag(node: c.Node, ctx: "_Ctx") -> str | None:
+    """Tag struct puntato da un'espressione di tipo puntatore-a-struct:
+    `p` (ID), `p+i`/`p-i` (aritmetica), `(p)`, `&s` (indirizzo di struct).
+    None se non determinabile."""
+    if isinstance(node, c.ID):
+        log = _scope_resolve(ctx, node.name)
+        pty = ctx.var_types.get(log)
+        if pty is not None and _pointer_level(pty) >= 1:
+            cur = pty
+            while isinstance(cur, c.PtrDecl):
+                cur = cur.type
+            return _struct_tag_for_decl_type(cur, ctx)
+        return None
+    if isinstance(node, c.BinaryOp) and node.op in ("+", "-"):
+        t = _pointer_expr_struct_tag(node.left, ctx)
+        return t if t is not None else _pointer_expr_struct_tag(node.right, ctx)
+    if isinstance(node, c.UnaryOp) and node.op == "&":
+        if isinstance(node.expr, c.ID):
+            return ctx.struct_tag_of_var.get(_scope_resolve(ctx, node.expr.name))
+    return None
+
+
 def _structptr_index_field_slot(
     arr_ref: "c.ArrayRef", field: str, ctx: "_Ctx"
 ) -> "tuple[list[Instr], str, list[str]] | None":
@@ -6300,22 +6322,18 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 chain = _disj_eq_chain(ix_name, list(range(sa_tot)), bodies)
                 return pre_ix + chain, Var(t_dest), tm_ix + [t_dest]
         if expr.type == "->":
-            if not isinstance(expr.name, c.ID) or not isinstance(expr.field, c.ID):
+            if not isinstance(expr.field, c.ID):
                 raise MnemoCompileError("`->`: sintassi non supportata")
-            p = _scope_resolve(ctx, expr.name.name)
-            if p not in ctx.int_locals:
-                raise MnemoCompileError(f"puntatore non dichiarato: {p!r}")
-            pty = ctx.var_types.get(p)
-            if pty is None:
-                raise MnemoCompileError(f"`{p}`: tipo mancante per ->")
-            tag = _pointee_struct_tag(pty, ctx)
+            tag = _pointer_expr_struct_tag(expr.name, ctx)
+            if tag is None:
+                raise MnemoCompileError("`->`: base non è puntatore a struct")
             mangled = str(expr.field.name)
             spec = ctx.struct_specs.get(tag)
             if not spec or mangled not in [fn for fn, _ in spec]:
                 raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
             off_w = _field_word_offset(tag, mangled, ctx)
             _register_ptr_pool_locals(ctx)
-            ei, op, tm = _eval_expr(c.ID(expr.name.name, expr.coord), ctx)
+            ei, op, tm = _eval_expr(expr.name, ctx)
             t_slot = ctx.fresh_temp()
             t_out = ctx.fresh_temp()
             ctx.use_hist = True
@@ -6432,6 +6450,32 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 getattr(expr, "coord", None),
             )
             return _eval_expr(new_expr, ctx)
+        # `q->arrayfield[i]` con arrayfield campo-array dentro la struct puntata:
+        # pool load a `q + word_offset(arrayfield) + i` (offset e indice RAW, no
+        # stride: q+off non passa per il BinaryOp ptr-aware).
+        if (
+            isinstance(nm, c.StructRef)
+            and nm.type == "->"
+            and isinstance(nm.field, c.ID)
+        ):
+            _atag = _pointer_expr_struct_tag(nm.name, ctx)
+            if _atag is not None:
+                _fld = nm.field.name
+                _spec = ctx.struct_specs.get(_atag, [])
+                _fnames = [fn for fn, _ in _spec]
+                if (_fld + "__0") in _fnames:
+                    _offa = _field_word_offset(_atag, _fld + "__0", ctx)
+                    _register_ptr_pool_locals(ctx)
+                    eip, opp, tmp_p = _eval_expr(nm.name, ctx)
+                    eii, opi, tmp_i = _eval_expr(expr.subscript, ctx)
+                    ts = ctx.fresh_temp()
+                    ctx.use_hist = True
+                    pre_a = eip + eii + [IHistPush(ctx.hist, ts), IAddEq(ts, opp), IAddEq(ts, opi)]
+                    if _offa != 0:
+                        pre_a.append(IAddEq(ts, Imm(_offa)))
+                    tout = ctx.fresh_temp()
+                    ins = pre_a + _ir_pool_load_call(ctx, ts, tout)
+                    return ins, Var(tout), tmp_p + tmp_i + [ts, tout]
         # `s.array_field[i]` con array_field campo struct array (espanso a slot
         # flat via _flatten_struct_fields → `s__field__0..N-1`). Risolvi a slot
         # diretto per i costante; runtime → disj-chain.
@@ -9010,23 +9054,18 @@ def _lower_struct_arrow_assign(lhs: c.StructRef, rhs: c.Node, ctx: _Ctx) -> list
     """`p->campo = rhs` tramite pool store con offset campo (come lettura `->` in _eval_expr)."""
     if lhs.type != "->":
         raise MnemoCompileError("solo `->`")
-    if not isinstance(lhs.name, c.ID) or not isinstance(lhs.field, c.ID):
+    if not isinstance(lhs.field, c.ID):
         raise MnemoCompileError("`->`: sintassi non supportata")
-    p = lhs.name.name
-    pl = _scope_resolve(ctx, p)
-    if pl not in ctx.int_locals:
-        raise MnemoCompileError(f"puntatore non dichiarato: {p!r}")
-    pty = ctx.var_types.get(pl)
-    if pty is None:
-        raise MnemoCompileError(f"`{p}`: tipo mancante per ->")
-    tag = _pointee_struct_tag(pty, ctx)
+    tag = _pointer_expr_struct_tag(lhs.name, ctx)
+    if tag is None:
+        raise MnemoCompileError("`->`: base non è puntatore a struct")
     mangled = str(lhs.field.name)
     spec = ctx.struct_specs.get(tag)
     if not spec or mangled not in [fn for fn, _ in spec]:
         raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
     off_w = _field_word_offset(tag, mangled, ctx)
     _register_ptr_pool_locals(ctx)
-    ei_m, op_m, tm_m = _eval_expr(c.ID(p, lhs.coord), ctx)
+    ei_m, op_m, tm_m = _eval_expr(lhs.name, ctx)
     t_slot = ctx.fresh_temp()
     ctx.use_hist = True
     rop: Operand = op_m if isinstance(op_m, Imm) else Var(op_m.name)
@@ -11177,6 +11216,40 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 )
                 new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
                 return _lower_stmt(new_assign, ctx)
+            # `q->arrayfield[i] = X`: pool store a `q + word_offset(field) + i`.
+            if (
+                isinstance(lv.name, c.StructRef)
+                and lv.name.type == "->"
+                and isinstance(lv.name.field, c.ID)
+            ):
+                _atagw = _pointer_expr_struct_tag(lv.name.name, ctx)
+                _fldw = lv.name.field.name
+                _specw = ctx.struct_specs.get(_atagw, []) if _atagw else []
+                if _atagw is not None and (_fldw + "__0") in {fn for fn, _ in _specw}:
+                    _offaw = _field_word_offset(_atagw, _fldw + "__0", ctx)
+                    _register_ptr_pool_locals(ctx)
+                    eipw, oppw, tmpw_p = _eval_expr(lv.name.name, ctx)
+                    eiiw, opiw, tmpw_i = _eval_expr(lv.subscript, ctx)
+                    tsw = ctx.fresh_temp()
+                    ctx.use_hist = True
+                    prew = eipw + eiiw + [IHistPush(ctx.hist, tsw), IAddEq(tsw, oppw), IAddEq(tsw, opiw)]
+                    if _offaw != 0:
+                        prew.append(IAddEq(tsw, Imm(_offaw)))
+                    rhsw = node.rvalue
+                    if node.op in _COMPOUND_ASSIGN_OPS:
+                        rhsw = c.BinaryOp(_COMPOUND_ASSIGN_OPS[node.op], lv, node.rvalue, node.coord)
+                    eirw, oprw, tmrw = _eval_expr(rhsw, ctx)
+                    if isinstance(oprw, Imm):
+                        tvw = ctx.fresh_temp(); eirw = eirw + [IConst(tvw, oprw.value)]; valw = tvw; tmrw = tmrw + [tvw]
+                    else:
+                        valw = oprw.name
+                    presl, slotaw, tmsl = _pool_call_slot_arg(ctx, tsw)
+                    outw = prew + eirw + presl + _ir_pool_store_call(ctx, slotaw, valw)
+                    alltw = tmpw_p + tmpw_i + tmrw + tmsl + [tsw]
+                    if alltw:
+                        ctx.use_scratch = True
+                    outw += [IHistPush(ctx.scratch, x) for x in reversed(alltw)]
+                    return outw
             # `s.array_field[i] = X` con array_field campo struct array
             # (espanso a slot flat `s__field__0..N-1`): assegnamento diretto su
             # slot per i costante; runtime → if-chain su valore di i.
