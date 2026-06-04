@@ -3113,6 +3113,32 @@ def _structptr_index_field_slot(
     return pre, op.name, tm
 
 
+def _struct_union_member_cell(
+    base_log: str, struct_tag: str, path: list[str], ctx: "_Ctx"
+) -> str | None:
+    """`s.u.field` con `u` membro UNION dello struct → cella della union
+    (`base__u`, eventualmente `__w{k}` per offset>0). None se `path[0]` non è
+    un membro union o `field` assente."""
+    if len(path) != 2:
+        return None
+    member, sub = path[0], path[1]
+    spec = ctx.struct_specs.get(struct_tag, [])
+    fty = next((ft for fn, ft in spec if fn == member), None)
+    if fty is None:
+        return None
+    utag = _union_tag_for_decl_type(fty, ctx)
+    if utag is None or utag not in ctx.union_specs:
+        return None
+    if sub not in [fn for fn, _ in ctx.union_specs[utag]]:
+        raise MnemoCompileError(f"union {utag}: membro {sub!r} assente")
+    base_cell = _struct_field_local(base_log, member)
+    off_w = _union_member_word_offset(utag, sub, ctx)
+    cell = _union_member_cell(base_cell, off_w)
+    if cell not in ctx.int_locals:
+        return None
+    return cell
+
+
 def _structref_base_and_path(expr: c.StructRef) -> tuple[str, list[str]]:
     """Es. `o.a.b` → (`o`, [`a`,`b`]); supporta `StructRef` annidati nel campo base."""
     parts: list[str] = []
@@ -6318,6 +6344,11 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             raise MnemoCompileError(f"struct {tag!r}: metadati mancanti")
         field_names = [fn for fn, _ in spec]
         if mangled not in field_names:
+            # `s.u.field` con `u` membro UNION dello struct: la union è una
+            # cella sola (`s__u`); il sotto-campo è a offset union.
+            um = _struct_union_member_cell(base_log, tag, path, ctx)
+            if um is not None:
+                return [], Var(_phys(ctx, um)), []
             raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
         cell = _struct_field_local(base_log, mangled)
         if cell not in ctx.int_locals:
@@ -11078,6 +11109,16 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             tag = ctx.struct_tag_of_var[base_log]
             spec = ctx.struct_specs.get(tag)
             if not spec or mangled not in [fn for fn, _ in spec]:
+                _umw = _struct_union_member_cell(base_log, tag, path, ctx)
+                if _umw is not None:
+                    rhs_uw = node.rvalue
+                    if node.op in _COMPOUND_ASSIGN_OPS:
+                        rhs_uw = c.BinaryOp(
+                            _COMPOUND_ASSIGN_OPS[node.op],
+                            c.ID(_phys(ctx, _umw), node.coord),
+                            node.rvalue, node.coord,
+                        )
+                    return _lower_assign(_phys(ctx, _umw), rhs_uw, ctx)
                 raise MnemoCompileError(f"struct {tag}: campo {mangled!r} assente")
             cell = _struct_field_local(base_log, mangled)
             # Bit-field: trunca rvalue a (1<<N)-1 bit. Const-fold se possibile,
