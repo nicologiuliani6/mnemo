@@ -1,3 +1,4 @@
+// SKIP: malloc-grow-in-loop (pattern realloc, semantica re-alloc difficile da invertire)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

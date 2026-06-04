@@ -15,6 +15,18 @@ f())`), control flow completo (switch+return, fn-ptr array a indice runtime).
 
 Restano solo le divergenze qui sotto + ottimizzazioni di performance.
 
+## Limiti noti (trovati a corpus, fix non banale)
+
+- **`printf("%s", buf)` con `buf` puntatore a buffer su HEAP** (`malloc`):
+  il dispatch `%s` matcha solo stringhe statiche note (ROS/char[]); per un
+  buffer heap servirebbe un loop reversibile che legge `pool[buf+i]` fino al
+  NUL e fa show. Le stringhe statiche/letterali e `char[]` locali funzionano.
+  (repro `c_probe/t/p6_string_dup.c`).
+- **`realloc` manuale in loop** (`malloc` nuovo + copia + `free` + riassegna il
+  puntatore, dentro un ciclo): semantica re-alloc difficile da invertire (vedi
+  anche `realloc` in "Non fattibile"). Il caso fuori-loop funziona.
+  (repro `c_probe/t/p6_dyn_grow.c`).
+
 ## Ottimizzazioni future (performance, non correttezza)
 
 Il collo di bottiglia era l'**indicizzazione array a indice RUNTIME** via

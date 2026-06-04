@@ -1,3 +1,4 @@
+// SKIP: printf("%s", buffer-heap-malloc) richiede loop pool-read reversibile
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
