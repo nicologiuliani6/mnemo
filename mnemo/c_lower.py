@@ -6201,6 +6201,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 if cell0 in ctx.slot_index:
                     ctx.addr_taken_logicals.add(cell0)
                     return [], Imm(ctx.slot_index[cell0]), []
+                # File-scope / static array: slot in mem_layout (non in slot_index).
+                if (
+                    ctx.mem_layout is not None
+                    and ("__file__", cell0) in ctx.mem_layout.slot_of
+                ):
+                    ctx.addr_taken_logicals.add(cell0)
+                    return [], Imm(ctx.mem_layout.slot_of[("__file__", cell0)]), []
                 raise MnemoCompileError(
                     f"l'array {expr.name!r} non è un valore scalare: usa {expr.name}[…]"
                 )
@@ -12623,6 +12630,20 @@ def _hoist_string_literal_call_args_in_ast(ast: c.FileAST) -> None:
             if isinstance(node, c.TernaryOp):
                 hoist_str(node, "iftrue")
                 hoist_str(node, "iffalse")
+
+            # Letterali stringa in un InitList (`char *t[]={"a","b"}`): promossi
+            # a char* sintetici → l'array inizializza con gli slot ROS.
+            if isinstance(node, c.InitList) and node.exprs:
+                new_exprs = list(node.exprs)
+                for i, e in enumerate(new_exprs):
+                    if isinstance(e, c.Constant) and e.type == "string":
+                        nm = dedup.get(e.value)
+                        if nm is None:
+                            nm = fresh()
+                            dedup[e.value] = nm
+                            new_decls.append(make_char_ptr_decl(nm, e.value))
+                        new_exprs[i] = c.ID(name=nm, coord=e.coord)
+                node.exprs = new_exprs
 
         rewrite(body)
         if new_decls:
