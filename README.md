@@ -198,6 +198,20 @@ Vedi `TODO.md` per dettagli. Esclusi strutturalmente:
 - `signal`/handlers, `exit`/`abort` dentro funzioni.
 - `errno`, `argv` POSIX reali (solo stub).
 
+Limiti non-strutturali ancora aperti (niche, non bloccanti):
+
+- **Puntatore a funzione come PARAMETRO** (`void qsort_like(int(*cmp)(int,int))`):
+  il fn-ptr risolto a compile-time e gli array di fn-ptr (anche a indice
+  runtime) sono supportati, ma non il passaggio di una funzione come parametro
+  con dispatch cross-call-site.
+- **Struct-array annidato con campo-array** (`g.rows[i].cells[j]`): il flatten
+  del tag sintetico dell'elemento non espande i campi-array interni.
+- **Puntatore-a-array** (`int (*r)[N] = m`, row pointer).
+- `int` è 64-bit: l'overflow `int` signed (UB in C) non wrappa a 32-bit;
+  `sizeof(T*)` = 4 (modello a word). L'aritmetica `unsigned` invece wrappa
+  correttamente mod 2^32. L'ordine di valutazione degli argomenti è L-to-R
+  (gcc R-to-L) — unspecified in C, non un bug.
+
 ---
 
 ## Licenza
