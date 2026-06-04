@@ -4206,6 +4206,26 @@ def _printf_pad(s: str, flags: frozenset, width: int) -> str:
     return " " * (width - len(s)) + s
 
 
+def _emit_cstr_show(phys_cells: list[str], ctx: "_Ctx") -> list[Instr]:
+    """`printf("%s", …)` C-esatto: mostra i caratteri fino al PRIMO NUL (non
+    skip-zero, che stampava il garbage dopo un NUL embedded). Reversibile: un
+    contatore `nul_seen` (cond sulla cella, non auto-modificante)."""
+    ctx.use_scratch = True
+    nul = ctx.fresh_temp()
+    out: list[Instr] = [IConst(nul, 0)]
+    for cell in phys_cells:
+        # mostra la cella solo se nessun NUL è ancora stato visto e cell != 0.
+        out.append(IIfKairos(
+            nul, "==", "0",
+            [IIfKairos(cell, "!=", "0", [IShow(cell, True)], None)],
+            None,
+        ))
+        # primo (e successivi) NUL: incrementa il contatore (gate spento).
+        out.append(IIfKairos(cell, "==", "0", [IAddEq(nul, Imm(1))], None))
+    out.append(IHistPush(ctx.scratch, nul))
+    return out
+
+
 def _ir_emit_byte_as_show_char(
     ctx: _Ctx, byte: int
 ) -> tuple[list[Instr], list[str]]:
@@ -4658,10 +4678,11 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     raise MnemoCompileError(
                         f"printf %s: storage stringa mancante per {ex.name!r}"
                     )
-                for i in range(info.total - 1):
-                    out.append(
-                        IShow(_phys(ctx, _array_elem_local(sbase, i)), True)
-                    )
+                out.extend(_emit_cstr_show(
+                    [_phys(ctx, _array_elem_local(sbase, i))
+                     for i in range(info.total - 1)],
+                    ctx,
+                ))
             elif (
                 isinstance(ex, c.ID)
                 and _scope_resolve(ctx, ex.name) in ctx.array_info
@@ -4678,17 +4699,12 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                     raise MnemoCompileError(
                         f"printf %s: {ex.name!r} non è un char[] (elem_size={info.elem_size})"
                     )
-                # Gate ogni cella: show solo se cell != 0. Stop-at-first-NUL
-                # via flag richiede IIfKairos con cond modificato in body,
-                # rompe stack inversion. TODO: char[] con embedded NUL +
-                # garbage post-NUL mostra anche i garbage; accettato.
-                for i in range(info.total - 1):
-                    phys_i = _phys(ctx, _array_elem_local(arr_log, i))
-                    out.append(IIfKairos(
-                        phys_i, "!=", "0",
-                        [IShow(phys_i, True)],
-                        None,
-                    ))
+                # Stop al primo NUL (printf %s C-esatto).
+                out.extend(_emit_cstr_show(
+                    [_phys(ctx, _array_elem_local(arr_log, i))
+                     for i in range(info.total - 1)],
+                    ctx,
+                ))
             elif (
                 isinstance(ex, c.StructRef)
                 and ex.type == "."
@@ -4857,10 +4873,10 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                         ptr_phys = pop.name
                         ptr_tmps = ptm
                 for c0, cells in candidates_runtime:
-                    body_b: list[Instr] = []
-                    # Stampa cells[0..total-2] (skip terminatore NUL finale).
-                    for i, idx_c in cells[:-1]:
-                        body_b.append(IShow(f"__mn_mem{idx_c}", True))
+                    # Stampa fino al primo NUL (C-esatto: buffer riusato/troncato).
+                    body_b = _emit_cstr_show(
+                        [f"__mn_mem{idx_c}" for _i, idx_c in cells[:-1]], ctx
+                    )
                     out.append(IIfKairos(ptr_phys, "==", str(c0), body_b, None))
                 tm_acc.extend(ptr_tmps)
         else:

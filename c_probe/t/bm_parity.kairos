@@ -1306,7 +1306,7 @@ procedure __mn_puto_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     push(d, __mn_hist)
     delocal int d = 0
 
-// Pool puntatori Mnemo — generato, N=5 celle (__mn_mem0..__mn_mem4).
+// Pool puntatori Mnemo — generato, N=3 celle (__mn_mem0..__mn_mem2).
 // Header per-blocco (scritto dal lowering): mem{ctr}=nblk; ptr=ctr+1.
 // Dispatch slot→cella via BINARY SEARCH (`if slot < mid`): O(log N) per
 // accesso invece che O(N) lineare → deref a indice runtime molto più veloce.
@@ -1333,95 +1333,65 @@ procedure __mn_pool_free(int slot, int ctr, int nblk, stack __mn_hist, stack __m
         push(ctr0, __mn_hist)
     delocal int ctr0 = 0
 
-procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, stack __mn_hist, stack __mn_scratch)
-    if slot < 2 then
-        if slot < 1 then
-            push(__mn_mem0, __mn_hist)
-            __mn_mem0 += val
-        else
+procedure __mn_pool_store(int slot, int val, int __mn_mem0, int __mn_mem1, int __mn_mem2, stack __mn_hist, stack __mn_scratch)
+    if slot < 1 then
+        push(__mn_mem0, __mn_hist)
+        __mn_mem0 += val
+    else
+        if slot < 2 then
             push(__mn_mem1, __mn_hist)
             __mn_mem1 += val
-        fi slot < 1
-    else
-        if slot < 3 then
+        else
             push(__mn_mem2, __mn_hist)
             __mn_mem2 += val
-        else
-            if slot < 4 then
-                push(__mn_mem3, __mn_hist)
-                __mn_mem3 += val
-            else
-                push(__mn_mem4, __mn_hist)
-                __mn_mem4 += val
-            fi slot < 4
-        fi slot < 3
-    fi slot < 2
+        fi slot < 2
+    fi slot < 1
 
-procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int __mn_mem3, int __mn_mem4, int out, stack __mn_hist, stack __mn_scratch)
-    if slot < 2 then
-        if slot < 1 then
-            local int t = 0
-                t += __mn_mem0
-                push(out, __mn_hist)
-                out += t
-                push(t, __mn_hist)
-            delocal int t = 0
-        else
+procedure __mn_pool_load(int slot, int __mn_mem0, int __mn_mem1, int __mn_mem2, int out, stack __mn_hist, stack __mn_scratch)
+    if slot < 1 then
+        local int t = 0
+            t += __mn_mem0
+            push(out, __mn_hist)
+            out += t
+            push(t, __mn_hist)
+        delocal int t = 0
+    else
+        if slot < 2 then
             local int t = 0
                 t += __mn_mem1
                 push(out, __mn_hist)
                 out += t
                 push(t, __mn_hist)
             delocal int t = 0
-        fi slot < 1
-    else
-        if slot < 3 then
+        else
             local int t = 0
                 t += __mn_mem2
                 push(out, __mn_hist)
                 out += t
                 push(t, __mn_hist)
             delocal int t = 0
-        else
-            if slot < 4 then
-                local int t = 0
-                    t += __mn_mem3
-                    push(out, __mn_hist)
-                    out += t
-                    push(t, __mn_hist)
-                delocal int t = 0
-            else
-                local int t = 0
-                    t += __mn_mem4
-                    push(out, __mn_hist)
-                    out += t
-                    push(t, __mn_hist)
-                delocal int t = 0
-            fi slot < 4
-        fi slot < 3
-    fi slot < 2
+        fi slot < 2
+    fi slot < 1
 
-// Heap dinamico (vm->mn_pool): slot >= 5 (heap malloc, no alias nominato).
+// Heap dinamico (vm->mn_pool): slot >= 3 (heap malloc, no alias nominato).
 // Cresce on-demand → niente --ptr-pool-size per malloc-in-loop runtime.
 procedure __mn_pool_store_dyn(int slot, int val, stack __mn_hist, stack __mn_scratch)
-    if slot >= 5 then
+    if slot >= 3 then
         poolpush(slot, __mn_hist)
         pooladd(slot, val)
-    fi slot >= 5
+    fi slot >= 3
 
 procedure __mn_pool_load_dyn(int slot, int out, stack __mn_hist, stack __mn_scratch)
-    if slot >= 5 then
+    if slot >= 3 then
         local int t = 0
             poolget(slot, t)
             push(out, __mn_hist)
             out += t
             push(t, __mn_hist)
         delocal int t = 0
-    fi slot >= 5
+    fi slot >= 3
 
-procedure br(int __mn_mem1, int __mn_mem2, stack __mn_hist, stack __mn_scratch)
-    local int __mn_v_r = 0
-    local int __mn_v_i = 0
+procedure __mn_k_par(int __mn_mem1, int __mn_mem2, stack __mn_hist, stack __mn_scratch)
     local int __mn_e0 = 0
     local int __mn_e1 = 0
     local int __mn_e2 = 0
@@ -1439,101 +1409,73 @@ procedure br(int __mn_mem1, int __mn_mem2, stack __mn_hist, stack __mn_scratch)
     local int __mn_e14 = 0
     local int __mn_e15 = 0
     local int __mn_e16 = 0
-        // funzione C br
-        push(__mn_v_r, __mn_hist)
-        __mn_v_r += 0
-        call __mn_mask_u32(__mn_v_r, __mn_hist, __mn_scratch)
-        push(__mn_v_i, __mn_hist)
-        __mn_v_i += 0
-        if __mn_v_i < 32 then
-            push(__mn_e0, __mn_hist)
-            __mn_e0 += 1
-        else
-            push(__mn_e0, __mn_hist)
-            __mn_e0 += 0
-        fi __mn_v_i < 32
-        local int __mn_lc1 = 0
-            __mn_lc1 += __mn_e0
-            if __mn_lc1 != 0 then
-                local int __mn_lc0 = 0
-                    from __mn_lc0 == 0 loop
-                        __mn_e3 += 1
-                        call __mn_shl_into(__mn_e4, __mn_v_r, __mn_e3, __mn_hist, __mn_scratch)
-                        push(__mn_e3, __mn_scratch)
-                        __mn_e5 += 1
-                        call __mn_and_into(__mn_e6, __mn_mem1, __mn_e5, __mn_hist, __mn_scratch)
-                        push(__mn_e5, __mn_scratch)
-                        call __mn_or_into(__mn_e7, __mn_e4, __mn_e6, __mn_hist, __mn_scratch)
-                        push(__mn_e6, __mn_scratch)
-                        push(__mn_e4, __mn_scratch)
-                        push(__mn_v_r, __mn_hist)
-                        __mn_v_r += __mn_e7
-                        push(__mn_e7, __mn_scratch)
-                        call __mn_mask_u32(__mn_v_r, __mn_hist, __mn_scratch)
-                        call __mn_mask_u32(__mn_v_r, __mn_hist, __mn_scratch)
-                        __mn_e8 += 2
-                        call __mn_divmod_signed(__mn_mem1, __mn_e8, __mn_e9, __mn_e10, __mn_hist, __mn_scratch)
-                        push(__mn_e10, __mn_scratch)
-                        push(__mn_e8, __mn_scratch)
-                        __mn_e15 += 0
-                        if __mn_mem1 < 0 then
-                            push(__mn_e15, __mn_hist)
-                            __mn_e15 += 1
-                        else
-                            push(__mn_e15, __mn_hist)
-                            __mn_e15 += 0
-                        fi __mn_mem1 < 0
-                        if __mn_e15 != 0 then
-                            __mn_e12 += 2
-                            call __mn_divmod_signed(__mn_mem1, __mn_e12, __mn_e14, __mn_e13, __mn_hist, __mn_scratch)
-                            push(__mn_e14, __mn_scratch)
-                            push(__mn_e12, __mn_scratch)
-                            if __mn_e13 != 0 then
-                                push(__mn_e11, __mn_hist)
-                                __mn_e11 += 1
-                            else
-                                push(__mn_e11, __mn_hist)
-                                __mn_e11 += 0
-                            fi __mn_e13 != 0
-                            push(__mn_e13, __mn_scratch)
-                        else
-                            push(__mn_e11, __mn_hist)
-                            __mn_e11 += 0
-                        fi __mn_e15 != 0
-                        __mn_e16 += __mn_e9
-                        __mn_e16 -= __mn_e11
-                        push(__mn_mem1, __mn_hist)
-                        __mn_mem1 += __mn_e16
-                        push(__mn_e16, __mn_scratch)
-                        push(__mn_e11, __mn_scratch)
-                        push(__mn_e9, __mn_scratch)
-                        call __mn_mask_u32(__mn_mem1, __mn_hist, __mn_scratch)
-                        push(__mn_e1, __mn_hist)
-                        __mn_e1 += __mn_v_i
-                        __mn_e2 += __mn_e1
-                        __mn_e2 += 1
-                        push(__mn_v_i, __mn_hist)
-                        __mn_v_i += __mn_e2
-                        push(__mn_e2, __mn_scratch)
-                        push(__mn_e1, __mn_scratch)
-                        push(__mn_e0, __mn_hist)
-                        __mn_e0 += 0
-                        if __mn_v_i < 32 then
-                            push(__mn_e0, __mn_hist)
-                            __mn_e0 += 1
-                        else
-                            push(__mn_e0, __mn_hist)
-                            __mn_e0 += 0
-                        fi __mn_v_i < 32
-                        __mn_lc0 += 1
-                    until __mn_e0 == 0
-                    push(__mn_lc0, __mn_hist)
-                delocal int __mn_lc0 = 0
-            fi __mn_lc1 != 0
-            push(__mn_lc1, __mn_hist)
-        delocal int __mn_lc1 = 0
+        // funzione C par
+        __mn_e0 += 16
+        call __mn_shr_into(__mn_e1, __mn_mem1, __mn_e0, __mn_hist, __mn_scratch)
+        push(__mn_e0, __mn_scratch)
+        push(__mn_e2, __mn_hist)
+        __mn_e2 += __mn_mem1
+        __mn_e2 ^= __mn_e1
+        push(__mn_e1, __mn_scratch)
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += __mn_e2
+        push(__mn_e2, __mn_scratch)
+        push(__mn_e1, __mn_scratch)
+        call __mn_mask_u32(__mn_mem1, __mn_hist, __mn_scratch)
+        __mn_e3 += 8
+        call __mn_shr_into(__mn_e4, __mn_mem1, __mn_e3, __mn_hist, __mn_scratch)
+        push(__mn_e3, __mn_scratch)
+        push(__mn_e5, __mn_hist)
+        __mn_e5 += __mn_mem1
+        __mn_e5 ^= __mn_e4
+        push(__mn_e4, __mn_scratch)
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += __mn_e5
+        push(__mn_e5, __mn_scratch)
+        push(__mn_e4, __mn_scratch)
+        call __mn_mask_u32(__mn_mem1, __mn_hist, __mn_scratch)
+        __mn_e6 += 4
+        call __mn_shr_into(__mn_e7, __mn_mem1, __mn_e6, __mn_hist, __mn_scratch)
+        push(__mn_e6, __mn_scratch)
+        push(__mn_e8, __mn_hist)
+        __mn_e8 += __mn_mem1
+        __mn_e8 ^= __mn_e7
+        push(__mn_e7, __mn_scratch)
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += __mn_e8
+        push(__mn_e8, __mn_scratch)
+        push(__mn_e7, __mn_scratch)
+        call __mn_mask_u32(__mn_mem1, __mn_hist, __mn_scratch)
+        __mn_e9 += 2
+        call __mn_shr_into(__mn_e10, __mn_mem1, __mn_e9, __mn_hist, __mn_scratch)
+        push(__mn_e9, __mn_scratch)
+        push(__mn_e11, __mn_hist)
+        __mn_e11 += __mn_mem1
+        __mn_e11 ^= __mn_e10
+        push(__mn_e10, __mn_scratch)
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += __mn_e11
+        push(__mn_e11, __mn_scratch)
+        push(__mn_e10, __mn_scratch)
+        call __mn_mask_u32(__mn_mem1, __mn_hist, __mn_scratch)
+        __mn_e12 += 1
+        call __mn_shr_into(__mn_e13, __mn_mem1, __mn_e12, __mn_hist, __mn_scratch)
+        push(__mn_e12, __mn_scratch)
+        push(__mn_e14, __mn_hist)
+        __mn_e14 += __mn_mem1
+        __mn_e14 ^= __mn_e13
+        push(__mn_e13, __mn_scratch)
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += __mn_e14
+        push(__mn_e14, __mn_scratch)
+        push(__mn_e13, __mn_scratch)
+        call __mn_mask_u32(__mn_mem1, __mn_hist, __mn_scratch)
+        __mn_e15 += 1
+        call __mn_and_into(__mn_e16, __mn_mem1, __mn_e15, __mn_hist, __mn_scratch)
+        push(__mn_e15, __mn_scratch)
         push(__mn_mem2, __mn_hist)
-        __mn_mem2 += __mn_v_r
+        __mn_mem2 += __mn_e16
+        push(__mn_e16, __mn_scratch)
         // return
     push(__mn_e16, __mn_hist)
     delocal int __mn_e16 = 0
@@ -1569,10 +1511,6 @@ procedure br(int __mn_mem1, int __mn_mem2, stack __mn_hist, stack __mn_scratch)
     delocal int __mn_e1 = 0
     push(__mn_e0, __mn_hist)
     delocal int __mn_e0 = 0
-    push(__mn_v_i, __mn_hist)
-    delocal int __mn_v_i = 0
-    push(__mn_v_r, __mn_hist)
-    delocal int __mn_v_r = 0
 procedure main()
     stack __mn_hist
     stack __mn_scratch
@@ -1580,36 +1518,60 @@ procedure main()
     local int __mn_mem1 = 0
     local int __mn_mem2 = 0
     local int __mn_mem3 = 0
-    local int __mn_mem4 = 0
-    local int __mn_mem5 = 0
     local int __mn_exit = 0
     local int __mn_pool_ctr = 0
     local int __mn_e0 = 0
     local int __mn_e1 = 0
     local int __mn_e2 = 0
     local int __mn_e3 = 0
+    local int __mn_e4 = 0
+    local int __mn_e5 = 0
         // generato da Mnemo da C
-        __mn_pool_ctr += 5
+        __mn_pool_ctr += 3
         push(__mn_mem1, __mn_hist)
-        __mn_mem1 += 1
+        __mn_mem1 += 7
         push(__mn_mem2, __mn_hist)
         __mn_mem2 += 0
-        call br(__mn_mem1, __mn_mem2, __mn_hist, __mn_scratch)
+        call __mn_k_par(__mn_mem1, __mn_mem2, __mn_hist, __mn_scratch)
         push(__mn_e0, __mn_hist)
         __mn_e0 += __mn_mem2
-        push(__mn_e1, __mn_hist)
-        __mn_e1 += __mn_e0
-        call __mn_mask_u32(__mn_e1, __mn_hist, __mn_scratch)
-        __mn_e2 += 8
-        call __mn_putX_width_zero(__mn_e1, __mn_e2, __mn_hist, __mn_scratch)
-        __mn_e2 -= 8
-        __mn_e3 += 10
+        call __mn_putd(__mn_e0, __mn_hist, __mn_scratch)
+        __mn_e1 += 32
+        show(__mn_e1, char)
+        __mn_e1 -= 32
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += 15
+        push(__mn_mem2, __mn_hist)
+        __mn_mem2 += 0
+        call __mn_k_par(__mn_mem1, __mn_mem2, __mn_hist, __mn_scratch)
+        push(__mn_e2, __mn_hist)
+        __mn_e2 += __mn_mem2
+        call __mn_putd(__mn_e2, __mn_hist, __mn_scratch)
+        __mn_e3 += 32
         show(__mn_e3, char)
-        __mn_e3 -= 10
+        __mn_e3 -= 32
+        push(__mn_mem1, __mn_hist)
+        __mn_mem1 += 4660
+        push(__mn_mem2, __mn_hist)
+        __mn_mem2 += 0
+        call __mn_k_par(__mn_mem1, __mn_mem2, __mn_hist, __mn_scratch)
+        push(__mn_e4, __mn_hist)
+        __mn_e4 += __mn_mem2
+        call __mn_putd(__mn_e4, __mn_hist, __mn_scratch)
+        __mn_e5 += 10
+        show(__mn_e5, char)
+        __mn_e5 -= 10
+        push(__mn_e5, __mn_scratch)
+        push(__mn_e4, __mn_scratch)
         push(__mn_e3, __mn_scratch)
-        push(__mn_e0, __mn_scratch)
+        push(__mn_e2, __mn_scratch)
         push(__mn_e1, __mn_scratch)
+        push(__mn_e0, __mn_scratch)
         // return
+    push(__mn_e5, __mn_hist)
+    delocal int __mn_e5 = 0
+    push(__mn_e4, __mn_hist)
+    delocal int __mn_e4 = 0
     push(__mn_e3, __mn_hist)
     delocal int __mn_e3 = 0
     push(__mn_e2, __mn_hist)
@@ -1622,10 +1584,6 @@ procedure main()
     delocal int __mn_pool_ctr = 0
     push(__mn_exit, __mn_hist)
     delocal int __mn_exit = 0
-    push(__mn_mem5, __mn_hist)
-    delocal int __mn_mem5 = 0
-    push(__mn_mem4, __mn_hist)
-    delocal int __mn_mem4 = 0
     push(__mn_mem3, __mn_hist)
     delocal int __mn_mem3 = 0
     push(__mn_mem2, __mn_hist)
