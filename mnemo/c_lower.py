@@ -8527,7 +8527,17 @@ def _lower_funccall_with_ret(
             # ricorsivo del printer. Esclusione rimossa 2026-05-31 (verificato:
             # printer-in-loop 50 iter opt-uncall = base; sweep 163/163 generic).
             show_blk = False
-            pool_blk = name in ctx.pool_uncall_blocked
+            # ptr-param-writer (`*out=…`): ora opt'd DENTRO un loop (dove il
+            # freeing dell'hist per-iter ripaga). Due bug risolti per renderlo
+            # corretto: (1) lato-VM branch_trace consumata FIFO invece di LIFO →
+            # l'IF ibrido del *out store finiva nel ramo sbagliato in inverse
+            # (Janus.c/vm_invert.h); (2) i temp di snapshot non venivano azzerati
+            # dopo l'XOR-swap per le celle non modificate dal callee (es. il
+            # contatore di loop incluso nello snapshot a range completo) →
+            # corruzione cross-iter (azzerati ora con push su scratch). Fuori da
+            # loop restano esclusi: opt = puro costo (uncall 2x del corpo, es.
+            # bitwise di keyschedule) senza beneficio hist.
+            pool_blk = (name in ctx.pool_uncall_blocked) and not ctx.loop_stack
             self_rec = (name == ctx.fn_name)
             callee_recursive = _func_is_recursive_user(ctx.file_ast, name)
             in_par2_worker = ctx.fn_name in ctx.par2_workers
@@ -8593,13 +8603,21 @@ def _lower_funccall_with_ret(
                     mk = f"__mn_mem{kk}"
                     v_m = Var(mk)
                     v_t = Var(t_cell)
+                    # XOR-swap mem↔t: dopo, mem = post-call (corretto), t =
+                    # valore PRE-call. Per le celle che il callee NON modifica
+                    # (pre==post, es. contatore di loop incluso nello snapshot a
+                    # range completo) t resta != 0 → corromperebbe lo snapshot
+                    # dell'iterazione successiva (`t ^= mem` assume t==0). Azzera
+                    # t con push su scratch (reversibile).
                     uncall_with_restore.extend(
                         [
                             IXorEq(mk, v_t),
                             IXorEq(t_cell, v_m),
                             IXorEq(mk, v_t),
+                            IHistPush(ctx.scratch, t_cell),
                         ]
                     )
+                ctx.use_scratch = True
             post_uc: list[Instr] = []
             if wants and ret_sink is not None:
                 rnames = _ret_slot_names(rw_c)

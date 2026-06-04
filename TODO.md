@@ -1,22 +1,5 @@
 # TODO
 
-## Ottimizzazioni mancanti
-
-- **opt-uncall su funzioni pool che scrivono attraverso un ptr-param**:
-  ancora escluse. La maggior parte delle funzioni pool-using (malloc-loop con
-  return/globale) è ORA ottimizzata (`cells_max -50%` su poolopt, encrypt/des
-  invertibili intatti). Restano escluse SOLO quelle che fanno `*out=…`/`out[i]=…`
-  su un puntatore-parametro (`pool_uncall_blocked = pool ∩ writes-ptr-param`):
-  l'uncall inverte una scrittura su una cella del frame chiamante non coperta
-  dallo snap/swap → divergenza (repro `c_test/bug_malloc_in_function.c` sotto
-  `--opt-uncall`). Estendere lo snapshot al range completo COPRE la cella scritta
-  dinamicamente (provato), ma fa emergere un secondo blocco lato-VM: l'inverso di
-  `__mn_pool_load_dyn` lascia un temp non azzerato (`DELOCAL: valore finale
-  errato! frame=__mn_pool_load_dyn var=t atteso=0 trovato=-99`). Serve quindi un
-  fix Kairos all'inversione del dispatch dinamico pool load/store (patch
-  bilaterale Mnemo+VM), non solo l'estensione dello snapshot. Rinviato: è una
-  pura ottimizzazione (risparmio di stack hist), nessun guadagno funzionale.
-
 ## Migliorie / limiti noti (non bloccanti)
 
 - **`char *n; n = "literal";` riassegnata + ritorno cross-funzione**: la
