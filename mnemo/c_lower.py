@@ -3099,6 +3099,71 @@ def _pointer_expr_struct_tag(node: c.Node, ctx: "_Ctx") -> str | None:
     return None
 
 
+def _struct_field_dims(tag: str, field: str, ctx: "_Ctx") -> tuple[int, ...] | None:
+    """Dimensioni di un campo-array di una struct (`int d[2][2]` → (2,2)).
+    Le ricava dall'AST della definizione struct (lo spec flat le perde)."""
+    if ctx.file_ast is None:
+        return None
+    def _from_decls(decls: object) -> tuple[int, ...] | None:
+        for d in decls or []:
+            if isinstance(d, c.Decl) and d.name == field:
+                dims: list[int] = []
+                cur = d.type
+                while isinstance(cur, c.ArrayDecl):
+                    try:
+                        dims.append(_array_dim_const(cur.dim, ctx))
+                    except MnemoCompileError:
+                        return None
+                    cur = cur.type
+                return tuple(dims) if dims else None
+        return None
+    for ext in ctx.file_ast.ext or []:
+        if isinstance(ext, c.Typedef):
+            u = _strip_typedecl(ext.type)
+            if isinstance(u, c.Struct) and (u.name == tag or ext.name == tag) and u.decls:
+                r = _from_decls(u.decls)
+                if r is not None:
+                    return r
+        elif isinstance(ext, c.Decl) and isinstance(ext.type, c.Struct):
+            if ext.type.name == tag and ext.type.decls:
+                r = _from_decls(ext.type.decls)
+                if r is not None:
+                    return r
+    return None
+
+
+def _struct_field_md_resolve(
+    expr: "c.ArrayRef", ctx: "_Ctx"
+) -> "tuple[str, int, list[c.Node], tuple[int, ...]] | None":
+    """`s.field[i][j…]` con `field` campo-array (multi-dim) di struct var →
+    (slog, n_celle_totali, subs, dims). None se non applicabile."""
+    subs: list[c.Node] = []
+    cur: c.Node = expr
+    while isinstance(cur, c.ArrayRef):
+        subs.insert(0, cur.subscript)
+        cur = cur.name
+    if not (
+        isinstance(cur, c.StructRef) and cur.type == "."
+        and isinstance(cur.name, c.ID) and isinstance(cur.field, c.ID)
+    ):
+        return None
+    slog = _scope_resolve(ctx, cur.name.name)
+    tag = ctx.struct_tag_of_var.get(slog)
+    if tag is None:
+        return None
+    field = cur.field.name
+    fnames = {fn for fn, _ in ctx.struct_specs.get(tag, [])}
+    if (field + "__0") not in fnames:
+        return None
+    dims = _struct_field_dims(tag, field, ctx)
+    if dims is None or len(subs) != len(dims):
+        return None
+    total = 1
+    for d in dims:
+        total *= d
+    return f"{slog}__{field}", total, subs, dims
+
+
 def _structptr_index_field_slot(
     arr_ref: "c.ArrayRef", field: str, ctx: "_Ctx"
 ) -> "tuple[list[Instr], str, list[str]] | None":
@@ -4390,6 +4455,21 @@ def _lower_printf(node: c.FuncCall, ctx: _Ctx) -> list[Instr]:
                 elif isinstance(op, Var):
                     # Prefisso proc: putx (lowercase) o putX (uppercase, %X/%llX).
                     _px = "__mn_putX" if is_upper else "__mn_putx"
+                    # `%x`/`%X` (non-u64): maschera il valore a 32 bit prima di
+                    # formattarlo. Un'espressione unsigned non-mascherata (es.
+                    # `x<<16` con x uint32) può eccedere 32 bit → cifre errate /
+                    # char invalido. (Come `%u`.) `%llx`/`%llX` restano a 64 bit.
+                    _xn = op.name
+                    if not is_u64:
+                        _tmx = ctx.fresh_temp()
+                        ctx.use_hist = True
+                        ctx.use_scratch = True
+                        out.append(IHistPush(ctx.hist, _tmx))
+                        out.append(IAddEq(_tmx, Var(op.name)))
+                        out.append(ICall("__mn_mask_u32", [_tmx] + _kairos_stack_actuals(ctx)))
+                        tm_acc.append(_tmx)
+                        _xn = _tmx
+                    op = Var(_xn)
                     if (
                         width > 0
                         and "+" not in flags
@@ -6469,6 +6549,29 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
+        # `s.field[i][j]` con field campo-array (multi-dim) di struct var.
+        _mdr = _struct_field_md_resolve(expr, ctx)
+        if _mdr is not None:
+            _fbase, _ftot, _subs_m, _dims_m = _mdr
+            _co_m = getattr(expr, "coord", None)
+            if all(isinstance(s, c.Constant) for s in _subs_m):
+                _lin = _const_row_major_linear(_subs_m, _dims_m)
+                return [], Var(_phys(ctx, f"{_fbase}__{_lin}")), []
+            # runtime: disj-chain sulle celle del campo (no contiguità richiesta).
+            _lin_expr = _c_row_major_index_ast(_subs_m, _dims_m, _co_m)
+            _pix, _opix, _tix = _eval_expr(_lin_expr, ctx)
+            if isinstance(_opix, Imm):
+                _tixn = ctx.fresh_temp(); _pix = _pix + [IConst(_tixn, _opix.value)]; _ixn = _tixn; _tix = _tix + [_tixn]
+            else:
+                _ixn = _opix.name
+            _td = ctx.fresh_temp()
+            ctx.use_hist = True
+            _bodies = [
+                [IHistPush(ctx.hist, _td), IAddEq(_td, Var(_phys(ctx, f"{_fbase}__{kk}")))]
+                for kk in range(_ftot)
+            ]
+            _chain = _disj_eq_chain(_ixn, list(range(_ftot)), _bodies)
+            return _pix + _chain, Var(_td), _tix + [_td]
         # `ops[i]` con `ops` array di fn-ptr usato come VALORE (es. passato a un
         # param fn-ptr) → tag della funzione. Const → diretto; runtime → chain.
         if isinstance(expr.name, c.ID):
@@ -11438,6 +11541,38 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             )
         if isinstance(node.lvalue, c.ArrayRef):
             lv = node.lvalue
+            # `s.field[i][j] = X` (campo-array multi-dim di struct var).
+            _mdr = _struct_field_md_resolve(lv, ctx)
+            if _mdr is not None:
+                _fbase, _ftot, _subs_w, _dims_w = _mdr
+                _co_w = node.coord
+                if all(isinstance(s, c.Constant) for s in _subs_w):
+                    _lin = _const_row_major_linear(_subs_w, _dims_w)
+                    _rhs_c = node.rvalue
+                    if node.op in _COMPOUND_ASSIGN_OPS:
+                        _rhs_c = c.BinaryOp(_COMPOUND_ASSIGN_OPS[node.op], lv, node.rvalue, _co_w)
+                    return _lower_assign(_phys(ctx, f"{_fbase}__{_lin}"), _rhs_c, ctx)
+                # runtime: if-chain `if idx==k then cell_k = rhs`.
+                _lin_expr = _c_row_major_index_ast(_subs_w, _dims_w, _co_w)
+                _pix, _opix, _tix = _eval_expr(_lin_expr, ctx)
+                if isinstance(_opix, Imm):
+                    _tixn = ctx.fresh_temp(); _pix = _pix + [IConst(_tixn, _opix.value)]; _ixn = _tixn; _tix = _tix + [_tixn]
+                else:
+                    _ixn = _opix.name
+                _outw: list[Instr] = list(_pix)
+                for kk in range(_ftot):
+                    _cellk = c.ID(_phys(ctx, f"{_fbase}__{kk}"), _co_w)
+                    _rhs_k: c.Node = node.rvalue
+                    if node.op in _COMPOUND_ASSIGN_OPS:
+                        _rhs_k = c.BinaryOp(_COMPOUND_ASSIGN_OPS[node.op], _cellk, node.rvalue, _co_w)
+                    _body = _lower_assign(_phys(ctx, f"{_fbase}__{kk}"), _rhs_k, ctx)
+                    _guard = c.BinaryOp("==", c.ID(_ixn, _co_w), c.Constant("int", str(kk), _co_w), _co_w)
+                    _outw.extend(_lower_if_from_expr(_guard, _body, [], ctx))
+                for _t in _tix:
+                    _outw.append(IHistPush(ctx.scratch, _t))
+                if _tix:
+                    ctx.use_scratch = True
+                return _outw
             # `r[i][j] = X` con `r` row-pointer (`int(*r)[N]`) → pool store.
             _rpw = _row_ptr_index_slot(lv, ctx)
             if _rpw is not None:
