@@ -5,7 +5,7 @@ Programmi C (subset Mnemo) per verificare l'equivalenza output con gcc.
 - `t/*.c` — i test (generati da `gen*.py`, + aggiunte manuali).
 - `run.sh [dir]` — compila ogni file con gcc e con mnemo, confronta stdout.
   Salta i file con `// SKIP` come prima riga.
-- Stato: 152/154 PASS (2 SKIP documentati: fn-ptr param, struct-array annidato
+- Stato: tutti i test passano (gap fn-ptr param, struct-array annidato, ptr-a-array chiusi). Restano alcuni SKIP per UB/unspecified (overflow int signed, sizeof(ptr), ordine valutazione argomenti).
   con campo-array; + alcuni SKIP per UB/unspecified: overflow int signed,
   sizeof(ptr), ordine valutazione argomenti).
 

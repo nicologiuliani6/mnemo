@@ -6456,6 +6456,33 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
+        # `ops[i]` con `ops` array di fn-ptr usato come VALORE (es. passato a un
+        # param fn-ptr) → tag della funzione. Const → diretto; runtime → chain.
+        if isinstance(expr.name, c.ID):
+            _opslog = _scope_resolve(ctx, expr.name.name)
+            if _opslog in ctx.func_ptr_array:
+                _names = ctx.func_ptr_array[_opslog]
+                if isinstance(expr.subscript, c.Constant):
+                    _k = _literal_int_widen(expr.subscript)
+                    if 0 <= _k < len(_names) and _names[_k] in ctx.func_ptr_tags:
+                        return [], Imm(ctx.func_ptr_tags[_names[_k]]), []
+                else:
+                    pre_ix, op_ix, tm_ix = _eval_expr(expr.subscript, ctx)
+                    if isinstance(op_ix, Imm):
+                        tix = ctx.fresh_temp(); pre_ix = pre_ix + [IConst(tix, op_ix.value)]; ixn = tix; tm_ix = tm_ix + [tix]
+                    else:
+                        ixn = op_ix.name
+                    t_tag = ctx.fresh_temp()
+                    ctx.use_hist = True
+                    bodies = []
+                    idxs = []
+                    for _k, _nm in enumerate(_names):
+                        if _nm and _nm in ctx.func_ptr_tags:
+                            idxs.append(_k)
+                            bodies.append([IHistPush(ctx.hist, t_tag), IAddEq(t_tag, Imm(ctx.func_ptr_tags[_nm]))])
+                    if bodies:
+                        chain = _disj_eq_chain(ixn, idxs, bodies)
+                        return pre_ix + chain, Var(t_tag), tm_ix + [t_tag]
         # `r[i][j]` con `r` row-pointer (`int(*r)[N]`): pool load a r + i*N + j.
         _rp = _row_ptr_index_slot(expr, ctx)
         if _rp is not None:

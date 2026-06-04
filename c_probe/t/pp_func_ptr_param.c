@@ -1,4 +1,3 @@
-// SKIP: fn-ptr come parametro (dispatch cross-call-site) non supportato
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
