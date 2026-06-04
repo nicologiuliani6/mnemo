@@ -971,6 +971,7 @@ class _Ctx:
     char_trunc_signed: set[str] = field(default_factory=set)
     char_trunc_unsigned: set[str] = field(default_factory=set)
     uint_trunc: set[str] = field(default_factory=set)
+    row_ptr_stride: dict[str, int] = field(default_factory=dict)
     """Fn ptr con >1 candidato runtime: nome logico → set di nomi fn possibili."""
     func_ptr_runtime: dict[str, set[str]] = field(default_factory=dict)
     """Tag intero per ogni fn addressable in modalità runtime-dispatch (file-level)."""
@@ -3930,6 +3931,68 @@ def _return_string_literal(node: c.Node) -> c.Constant | None:
     return None
 
 
+def _row_ptr_index_slot(
+    expr: c.ArrayRef, ctx: "_Ctx"
+) -> "tuple[list[Instr], str, list[str]] | None":
+    """`r[i][j]` o `(*(r+i))[j]` con `r` row-pointer (`int(*r)[N]`) → slot pool
+    `r + i*N + j` in un temp. None se non è un row-pointer."""
+    # forma `r[i][j]`: name = ArrayRef(ID r, i)
+    rlog = None
+    iexpr = jexpr = None
+    if isinstance(expr.name, c.ArrayRef) and isinstance(expr.name.name, c.ID):
+        cand = _scope_resolve(ctx, expr.name.name.name)
+        if cand in ctx.row_ptr_stride:
+            rlog, iexpr, jexpr = cand, expr.name.subscript, expr.subscript
+    # forma `(*(r+i))[j]`: name = UnaryOp(*, BinaryOp(+, ID r, i))
+    elif (
+        isinstance(expr.name, c.UnaryOp) and expr.name.op == "*"
+        and isinstance(expr.name.expr, c.BinaryOp) and expr.name.expr.op == "+"
+    ):
+        be = expr.name.expr
+        for a, b in ((be.left, be.right), (be.right, be.left)):
+            if isinstance(a, c.ID):
+                cand = _scope_resolve(ctx, a.name)
+                if cand in ctx.row_ptr_stride:
+                    rlog, iexpr, jexpr = cand, b, expr.subscript
+                    break
+    if rlog is None:
+        return None
+    stride = ctx.row_ptr_stride[rlog]
+    co = getattr(expr, "coord", None)
+    rid = c.ID(rlog, co)
+    rowmul: c.Node = iexpr if stride == 1 else c.BinaryOp(
+        "*", iexpr, c.Constant("int", str(stride), co), co
+    )
+    slot_e: c.Node = c.BinaryOp("+", c.BinaryOp("+", rid, rowmul, co), jexpr, co)
+    pre, op, tm = _eval_expr(slot_e, ctx)
+    if isinstance(op, Imm):
+        t = ctx.fresh_temp()
+        return pre + [IConst(t, op.value)], t, tm + [t]
+    return pre, op.name, tm
+
+
+def _row_ptr_decl_meta(node: c.Decl) -> tuple[str, int] | None:
+    """`int (*r)[N]` (puntatore-a-array, row pointer) → (nome, N). None altrove."""
+    cur = node.type
+    if not isinstance(cur, c.PtrDecl):
+        return None
+    inner = cur.type
+    if not isinstance(inner, c.ArrayDecl) or inner.dim is None:
+        return None
+    leaf = inner.type
+    if not isinstance(leaf, c.TypeDecl) or leaf.declname is None:
+        return None
+    if not isinstance(leaf.type, c.IdentifierType):
+        return None
+    try:
+        nval = _literal_int_widen(inner.dim) if isinstance(inner.dim, c.Constant) else None
+    except Exception:
+        nval = None
+    if nval is None:
+        return None
+    return str(leaf.declname), int(nval)
+
+
 def _decl_is_char_pointer(node: c.Decl, td: dict[str, c.Node]) -> bool:
     cur = node.type
     if not isinstance(cur, c.PtrDecl):
@@ -6381,6 +6444,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         return [], Var(_phys(ctx, cell)), []
 
     if isinstance(expr, c.ArrayRef):
+        # `r[i][j]` con `r` row-pointer (`int(*r)[N]`): pool load a r + i*N + j.
+        _rp = _row_ptr_index_slot(expr, ctx)
+        if _rp is not None:
+            pre_rp, slot_rp, tm_rp = _rp
+            _register_ptr_pool_locals(ctx)
+            tout_rp = ctx.fresh_temp()
+            return pre_rp + _ir_pool_load_call(ctx, slot_rp, tout_rp), Var(tout_rp), tm_rp + [tout_rp]
         # `arr[i].arrfield[j]` con arr array-di-struct e arrfield campo-ARRAY
         # dell'elemento (es. `g.rows[i].cells[j]`). Cella flat
         # `<arr>__<i>__<field>__<j>`; const → diretta, runtime → pool load a
@@ -10783,9 +10853,27 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ):
                         out_fp.append(IAddEq(phy_fp, Imm(ctx.func_ptr_tags[tgt_fp])))
                 return out_fp
-            pn = _int_ptr_var_decl_name(node, td)
-            if pn is None:
+            # `int (*r)[N]` row pointer: 1 cella (slot base) + stride N.
+            # Controllato PRIMA di `_int_ptr_var_decl_name` (che matcherebbe
+            # erroneamente `int(*r)[N]` come `int *r`).
+            _rpm = _row_ptr_decl_meta(node)
+            pn = None if _rpm is not None else _int_ptr_var_decl_name(node, td)
+            if pn is None and _rpm is None:
                 pn = _struct_pointer_param_name(node, ctx)
+            if pn is None and _rpm is not None:
+                _rname, _rN = _rpm
+                _rlog = _scope_declare(ctx, _rname)
+                ctx.int_locals.add(_rlog)
+                if ctx.mem_layout is None:
+                    ctx.decl_order.append(_rlog)
+                ctx.var_types[_rlog] = node.type
+                ctx.row_ptr_stride[_rlog] = _rN
+                if node.init is None:
+                    return []
+                _rinit = node.init
+                if isinstance(_rinit, c.ExprList):
+                    _rinit = _fold_exprlist_as_comma_chain(_rinit)
+                return _lower_assign(_phys(ctx, _rlog), _rinit, ctx)
             if pn is None:
                 raise MnemoCompileError(
                     f"dichiarazione non supportata: {type(node.type).__name__}"
@@ -11272,6 +11360,26 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             )
         if isinstance(node.lvalue, c.ArrayRef):
             lv = node.lvalue
+            # `r[i][j] = X` con `r` row-pointer (`int(*r)[N]`) → pool store.
+            _rpw = _row_ptr_index_slot(lv, ctx)
+            if _rpw is not None:
+                _prw, _slw, _tmw = _rpw
+                _register_ptr_pool_locals(ctx)
+                _rhs = node.rvalue
+                if node.op in _COMPOUND_ASSIGN_OPS:
+                    _rhs = c.BinaryOp(_COMPOUND_ASSIGN_OPS[node.op], lv, node.rvalue, node.coord)
+                _er, _or2, _tmr = _eval_expr(_rhs, ctx)
+                if isinstance(_or2, Imm):
+                    _tv = ctx.fresh_temp(); _er = _er + [IConst(_tv, _or2.value)]; _vn = _tv; _tmr = _tmr + [_tv]
+                else:
+                    _vn = _or2.name
+                _psl, _sa, _tsl = _pool_call_slot_arg(ctx, _slw)
+                _out = _prw + _er + _psl + _ir_pool_store_call(ctx, _sa, _vn)
+                _allt = _tmw + _tmr + _tsl
+                if _allt:
+                    ctx.use_scratch = True
+                _out += [IHistPush(ctx.scratch, x) for x in reversed(_allt)]
+                return _out
             # `arr[i].arrfield[j] = X` (campo-array dell'elemento di struct-array,
             # es. `g.rows[i].cells[j] = X`): const → cella diretta; runtime →
             # pool store a base + i*row_words + j.

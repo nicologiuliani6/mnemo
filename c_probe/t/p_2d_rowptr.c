@@ -1,4 +1,3 @@
-// SKIP: pointer-to-array `int(*r)[N]` (row pointer) non supportato (niche)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

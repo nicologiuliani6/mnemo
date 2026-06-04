@@ -1009,9 +1009,16 @@ def compute_program_mem_layout(
                 ctx.func_ptr_vars.add(logical_fp)
                 alloc(fn, logical_fp)
                 return
-            pn = L._int_ptr_var_decl_name(node, tdm)
-            if pn is None:
+            # `int (*r)[N]` row pointer PRIMA di int-ptr (che lo matcherebbe).
+            _rpm = L._row_ptr_decl_meta(node)
+            pn = None if _rpm is not None else L._int_ptr_var_decl_name(node, tdm)
+            if pn is None and _rpm is None:
                 pn = L._struct_pointer_param_name(node, ctx)
+            if pn is None and _rpm is not None:
+                _rlog = L._scope_declare(ctx, _rpm[0])
+                ctx.int_locals.add(_rlog)
+                alloc(fn, _rlog)
+                return
             if pn is None:
                 raise MnemoCompileError(
                     f"dichiarazione non supportata: {type(node.type).__name__}"
