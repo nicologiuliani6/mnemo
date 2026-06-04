@@ -17,26 +17,23 @@ Restano solo le divergenze qui sotto + ottimizzazioni di performance.
 
 ## Ottimizzazioni future (performance, non correttezza)
 
-Collo di bottiglia principale: **indicizzazione array a indice RUNTIME**
-(`tbl[i]` con `i` variabile). Lowerata come dispatch lineare `if slot==0 …
-if slot==N` sul pool ibrido → O(celle) per accesso. Su programmi con molti
-accessi indicizzati (es. `custom_lib/des.c`: S-box/permute con tabelle globali
-indicizzate a runtime, migliaia di accessi su ~900 celle) il run è
-funzionalmente corretto (verificato: `permute(IP)` byte-1:1 con gcc) ma molto
-lento. Idee, in ordine di convenienza:
+Il collo di bottiglia era l'**indicizzazione array a indice RUNTIME** via
+puntatore (`tbl[i]` con `tbl` puntatore-param e `i` variabile): lowerata come
+deref pool `__mn_pool_load(slot, …)`, con dispatch slot→cella.
 
-1. **Dispatch ristretto al range dell'array noto.** `E[i]` con `E` array noto
-   e `i` runtime: lo slot è `base_E + i` con `i ∈ [0, N)` → fare il dispatch
-   solo sulle N celle di quell'array, non su tutte le `heap_base` celle. Oggi
-   `*(ptr+i)` è lowerato in modo generico (ptr-value runtime) → dispatch
-   globale. Restringere quando la base è un array statico noto → ~14× su des
-   (900→64). Puro lato-Mnemo, basso rischio.
-2. **Op VM nativa di accesso indicizzato** (`MEMGET/MEMSET` su `__mn_mem`):
+- ✅ **FATTO — dispatch binary-search** (`if slot < mid then … else …`,
+  O(log N) invece di O(N) lineare). `custom_lib/des.c` (DES completo) ora gira
+  in ~141s con `--native-arith`, output byte-1:1 con gcc
+  (`CT=85E813540F0AB405`, round-trip ok); `permute(IP)` da >200s a 0.65s.
+  L'accesso DIRETTO `a[i]` su array noto era già disj-chain O(N_array).
+
+Idee ulteriori (se servisse altra velocità):
+
+1. **Op VM nativa di accesso indicizzato** (`MEMGET/MEMSET` su `__mn_mem`):
    read/write diretto O(1) sull'array delle celle nominate (come `POOLGET` ma
-   sui named-cell). Risolve alla radice; tocca VM + lowering + reversibilità
-   (push del valore vecchio per l'inverse). Più lavoro, più rischio.
-3. **Dispatch binary-search** invece che lineare → O(log N), ~10× su 900.
-   Alternativa più semplice a (2) se (1) non basta.
+   sui named-cell). Risolve alla radice; tocca VM + lowering + reversibilità.
+2. **Native-arith per `&`/`|`/`<<`** anche fuori da `--native-arith`, o
+   riduzione delle iterazioni bitwise (oggi 31 iter/op nel path interpretato).
 
 ## Divergenze per design / comportamento non-definito (non bug)
 
