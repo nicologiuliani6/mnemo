@@ -9307,6 +9307,7 @@ def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
     Usa __mn_and_into / __mn_shr_into / __mn_mul_into (reversibili)."""
     stk = _kairos_stack_actuals(ctx)
     ctx.use_hist = True
+    ctx.use_scratch = True
     t = ctx.fresh_temp()
     c255 = ctx.fresh_temp()
     out: list[Instr] = [
@@ -9315,6 +9316,10 @@ def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
         IHistPush(ctx.hist, lhs),
         ICall("__mn_move_int", [lhs, t] + stk),          # lhs = t (t → 0)
     ]
+    # Temp da azzerare a fine trunc: const-operand preservati dalle call (c255,
+    # ecc.) e risultati intermedi restano != 0 → in un loop corromperebbero
+    # l'iterazione successiva. Push su scratch (salva+azzera, reversibile).
+    dirty: list[str] = [c255, t]
     if signed:
         seven = ctx.fresh_temp()
         hb = ctx.fresh_temp()
@@ -9327,6 +9332,8 @@ def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
             ICall("__mn_mul_into", [prod, hb, c256] + stk),   # prod = hb * 256
             ISubEq(lhs, Var(prod)),                            # lhs -= prod
         ]
+        dirty += [seven, hb, c256, prod]
+    out += [IHistPush(ctx.scratch, x) for x in dirty]
     return out
 
 
