@@ -122,41 +122,52 @@ def _emit_monolithic_ptr_pool_kairos(n: int) -> str:
     lines: list[str] = [
         f"// Pool puntatori Mnemo — generato, N={n} celle (__mn_mem0..__mn_mem{n - 1}).",
         "// Header per-blocco (scritto dal lowering): mem{ctr}=nblk; ptr=ctr+1.",
+        "// Dispatch slot→cella via BINARY SEARCH (`if slot < mid`): O(log N) per",
+        "// accesso invece che O(N) lineare → deref a indice runtime molto più veloce.",
         "",
         _pool_alloc_free_src(),
         f"procedure __mn_pool_store(int slot, int val, {mem_params}, stack __mn_hist, stack __mn_scratch)",
     ]
 
-    for i in range(n):
-        lines.extend(
-            [
-                f"    if slot == {i} then",
-                f"        push(__mn_mem{i}, __mn_hist)",
-                f"        __mn_mem{i} += val",
-                f"    fi slot == {i}",
-            ]
-        )
-
-    lines.extend(
-        [
-            "",
-            f"procedure __mn_pool_load(int slot, {mem_params}, int out, stack __mn_hist, stack __mn_scratch)",
+    def _store_leaf(i: int, ind: str) -> list[str]:
+        return [
+            f"{ind}push(__mn_mem{i}, __mn_hist)",
+            f"{ind}__mn_mem{i} += val",
         ]
-    )
 
-    for i in range(n):
-        lines.extend(
-            [
-                f"    if slot == {i} then",
-                "        local int t = 0",
-                f"            t += __mn_mem{i}",
-                "            push(out, __mn_hist)",
-                "            out += t",
-                "            push(t, __mn_hist)",
-                "        delocal int t = 0",
-                f"    fi slot == {i}",
-            ]
-        )
+    def _load_leaf(i: int, ind: str) -> list[str]:
+        return [
+            f"{ind}local int t = 0",
+            f"{ind}    t += __mn_mem{i}",
+            f"{ind}    push(out, __mn_hist)",
+            f"{ind}    out += t",
+            f"{ind}    push(t, __mn_hist)",
+            f"{ind}delocal int t = 0",
+        ]
+
+    def _tree(lo: int, hi: int, leaf, depth: int) -> list[str]:
+        # Emette il dispatch per gli slot in [lo, hi): foglia = singola cella;
+        # interno = `if slot < mid then <[lo,mid)> else <[mid,hi)> fi slot < mid`.
+        ind = "    " * (depth + 1)
+        if hi - lo == 1:
+            return leaf(lo, ind)
+        mid = (lo + hi) // 2
+        out_l: list[str] = [f"{ind}if slot < {mid} then"]
+        out_l += _tree(lo, mid, leaf, depth + 1)
+        out_l.append(f"{ind}else")
+        out_l += _tree(mid, hi, leaf, depth + 1)
+        out_l.append(f"{ind}fi slot < {mid}")
+        return out_l
+
+    if n > 0:
+        lines += _tree(0, n, _store_leaf, 0)
+
+    lines += [
+        "",
+        f"procedure __mn_pool_load(int slot, {mem_params}, int out, stack __mn_hist, stack __mn_scratch)",
+    ]
+    if n > 0:
+        lines += _tree(0, n, _load_leaf, 0)
 
     # alloc/free sono già emessi da _pool_alloc_free_src() in testa (mem-free).
     return "\n".join(lines).rstrip() + "\n"
