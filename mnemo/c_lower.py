@@ -6022,6 +6022,13 @@ def _ptr_struct_stride_words(lv: c.Node, ctx: _Ctx) -> int:
     if not isinstance(lv, c.ID):
         return 1
     log = _scope_resolve(ctx, lv.name)
+    # Array-di-struct che decade a puntatore (`a + i` con `a` struct array):
+    # passo = sizeof(elemento)/4.
+    if log in ctx.struct_array_info:
+        sa_tag = ctx.struct_array_info[log][0]
+        if sa_tag in ctx.struct_specs:
+            w = _sizeof_struct_tag(sa_tag, ctx) // _SIZEOF_SCALAR
+            return w if w > 0 else 1
     pty = ctx.var_types.get(log)
     if pty is None or _pointer_level(pty) < 1:
         return 1
