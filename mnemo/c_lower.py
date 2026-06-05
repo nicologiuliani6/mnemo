@@ -6467,6 +6467,42 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 t_out = ctx.fresh_temp()
                 ins = pre_s + _ir_pool_load_call(ctx, slot_tmp, t_out)
                 return ins, Var(t_out), tm_s + [t_out]
+            # Multi-dim: `grid[i][j].field` — flatten gli indici e calcola
+            # l'indice lineare row-major sulle celle flat `grid__{lin}__{field}`.
+            if isinstance(expr.name.name, c.ArrayRef):
+                _mdbase, _mdsubs = _flatten_array_ref_chain(expr.name)
+                _mdlog = _scope_resolve(ctx, _mdbase)
+                _mdmeta = ctx.struct_array_info.get(_mdlog)
+                if _mdmeta is not None and len(_mdsubs) == len(_mdmeta[1]):
+                    _mdtag, _mddims, _mdtot = _mdmeta
+                    _mdfield = expr.field.name
+                    if _mdfield not in [fn for fn, _ in ctx.struct_specs.get(_mdtag, [])]:
+                        raise MnemoCompileError(
+                            f"struct {_mdtag}: campo {_mdfield!r} assente"
+                        )
+                    _lin = _const_row_major_linear(_mdsubs, _mddims)
+                    if _lin is not None:
+                        _cell = f"{_mdlog}__{_lin}__{_mdfield}"
+                        if _cell not in ctx.int_locals:
+                            raise MnemoCompileError(f"campo struct array mancante: {_cell!r}")
+                        return [], Var(_phys(ctx, _cell)), []
+                    _lin_ast = _c_row_major_index_ast(_mdsubs, _mddims, expr.coord)
+                    _pix, _opix, _tix = _eval_expr(_lin_ast, ctx)
+                    if isinstance(_opix, Imm):
+                        _tixn = ctx.fresh_temp()
+                        _pix = _pix + [IConst(_tixn, _opix.value)]
+                        _ixn = _tixn; _tix = _tix + [_tixn]
+                    else:
+                        _ixn = _opix.name
+                    _td = ctx.fresh_temp(); ctx.use_hist = True
+                    _bodies = []
+                    for _kk in range(_mdtot):
+                        _ck = f"{_mdlog}__{_kk}__{_mdfield}"
+                        if _ck not in ctx.int_locals:
+                            raise MnemoCompileError(f"campo struct array mancante: {_ck!r}")
+                        _bodies.append([IHistPush(ctx.hist, _td), IAddEq(_td, Var(_phys(ctx, _ck)))])
+                    _chain = _disj_eq_chain(_ixn, list(range(_mdtot)), _bodies)
+                    return _pix + _chain, Var(_td), _tix + [_td]
             arr_log, sa_meta = _resolve_struct_array_target(expr.name.name, ctx)
             if sa_meta is not None:
                 arr_id = arr_log
@@ -11511,6 +11547,58 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         ctx.use_scratch = True
                     out_w += [IHistPush(ctx.scratch, x) for x in reversed(allt)]
                     return out_w
+                # Multi-dim write: `grid[i][j].field = X` — flatten + linear idx.
+                if isinstance(lvs.name.name, c.ArrayRef):
+                    _wbase, _wsubs = _flatten_array_ref_chain(lvs.name)
+                    _wlog = _scope_resolve(ctx, _wbase)
+                    _wmeta = ctx.struct_array_info.get(_wlog)
+                    if _wmeta is not None and len(_wsubs) == len(_wmeta[1]):
+                        _wtag, _wdims, _wtot = _wmeta
+                        _wfield = lvs.field.name
+                        if _wfield not in [fn for fn, _ in ctx.struct_specs.get(_wtag, [])]:
+                            raise MnemoCompileError(
+                                f"struct {_wtag}: campo {_wfield!r} assente"
+                            )
+                        _co = node.coord
+
+                        def _wrhs(cellname: str) -> c.Node:
+                            if node.op in _COMPOUND_ASSIGN_OPS:
+                                return c.BinaryOp(
+                                    _COMPOUND_ASSIGN_OPS[node.op],
+                                    c.ID(cellname, _co), node.rvalue, _co,
+                                )
+                            if node.op != "=":
+                                raise MnemoCompileError(
+                                    f"grid[i][j].f: op {node.op!r} non supportato"
+                                )
+                            return node.rvalue
+
+                        _wlin = _const_row_major_linear(_wsubs, _wdims)
+                        if _wlin is not None:
+                            _cell = f"{_wlog}__{_wlin}__{_wfield}"
+                            return _lower_assign(_phys(ctx, _cell), _wrhs(_cell), ctx)
+                        _lin_ast = _c_row_major_index_ast(_wsubs, _wdims, _co)
+                        _pix, _opix, _tix = _eval_expr(_lin_ast, ctx)
+                        if isinstance(_opix, Imm):
+                            _tn = ctx.fresh_temp()
+                            _pix = _pix + [IConst(_tn, _opix.value)]
+                            _ixn = _tn; _tix = _tix + [_tn]
+                        else:
+                            _ixn = _opix.name
+                        _out: list[Instr] = list(_pix)
+                        for _kk in range(_wtot):
+                            _cell = f"{_wlog}__{_kk}__{_wfield}"
+                            _body = _lower_assign(_phys(ctx, _cell), _wrhs(_cell), ctx)
+                            _guard = c.BinaryOp(
+                                "==", c.ID(_ixn, _co),
+                                c.Constant("int", str(_kk), _co), _co,
+                            )
+                            _out.extend(_lower_if_from_expr(_guard, _body, [], ctx))
+                        for _t in _tix:
+                            _out.append(IHistPush(ctx.scratch, _t))
+                        if _tix:
+                            ctx.use_scratch = True
+                        return _out
                 arr_log_w, sa_meta_w = _resolve_struct_array_target(
                     lvs.name.name, ctx
                 )
