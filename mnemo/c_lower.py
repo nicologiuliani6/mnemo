@@ -1015,6 +1015,9 @@ class _Ctx:
     """Per ogni user fn, indici `__mn_mem<i>` che il body può toccare (transitivo).
     Usato da opt-uncall per snap solo celle effettivamente mutate."""
     callee_mem_touches: dict[str, frozenset[int]] = field(default_factory=dict)
+    # Celle SCRITTE da ogni callee (sottoinsieme di touches). Usato per lo
+    # snapshot di opt-uncall (XOR-swap ripristina solo le scritture).
+    callee_mem_writes: dict[str, frozenset[int]] = field(default_factory=dict)
 
     def fresh_temp(self) -> str:
         name = f"__mn_e{self.temp_i}"
@@ -8393,6 +8396,61 @@ def _function_direct_mem_touches(fn: Function) -> tuple[set[int], list[tuple[str
     return refs, calls
 
 
+def _collect_mem_writes_from_seq(seq: list[Any]) -> tuple[set[int], list[tuple[str, list[str]]]]:
+    """Come `_collect_mem_refs_from_seq` ma raccoglie solo le celle `__mn_mem<i>`
+    SCRITTE (dst di IConst/IAddEq/ISubEq/IXorEq/IHistPush, dest di ISrecv). Le
+    letture (rhs, condizioni IF, bound loop, IShow, payload ssend) NON contano.
+    Serve per restringere lo snapshot di opt-uncall: la XOR-swap deve ripristinare
+    solo le celle che il callee MODIFICA — le celle solo lette (es. tutte le
+    `__mn_mem` referenziate dal dispatch pool inline di `tbl[i]` in `permute`)
+    restano invariate e non vanno snapshottate (altrimenti O(celle)/call)."""
+    refs: set[int] = set()
+    calls: list[tuple[str, list[str]]] = []
+
+    def add(n: str | None) -> None:
+        i = _mem_idx_or_none(n)
+        if i is not None:
+            refs.add(i)
+
+    def rec(ss: list[Any]) -> None:
+        for ins in ss:
+            if isinstance(ins, IConst):
+                add(ins.dst)
+            elif isinstance(ins, (IAddEq, ISubEq, IXorEq)):
+                add(ins.dst)
+            elif isinstance(ins, IHistPush):
+                add(ins.var)
+            elif isinstance(ins, (ICall, IUncall)):
+                calls.append((ins.proc, list(ins.args)))
+            elif isinstance(ins, IIfKairos):
+                rec(ins.then_instrs)
+                if ins.else_instrs is not None:
+                    rec(ins.else_instrs)
+            elif isinstance(ins, IFromUntilKairos):
+                rec(ins.body_instrs)
+            elif isinstance(ins, ILocalBlock):
+                add(ins.var)
+                rec(ins.body_instrs)
+            elif isinstance(ins, IPar):
+                for br in ins.branches:
+                    rec(br)
+            elif isinstance(ins, ISrecv):
+                for d in ins.dests:
+                    add(d)
+    rec(seq)
+    return refs, calls
+
+
+def _function_direct_mem_writes(fn: Function) -> tuple[set[int], list[tuple[str, list[str]]]]:
+    refs: set[int] = set()
+    calls: list[tuple[str, list[str]]] = []
+    for b in fn.blocks:
+        r, c_ = _collect_mem_writes_from_seq(b.instrs)
+        refs |= r
+        calls.extend(c_)
+    return refs, calls
+
+
 def _compute_callee_mem_touches(
     probe_map: dict[str, Function],
     total_cells: int,
@@ -8431,6 +8489,74 @@ def _compute_callee_mem_touches(
                             touched[n].add(ai)
                             changed = True
     return {n: frozenset(s) for n, s in touched.items()}
+
+
+def _proc_is_pool_store_family(proc: str) -> bool:
+    """True se il proc scrive una cella del pool a slot RUNTIME (store/free):
+    può colpire una qualsiasi `__mn_mem` statica via dispatch → write-set ignoto.
+    `__mn_pool_load`/`get` sono read-only (scrivono solo l'arg `out`)."""
+    base = proc.split("@", 1)[0]
+    return base.startswith("__mn_pool_store") or base.startswith("__mn_pool_free")
+
+
+def _compute_callee_mem_writes(
+    probe_map: dict[str, Function],
+    total_cells: int,
+) -> dict[str, frozenset[int]]:
+    """Come `_compute_callee_mem_touches` ma solo le celle SCRITTE. Usato per
+    restringere lo snapshot di opt-uncall (la XOR-swap ripristina solo ciò che il
+    callee modifica). Una fn che (transitivamente) fa un pool STORE/FREE può
+    scrivere una qualsiasi cella statica a runtime → write-set = full range
+    (conservativo, niente regressioni). Le fn che solo LEGGONO tabelle via
+    puntatore (es. `permute`/`feistel` in des) restano strette (≈ celle ritorno).
+    """
+    direct: dict[str, set[int]] = {}
+    calls: dict[str, list[tuple[str, list[str]]]] = {}
+    full: set[str] = set()
+    for n, fn in probe_map.items():
+        d, c_ = _function_direct_mem_writes(fn)
+        direct[n] = d
+        calls[n] = c_
+        if any(_proc_is_pool_store_family(callee) for callee, _ in c_):
+            full.add(n)
+    # Propaga "full" transitivamente: chi chiama una fn full diventa full.
+    changed = True
+    while changed:
+        changed = False
+        for n in probe_map:
+            if n in full:
+                continue
+            if any(callee in full for callee, _ in calls[n]):
+                full.add(n)
+                changed = True
+    writes: dict[str, set[int]] = {n: set(direct[n]) for n in probe_map}
+    changed = True
+    while changed:
+        changed = False
+        for n in probe_map:
+            if n in full:
+                continue
+            for callee, args in calls[n]:
+                arg_mem: list[int | None] = [_mem_idx_or_none(a) for a in args]
+                if callee in probe_map:
+                    for j in writes[callee]:
+                        if j < len(arg_mem) and arg_mem[j] is not None:
+                            ci = arg_mem[j]
+                            assert ci is not None
+                            if ci not in writes[n]:
+                                writes[n].add(ci)
+                                changed = True
+                else:
+                    # lib read-only (load/get/move): scrive solo gli arg mem.
+                    for ai in arg_mem:
+                        if ai is not None and ai not in writes[n]:
+                            writes[n].add(ai)
+                            changed = True
+    full_set = frozenset(range(total_cells))
+    return {
+        n: (full_set if n in full else frozenset(writes[n]))
+        for n in probe_map
+    }
 
 
 def _uncall_excluded_transitive_closure(
@@ -9061,11 +9187,17 @@ def _lower_funccall_with_ret(
             uncall_with_restore: list[Instr] = []
             snap_pairs: list[tuple[int, str]] = []
             if apply_opt:
-                touched = ctx.callee_mem_touches.get(name)
-                if touched is None:
+                # Snapshot SOLO le celle SCRITTE dal callee (la XOR-swap deve
+                # ripristinare solo ciò che cambia; le celle solo lette — es. le
+                # ~tutte le __mn_mem referenziate dal dispatch pool inline di
+                # `tbl[i]` in permute — restano invariate). Era touches (reads∪
+                # writes) → O(celle)/call su fn table-heavy. Fallback full-range
+                # se ignoto.
+                written = ctx.callee_mem_writes.get(name)
+                if written is None:
                     cell_iter = list(range(layout.total_cells))
                 else:
-                    cell_iter = sorted(i for i in touched if i < layout.total_cells)
+                    cell_iter = sorted(i for i in written if i < layout.total_cells)
                 for kk in cell_iter:
                     t_cell = ctx.fresh_temp()
                     snap_pairs.append((kk, t_cell))
@@ -12693,6 +12825,7 @@ def _lower_user_function(
     pool_ctr_targets: frozenset[str] = frozenset(),
     par2_workers: frozenset[str] = frozenset(),
     callee_mem_touches: dict[str, frozenset[int]] | None = None,
+    callee_mem_writes: dict[str, frozenset[int]] | None = None,
     file_field_bits: dict[tuple[str, str], int] | None = None,
     fp_runtime: dict[str, set[str]] | None = None,
     fp_tags: dict[str, int] | None = None,
@@ -12738,6 +12871,7 @@ def _lower_user_function(
         pool_ctr_targets=pool_ctr_targets,
         par2_workers=par2_workers,
         callee_mem_touches=callee_mem_touches or {},
+        callee_mem_writes=callee_mem_writes or {},
     )
     if fp_runtime:
         ctx.func_ptr_runtime = dict(fp_runtime)
@@ -13488,6 +13622,7 @@ def lower_file_to_program(
         pb_targets: frozenset[str] = frozenset(),
         pc_targets: frozenset[str] = frozenset(),
         touches: dict[str, frozenset[int]] | None = None,
+        writes: dict[str, frozenset[int]] | None = None,
     ):
         ext, fn_phys = ext_phys
         return _lower_user_function(
@@ -13515,6 +13650,7 @@ def lower_file_to_program(
             pool_ctr_targets=pc_targets,
             par2_workers=par2_workers_all,
             callee_mem_touches=touches,
+            callee_mem_writes=writes,
             fp_runtime=fp_runtime_per_fn.get(ext.decl.name or ""),
             fp_tags=fp_tags_global,
         )
@@ -13525,6 +13661,7 @@ def lower_file_to_program(
         probe_by_name, extra_seeds=uncall_extra_seeds
     )
     mem_touches = _compute_callee_mem_touches(probe_by_name, layout.total_cells)
+    mem_writes = _compute_callee_mem_writes(probe_by_name, layout.total_cells)
     channel_targets: frozenset[str] = frozenset(
         n for n, f in probe_by_name.items() if _user_procedure_uses_channels(f)
     )
@@ -13545,7 +13682,7 @@ def lower_file_to_program(
                             sh_targets=show_targets,
                             pl_targets=pool_targets, pb_targets=pool_uncall_blocked,
                             pc_targets=pool_ctr_targets,
-                            touches=mem_touches)
+                            touches=mem_touches, writes=mem_writes)
             for s in user_fn_specs
         ]
     else:
@@ -13598,6 +13735,7 @@ def lower_file_to_program(
         pool_ctr_targets=pool_ctr_targets,
         par2_workers=par2_workers_all,
         callee_mem_touches=mem_touches,
+        callee_mem_writes=mem_writes,
     )
     main_fp_runtime = fp_runtime_per_fn.get("main")
     if main_fp_runtime:
