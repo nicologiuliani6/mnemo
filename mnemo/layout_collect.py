@@ -905,7 +905,29 @@ def compute_program_mem_layout(
                             ctx.struct_field_bits[(st.name, str(d.name))] = bw
             return
 
-        ut = L._union_tag_for_decl_type(node.type, ctx)
+        # `struct S{...} s;` / `union U{...} u;`: definizione INLINE del tipo +
+        # variabile. Registra la def nei *_specs (senza mutare l'AST: c_lower poi
+        # fa lo stesso sul suo ctx) e ricava il tag, così gli handler var sotto la
+        # trovano. (Il caso bare `struct S{...};` è già gestito a 893.)
+        _inner_def = node.type.type if isinstance(node.type, c.TypeDecl) else None
+        _inline_struct_tag = None
+        _inline_union_tag = None
+        if isinstance(_inner_def, c.Struct) and _inner_def.decls and _inner_def.name:
+            if _inner_def.name not in ctx.struct_specs:
+                ctx.struct_specs[_inner_def.name] = L._flatten_struct_fields(_inner_def)
+                for _d in _inner_def.decls or []:
+                    if (isinstance(_d, c.Decl) and _d.name
+                            and getattr(_d, "bitsize", None) is not None):
+                        _bw = L._eval_const_int_expr(_d.bitsize)
+                        if _bw is not None and 1 <= _bw <= 32:
+                            ctx.struct_field_bits[(_inner_def.name, str(_d.name))] = _bw
+            _inline_struct_tag = _inner_def.name
+        elif isinstance(_inner_def, c.Union) and _inner_def.decls and _inner_def.name:
+            if _inner_def.name not in ctx.union_specs:
+                ctx.union_specs[_inner_def.name] = L._union_scalar_fields(_inner_def)
+            _inline_union_tag = _inner_def.name
+
+        ut = _inline_union_tag or L._union_tag_for_decl_type(node.type, ctx)
         if ut is not None:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("union: nome variabile mancante")
@@ -924,7 +946,7 @@ def compute_program_mem_layout(
                 alloc(fn, cell)
             return
 
-        st_tag = L._struct_tag_for_decl_type(node.type, ctx)
+        st_tag = _inline_struct_tag or L._struct_tag_for_decl_type(node.type, ctx)
         if st_tag is not None:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
                 raise MnemoCompileError("struct: nome variabile mancante")
