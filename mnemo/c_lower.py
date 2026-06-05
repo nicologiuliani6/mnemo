@@ -9766,6 +9766,10 @@ def _kairos_atom(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], str, list[str]]:
             return [], _phys(ctx, log), []
         if expr.name in ctx.enum_constants:
             return [], str(ctx.enum_constants[expr.name]), []
+        # Nome di funzione in un confronto (`f == add`): → tag runtime della fn,
+        # coerente con il valore (tag) memorizzato nella cella del fn-ptr.
+        if expr.name in ctx.func_ptr_tags:
+            return [], str(ctx.func_ptr_tags[expr.name]), []
         raise MnemoCompileError(
             f"condizione: variabile o enumeratore non noto {expr.name!r}"
         )
@@ -11307,12 +11311,10 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             "`nome_funzione` o `&nome_funzione`"
                         )
                     ctx.func_ptr_alias[logical_fp] = tgt_fp
-                    # Runtime-dispatch: scrivi tag(tgt) nella cella per il
-                    # dispatch successivo. Mantiene anche alias per back-compat.
-                    if (
-                        fp_name in ctx.func_ptr_runtime
-                        and tgt_fp in ctx.func_ptr_tags
-                    ):
+                    # Scrivi tag(tgt) nella cella: serve sia al dispatch runtime
+                    # sia al confronto `f == add`. Mantiene anche l'alias per le
+                    # chiamate dirette risolte a compile-time.
+                    if tgt_fp in ctx.func_ptr_tags:
                         out_fp.append(IAddEq(phy_fp, Imm(ctx.func_ptr_tags[tgt_fp])))
                 return out_fp
             # `int (*r)[N]` row pointer: 1 cella (slot base) + stride N.
@@ -13770,6 +13772,31 @@ def lower_file_to_program(
     for runtime in fp_runtime_per_fn.values():
         for cands in runtime.values():
             all_fp_targets.update(cands)
+
+    # Funzioni usate come VALORE (assegnate a fn-ptr, confrontate `f == add`,
+    # in array-init `{add, sub}`, `&add`): servono un tag runtime. Scan di ogni
+    # ID che nomina una user-fn e NON è il bersaglio diretto di una chiamata.
+    def _scan_fp_values(node: c.Node | None) -> None:
+        if node is None:
+            return
+        if isinstance(node, c.FuncCall):
+            # `node.name` (bersaglio call diretta) non va taggato; scan args.
+            if node.args is not None:
+                for a in node.args.exprs or []:
+                    _scan_fp_values(a)
+            if not isinstance(node.name, c.ID):
+                _scan_fp_values(node.name)
+            return
+        if isinstance(node, c.ID) and node.name in du:
+            all_fp_targets.add(node.name)
+            return
+        if hasattr(node, "children"):
+            for _n, ch in node.children():
+                _scan_fp_values(ch)
+
+    for ext in ast.ext:
+        _scan_fp_values(ext)
+
     fp_tags_global: dict[str, int] = {
         nm: i + 1 for i, nm in enumerate(sorted(all_fp_targets))
     }
