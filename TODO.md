@@ -42,11 +42,20 @@ Restano solo le divergenze qui sotto + ottimizzazioni di performance.
 Entrambi i bug che bloccavano `--opt-uncall-user-calls` sulle fn con `uint64_t` +
 shift (e in generale sulle fn con loop interno) sono RISOLTI lato Kairos VM. Il
 seed `_function_uses_u64_shift` è stato rimosso: opt si applica ora a des
-(permute/feistel/key_schedule). Riduzione celle confermata (caso u64+loop:
-cells_final 1010445→164, cells_max 6.07M→317K). **NB perf**: l'opt scambia spazio
-con TEMPO (l'uncall ripete l'inverse del corpo); su des, compute-heavy, il run
-opt è molto più lento del baseline (corretto ma >>2m23s) — usare l'opt solo se
-serve ridurre il picco di celle, non per velocità.
+(permute/feistel). Riduzione celle confermata (caso u64+loop: cells_final
+1010445→164, cells_max 6.07M→317K). Snapshot ristretto al write-set
+(`_compute_callee_mem_writes`): copre solo le celle che il callee MODIFICA, non
+quelle solo lette (per `permute` erano 917/918).
+
+**NB perf — opt = trade spazio per TEMPO; NON usarlo su des.** L'uncall ripete
+l'inverse del corpo del callee. Per `permute`/`feistel` il corpo è il dispatch
+pool O(celle) per leggere le tabelle (`tbl[i]`), quindi l'uncall raddoppia un
+costo O(celle × call) già dominante. Su des (compute+table-heavy) il run opt è
+impraticabilmente lento (>>baseline 2m23s, va in timeout su run da molti minuti)
+— il fix dello snapshot NON basta perché il collo è il replay del dispatch, non
+lo snapshot. Conclusione: l'opt è ora CORRETTO e riduce le celle, ma conviene
+solo su fn dove il corpo è economico (poco lavoro per call); per programmi come
+des è una perdita netta → lasciare l'opt-uncall **disattivato** (è opt-in).
 
 **Bug #1 — POP stack vuoto: RISOLTO** (ipotesi "Kairos uncall rotto" confermata).
 La causa NON era il floor-snap né lo shift-into: era il native hist undo a 64-bit.
