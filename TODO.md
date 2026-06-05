@@ -47,15 +47,29 @@ seed `_function_uses_u64_shift` è stato rimosso: opt si applica ora a des
 (`_compute_callee_mem_writes`): copre solo le celle che il callee MODIFICA, non
 quelle solo lette (per `permute` erano 917/918).
 
-**NB perf — opt = trade spazio per TEMPO; NON usarlo su des.** L'uncall ripete
-l'inverse del corpo del callee. Per `permute`/`feistel` il corpo è il dispatch
-pool O(celle) per leggere le tabelle (`tbl[i]`), quindi l'uncall raddoppia un
-costo O(celle × call) già dominante. Su des (compute+table-heavy) il run opt è
-impraticabilmente lento (>>baseline 2m23s, va in timeout su run da molti minuti)
-— il fix dello snapshot NON basta perché il collo è il replay del dispatch, non
-lo snapshot. Conclusione: l'opt è ora CORRETTO e riduce le celle, ma conviene
-solo su fn dove il corpo è economico (poco lavoro per call); per programmi come
-des è una perdita netta → lasciare l'opt-uncall **disattivato** (è opt-in).
+**NB perf — perché des-opt è ~8x (non il ~2.3x atteso).** Diagnosi a contatori
+(VM heartbeat su forward-loop, invert-loop, push/pop, go_to_line):
+`des-opt ≈ 2x × ~4x`.
+- **2x** = l'opt esegue `call f` + `uncall f` (l'uncall ripete l'inverse del
+  corpo). Atteso e accettabile.
+- **~4x per-op** = des legge le tabelle con `tbl[i]` → `call __mn_pool_load`, una
+  procedura con **917 PARAM** (una cella nominata per parametro, servono tutte al
+  dispatch binary-search `if slot<mid …`). Ogni lettura di tabella lega 917
+  parametri; `permute` fa ~64 letture, chiamata ~16 volte. L'opt RADDOPPIA tutte
+  queste call pesanti (forward + uncall) e l'inversione aggiunge overhead per-op.
+  Il forward-loop gira a ~8k op/s (vs ~33k baseline). NON è un O(n²) singolo né
+  lo snapshot (già ristretto a write-set 917→3) né `go_to_line`: è il volume di
+  PARAM-binding di `__mn_pool_load` × raddoppio opt × overhead inverse.
+
+Fix vero = **op VM nativa MEMGET/MEMSET** (vedi "Ottimizzazioni future" #1):
+rimpiazzare il `__mn_pool_load` bytecode a 917 PARAM con un accesso indicizzato
+nativo (O(log N)/O(1)) sull'array delle celle nominate, eliminando il
+param-binding e l'inversione bytecode. Toglie sia il costo baseline sia il
+raddoppio dell'opt. Feature grossa (VM + lowering + reversibilità), non fatta.
+
+Conclusione: l'opt è CORRETTO e riduce le celle, ma su des resta impraticabile
+finché il table-access è il `pool_load` a 917 PARAM → lasciare l'opt-uncall
+**disattivato** su des (è opt-in). Conviene su fn con corpo economico.
 
 **Bug #1 — POP stack vuoto: RISOLTO** (ipotesi "Kairos uncall rotto" confermata).
 La causa NON era il floor-snap né lo shift-into: era il native hist undo a 64-bit.
