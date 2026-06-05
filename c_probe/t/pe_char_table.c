@@ -1,4 +1,3 @@
-// SKIP char names[3][8]={"a","b"} : 2D char array (string table) con init letterale + names[i][j] non supportato
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

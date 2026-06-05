@@ -3010,6 +3010,21 @@ def _struct_field_local(var: str, field: str) -> str:
     return f"{var}__{field}"
 
 
+def _array_elem_is_pointer(base_log: str, ctx: "_Ctx") -> bool:
+    """True se l'array `base_log` ha elementi PUNTATORE (es. `char *t[N]`,
+    `int *r[N]`): l'over-index `t[i][j]` deref dell'elemento. Decay-pointer
+    (`int *p` param) escluso (è già 1 livello)."""
+    ty = ctx.var_types.get(base_log)
+    if ty is None:
+        return False
+    cur: c.Node | None = ty
+    saw_array = False
+    while isinstance(cur, c.ArrayDecl):
+        saw_array = True
+        cur = cur.type
+    return saw_array and isinstance(cur, c.PtrDecl)
+
+
 def _resolve_struct_array_target(
     node: c.Node, ctx: "_Ctx"
 ) -> tuple[str, tuple[str, tuple[int, ...], int] | None]:
@@ -6989,11 +7004,10 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             raise
         base_log = _scope_resolve(ctx, base)
         if base_log not in ctx.array_info:
-            # Fallback `p[i]` su puntatore: rewrite a `*(p + i)`.
-            if (
-                base_log in ctx.int_locals
-                and isinstance(expr.name, c.ID)
-            ):
+            # Fallback su puntatore: `p[i]` → `*(p + i)`; `g[i][j]` con `g` int**
+            # → `*(g[i] + j)` (e `g[i]` ricorsivamente → `*(g + i)`). `expr.name`
+            # può essere ID (`p`) o ArrayRef annidato (`g[i]`).
+            if base_log in ctx.int_locals and isinstance(expr.name, (c.ID, c.ArrayRef)):
                 new_expr = c.UnaryOp(
                     "*",
                     c.BinaryOp("+", expr.name, expr.subscript,
@@ -7005,11 +7019,22 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 f"{base!r} non è un array dichiarato (es. int {base}[N] o int {base}[R][C])"
             )
         info = ctx.array_info[base_log]
+        coord = getattr(expr, "coord", None)
+        # `arr[i][j]` con `arr` array di PUNTATORI (es. `const char *days[3]`,
+        # `int *rows[N]`): `arr[i]` è un puntatore → `arr[i][j]` = `*(arr[i] + j)`.
+        if (
+            len(subs) == len(info.dims) + 1
+            and isinstance(expr.name, c.ArrayRef)
+            and _array_elem_is_pointer(base_log, ctx)
+        ):
+            new_expr = c.UnaryOp(
+                "*", c.BinaryOp("+", expr.name, expr.subscript, coord), coord
+            )
+            return _eval_expr(new_expr, ctx)
         if len(subs) != len(info.dims):
             raise MnemoCompileError(
                 f"array {base!r}: servono {len(info.dims)} indici, ne ho {len(subs)}"
             )
-        coord = getattr(expr, "coord", None)
         if info.array_decay_pointer:
             return _eval_decay_array_elem_read(base_log, subs, info, ctx, coord)
         if all(isinstance(s, c.Constant) for s in subs):
@@ -11207,6 +11232,34 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             )
                         )
                     return out
+                # `char names[R][C] = {"s0","s1",…}`: ogni string-literal riempie
+                # una riga (C celle, byte-per-byte, NUL impliciti dato che le celle
+                # partono a 0). Es. string-table.
+                if (
+                    esz == 1
+                    and len(dims) == 2
+                    and (node.init.exprs or [])
+                    and all(
+                        isinstance(e, c.Constant) and e.type == "string"
+                        for e in node.init.exprs
+                    )
+                ):
+                    rowlen = dims[1]
+                    for r, sconst in enumerate(node.init.exprs):
+                        if r >= dims[0]:
+                            break
+                        b = _literal_c_string(sconst).encode("utf-8")
+                        for j, byte in enumerate(b):
+                            if j >= rowlen or byte == 0:
+                                continue
+                            out.extend(
+                                _lower_assign(
+                                    _phys(ctx, _array_elem_local(logical, r * rowlen + j)),
+                                    c.Constant("int", str(int(byte)), node.coord),
+                                    ctx,
+                                )
+                            )
+                    return out
                 flat = _flatten_init_list(node.init)
                 for j, el in enumerate(flat):
                     if j >= tot:
@@ -12298,6 +12351,26 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     )
                     new_assign = c.Assignment(node.op, new_lv, node.rvalue, node.coord)
                     return _lower_stmt(new_assign, ctx)
+            # `g[i][j] = X` con `g` int** (puntatore) o `days[i][j] = X` con `days`
+            # array di puntatori: rewrite a `*(g[i] + j) = X` (g[i] = *(g+i)).
+            if isinstance(lv.name, c.ArrayRef):
+                _bl2 = _scope_resolve(ctx, _flatten_array_ref_chain(lv)[0])
+                _subs2 = _flatten_array_ref_chain(lv)[1]
+                _is_ptr_deref = (
+                    (_bl2 not in ctx.array_info and _bl2 in ctx.int_locals)
+                    or (
+                        _bl2 in ctx.array_info
+                        and len(_subs2) == len(ctx.array_info[_bl2].dims) + 1
+                        and _array_elem_is_pointer(_bl2, ctx)
+                    )
+                )
+                if _is_ptr_deref:
+                    new_lv = c.UnaryOp(
+                        "*", c.BinaryOp("+", lv.name, lv.subscript, lv.coord), lv.coord
+                    )
+                    return _lower_stmt(
+                        c.Assignment(node.op, new_lv, node.rvalue, node.coord), ctx
+                    )
             base, subs = _flatten_array_ref_chain(node.lvalue)
             if node.op == "=":
                 return _lower_array_subscript_assign(base, subs, node.rvalue, ctx)
@@ -13495,10 +13568,30 @@ def _hoist_string_literal_call_args_in_ast(ast: c.FileAST) -> None:
         dedup: dict[str, str] = {}
         new_decls: list[c.Decl] = []
 
+        def _is_multidim_char_array(d: c.Node) -> bool:
+            # `char x[R][C]` (≥2 dim, elemento char): l'init `{"s0","s1"}` riempie
+            # le righe byte-per-byte, NON va promosso a char* ROS.
+            if not isinstance(d, c.Decl) or not isinstance(d.type, c.ArrayDecl):
+                return False
+            t: c.Node = d.type
+            depth = 0
+            while isinstance(t, c.ArrayDecl):
+                depth += 1
+                t = t.type
+            return (
+                depth >= 2
+                and isinstance(t, c.TypeDecl)
+                and isinstance(t.type, c.IdentifierType)
+                and t.type.names in (["char"], ["signed", "char"], ["unsigned", "char"])
+            )
+
         def rewrite(node: c.Node | None) -> None:
             if node is None:
                 return
+            _skip_init = _is_multidim_char_array(node)
             for _attr, child in node.children():
+                if _skip_init and _attr == "init":
+                    continue
                 if isinstance(child, c.FuncCall):
                     callee_name = (
                         child.name.name if isinstance(child.name, c.ID) else None

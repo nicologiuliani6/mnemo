@@ -1,4 +1,3 @@
-// SKIP const char*days[3]={"a"} + days[i][j] : array di char* a string-literal con indice 2-livello non supportato
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
