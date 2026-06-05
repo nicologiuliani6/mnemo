@@ -13045,6 +13045,15 @@ def _lower_user_function(
         ctx.int_locals.add(r)
     for p in fd.args.params if fd.args else []:
         if isinstance(p, c.Decl):
+            # `int (*row)[N]` row-pointer PARAM: registra lo stride (come il local
+            # a ~11313), PRIMA del fallback int-ptr che lo tratterebbe come `int*`
+            # decay 1-dim → `row[i][j]` darebbe "servono 1 indici, ne ho 2".
+            _rpm_p = _row_ptr_decl_meta(p)
+            if _rpm_p is not None:
+                _rn_p, _rN_p = _rpm_p
+                ctx.row_ptr_stride[_rn_p] = _rN_p
+                _register_ptr_pool_locals(ctx)
+                continue
             ap = _try_parse_array_decl(p, ctx)
             if ap is not None:
                 aname, dims, esz = ap
