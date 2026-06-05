@@ -243,6 +243,13 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="dopo il dump VM stampa mean_abs e max_abs dei cell int rimasti (stats post-execution)",
     )
+    p_r.add_argument(
+        "--auto",
+        action="store_true",
+        help="sceglie automaticamente le ottimizzazioni (--native-arith / "
+        "--opt-uncall-user-calls) dal contenuto del .c (n. arith/bitwise/array, "
+        "celle). Stampa la decisione su stderr. I flag espliciti vincono.",
+    )
     p_r.set_defaults(handler=_cmd_run)
 
     args = parser.parse_args(argv)
@@ -394,6 +401,20 @@ def _resolve_kairos_python_runner(out_kairos_abs: str) -> tuple[list[str], str |
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
+    if getattr(args, "auto", False):
+        from mnemo.compile import auto_select_optimizations
+        try:
+            na, ou, reason = auto_select_optimizations(args.input)
+        except MnemoCompileError as e:
+            print(f"mnemo: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"mnemo: {reason}", file=sys.stderr)
+        # I flag espliciti dell'utente vincono: --auto abilita solo ciò che non
+        # è già stato chiesto.
+        if not args.opt_uncall_user_calls:
+            args.opt_uncall_user_calls = ou
+        if not getattr(args, "native_arith", False):
+            args.native_arith = na
     try:
         out = compile_c_to_kairos(
             args.input,

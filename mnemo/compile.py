@@ -1914,6 +1914,88 @@ def _infer_arr_max(ast: c.FileAST) -> int:
     return max_total
 
 
+def auto_select_optimizations(path: str) -> tuple[bool, bool, str]:
+    """Analizza il `.c` e sceglie automaticamente (native_arith, opt_uncall).
+
+    Euristica trasparente (override coi flag espliciti):
+    - **native_arith** se il programma ha aritmetica/bitwise non banale
+      (mul/div/mod + &|^<<>>) o letture array a indice (tabelle): nativo evita i
+      loop bitwise interpretati (31 iter/op) e il dispatch pool_load a 917 param.
+      Nessun lato negativo (sempre corretto), quindi soglia bassa.
+    - **opt_uncall** se la memoria nominata è grande (molte celle: array grandi)
+      MA il programma NON è bitwise-heavy. L'opt-uncall scambia spazio per tempo
+      (riduce il picco di celle ripetendo l'inverse del corpo); conviene quando le
+      celle sono tante e il corpo è economico. Su codice bitwise-heavy (es. DES)
+      è una perdita netta in tempo → non si attiva.
+
+    Ritorna (native_arith, opt_uncall, motivazione_stampabile).
+    """
+    ast = parse_c(path)
+    n_arith = n_bitwise = n_ptr = n_arrayref = 0
+    _ARITH = {"*", "/", "%"}
+    _BIT = {"&", "|", "^", "<<", ">>"}
+    _CARITH = {"*=", "/=", "%="}
+    _CBIT = {"&=", "|=", "^=", "<<=", ">>="}
+    for node in _iter_c_nodes(ast):
+        if isinstance(node, c.BinaryOp):
+            if node.op in _ARITH:
+                n_arith += 1
+            elif node.op in _BIT:
+                n_bitwise += 1
+        elif isinstance(node, c.Assignment):
+            if node.op in _CARITH:
+                n_arith += 1
+            elif node.op in _CBIT:
+                n_bitwise += 1
+        elif isinstance(node, c.UnaryOp) and node.op == "*":
+            n_ptr += 1
+        elif isinstance(node, c.ArrayRef):
+            n_arrayref += 1
+    named_cells = _infer_arr_max_total(ast)
+    native_arith = (n_arith + n_bitwise) >= 4 or n_arrayref >= 8
+    opt_uncall = named_cells >= 256 and n_bitwise <= 24
+    reason = (
+        f"auto: arith={n_arith} bitwise={n_bitwise} arrayref={n_arrayref} "
+        f"ptr={n_ptr} celle≈{named_cells} → native_arith={native_arith} "
+        f"opt_uncall={opt_uncall}"
+    )
+    return native_arith, opt_uncall, reason
+
+
+def _infer_arr_max_total(ast: c.FileAST) -> int:
+    """Somma (non max) delle celle degli array statici dichiarati — stima della
+    memoria nominata totale per l'euristica `--auto`."""
+    total_all = 0
+
+    def _const_int(n: c.Node) -> int | None:
+        if isinstance(n, c.Constant) and n.type in ("int", "char"):
+            try:
+                return int(n.value.rstrip("uUlL"), 0)
+            except ValueError:
+                return None
+        return None
+
+    def visit(n: c.Node) -> None:
+        nonlocal total_all
+        if isinstance(n, c.ArrayDecl):
+            cur, total, ok = n, 1, True
+            while isinstance(cur, c.ArrayDecl):
+                v = _const_int(cur.dim) if cur.dim is not None else None
+                if v is None or v <= 0:
+                    ok = False
+                    break
+                total *= v
+                cur = cur.type
+            if ok:
+                total_all += total
+        for _, child in n.children():
+            visit(child)
+
+    for ext in ast.ext or []:
+        visit(ext)
+    return total_all
+
+
 def _malloc_block_cells(call: c.FuncCall) -> int:
     """Numero di celle (int) richieste da una `malloc`/`calloc`, valutando
     staticamente l'argomento size. Una cella = un int (sizeof(int)=4 nel modello
