@@ -1178,96 +1178,6 @@ def _collect_u32_typedefs(ast: c.FileAST) -> set[str]:
     return out
 
 
-def _collect_u64_typedefs(ast: c.FileAST) -> set[str]:
-    """Set di typedef name che risolvono a `unsigned long long`. `uint64_t`, `u64`, ecc."""
-    direct: dict[str, str | None] = {}
-    base_u64: set[str] = set()
-    u64_base_names = (
-        ("unsigned", "long", "long"),
-        ("unsigned", "long", "long", "int"),
-        ("long", "long"),
-        ("long", "long", "int"),
-    )
-    for ext in ast.ext or []:
-        if not isinstance(ext, c.Typedef):
-            continue
-        t = ext.type
-        if not isinstance(t, c.TypeDecl):
-            continue
-        inner = t.type
-        if isinstance(inner, c.IdentifierType):
-            names = tuple(inner.names)
-            if names in u64_base_names:
-                base_u64.add(ext.name)
-            elif len(names) == 1:
-                direct[ext.name] = names[0]
-    out: set[str] = set(base_u64)
-    changed = True
-    while changed:
-        changed = False
-        for n, ref in direct.items():
-            if n in out:
-                continue
-            if ref in out:
-                out.add(n)
-                changed = True
-    return out
-
-
-def _is_u64_type_node(t: c.Node | None, u64_typedefs: set[str]) -> bool:
-    """True se nodo tipo è u64 (unsigned long long o typedef equivalente)."""
-    if isinstance(t, c.TypeDecl):
-        t = t.type
-    if isinstance(t, c.IdentifierType):
-        names = tuple(t.names)
-        u64_base_names = (
-            ("unsigned", "long", "long"),
-            ("unsigned", "long", "long", "int"),
-            ("long", "long"),
-            ("long", "long", "int"),
-        )
-        if names in u64_base_names:
-            return True
-        if len(names) == 1 and names[0] in u64_typedefs:
-            return True
-    return False
-
-
-def _function_uses_u64_shift(fd: c.FuncDef, u64_typedefs: set[str]) -> bool:
-    """True se la fn ha vars/params u64 E performa shift (`<<` o `>>`) su tali vars.
-
-    Heuristica conservativa: se la fn ha qualsiasi var u64 E qualsiasi shift,
-    consideriamo opt-uncall single-call unsafe. Il bug VM originale (POP stack
-    vuoto, native floor_div2 hist undo) è RISOLTO; il seed resta come guard del
-    Bug #2 (DELOCAL loop-counter sotto opt-uncall su fn con loop interno che
-    accumula+ritorna), non ancora risolto e non u64-specifico — ma le fn u64-shift
-    (des: permute/feistel/key_schedule) hanno tutte loop interni, quindi questo
-    seed le copre. Vedi TODO "Opt-uncall + u64-shift / opt-uncall su loop interni".
-    """
-    has_u64_var = False
-    if fd.body is None:
-        return False
-    fdt = fd.decl.type
-    if isinstance(fdt, c.FuncDecl) and fdt.args is not None:
-        for prm in fdt.args.params or []:
-            if isinstance(prm, c.Decl) and _is_u64_type_node(prm.type, u64_typedefs):
-                has_u64_var = True
-                break
-    if not has_u64_var:
-        for n in _iter_c_nodes(fd.body):
-            if isinstance(n, c.Decl) and _is_u64_type_node(n.type, u64_typedefs):
-                has_u64_var = True
-                break
-    if not has_u64_var:
-        return False
-    for n in _iter_c_nodes(fd.body):
-        if isinstance(n, c.BinaryOp) and n.op in ("<<", ">>"):
-            return True
-        if isinstance(n, c.Assignment) and n.op in ("<<=", ">>="):
-            return True
-    return False
-
-
 def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
     """True se il nodo tipo (TypeDecl wrapping IdentifierType) è u32."""
     if isinstance(t, c.TypeDecl):
@@ -2275,14 +2185,13 @@ def compile_c_to_kairos(
     #    (repro int `/tmp/loopopt.c`): è un limite pre-esistente di opt-uncall sui
     #    loop, solo non colpito dal corpus. Finché Bug #2 è aperto teniamo il seed
     #    (des resta byte-identico a prima). Vedi TODO.
-    u64_typedefs = _collect_u64_typedefs(ast)
-    uncall_extra_seeds = frozenset(
-        ext.decl.name
-        for ext in (ast.ext or [])
-        if isinstance(ext, c.FuncDef)
-        and ext.decl.name
-        and _function_uses_u64_shift(ext, u64_typedefs)
-    )
+    # Seed vuoto: entrambi i bug che bloccavano opt-uncall su fn u64-shift sono
+    # risolti lato Kairos VM — Bug #1 (POP stack vuoto: native floor_div2 hist
+    # undo live-value-driven) e Bug #2 (DELOCAL loop-counter: la forward op_jmpf
+    # non pusha più su branch_trace gli IF dentro un from-loop, così la window
+    # LIFO degli IF top-level resta allineata in uncall). Ora opt si applica anche
+    # alle fn u64-shift con loop (des: permute/feistel/key_schedule).
+    uncall_extra_seeds: frozenset[str] = frozenset()
     prog = lower_file_to_program(
         ast,
         main_argc=argc_use,

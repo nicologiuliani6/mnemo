@@ -37,10 +37,16 @@ Restano solo le divergenze qui sotto + ottimizzazioni di performance.
   stesso width) funziona; il reinterpret byte-wise no. (repro
   `c_probe/t/p8_union.c`).
 
-## Opt-uncall + u64-shift / opt-uncall su loop interni
+## Opt-uncall + u64-shift / opt-uncall su loop interni — RISOLTO
 
-`--opt-uncall-user-calls` su funzioni con `uint64_t` + shift è ancora **escluso**
-(seed `_function_uses_u64_shift`), ma il motivo originale è cambiato.
+Entrambi i bug che bloccavano `--opt-uncall-user-calls` sulle fn con `uint64_t` +
+shift (e in generale sulle fn con loop interno) sono RISOLTI lato Kairos VM. Il
+seed `_function_uses_u64_shift` è stato rimosso: opt si applica ora a des
+(permute/feistel/key_schedule). Riduzione celle confermata (caso u64+loop:
+cells_final 1010445→164, cells_max 6.07M→317K). **NB perf**: l'opt scambia spazio
+con TEMPO (l'uncall ripete l'inverse del corpo); su des, compute-heavy, il run
+opt è molto più lento del baseline (corretto ma >>2m23s) — usare l'opt solo se
+serve ridurre il picco di celle, non per velocità.
 
 **Bug #1 — POP stack vuoto: RISOLTO** (ipotesi "Kairos uncall rotto" confermata).
 La causa NON era il floor-snap né lo shift-into: era il native hist undo a 64-bit.
@@ -57,16 +63,18 @@ sceglie il ramo dal segno live, come il replay), in `mn_floor_div2_signed_hist_u
 rotate/u64shift opt+native byte-1:1 (regression guard `c_test/inv_u64_rot_opt.c`),
 encrypt opt+native+check-invertibility non regredito, gcc-compat 189/189.
 
-**Bug #2 — DELOCAL loop-counter sotto opt-uncall: APERTO** (e NON u64-specifico).
-Tolto il seed, des fallisce con `[VM] DELOCAL: __mn_lc1 atteso=0 trovato=1
-(frame=permute)`: l'inverse del `from`-loop interno non riporta il loop-counter a 0.
-Repro minimale INT (niente u64/shift): `/tmp/loopopt.c`
-(`int acc(int in,int n){int out=0;for(i<n)out+=in+i;return out;}` opt → stesso
-DELOCAL). È un limite pre-esistente di opt-uncall su funzioni che ritornano un
-valore accumulato in un loop interno (area fragile loop-inverse/branch_trace), solo
-mai colpito dal corpus. Finché Bug #2 è aperto teniamo il seed u64-shift, così des
-resta byte-identico (CT=85E813540F0AB405). Il fix VM di Bug #1 abilita comunque
-l'opt sulle fn u64-shift **loop-free** (rotate).
+**Bug #2 — DELOCAL loop-counter sotto opt-uncall: RISOLTO** (era pre-esistente e
+NON u64-specifico). Causa: la forward `op_jmpf` pushava su `branch_trace` una
+entry per OGNI IF, inclusi quelli DENTRO un from-loop, ma l'inverse di quegli IF
+usa il recompute (`line_inside_loop_body`) e non consuma il cursor della window →
+window LIFO disallineata → gli IF top-level leggevano branch errati → push orfana
+→ `[VM] DELOCAL: __mn_lc1 atteso=0 trovato=1`. Repro INT `/tmp/loopopt.c`
+(`int acc(int n){int s=0;for(i<n)s+=i;return s;}`). Fix Kairos
+(`Janus.c`/`vm_ops.h`/`vm_types.h`): al window-activation si cachano le line-range
+dei from-loop del callee (`collect_loops` → `bt_loop_lo/hi`); `op_jmpf` non pusha
+gli IF dentro quelle range → window allineata. Verificato: loop-opt
+(sum/runtime/fixed), nested loop+IF, nested u64+shift tutti byte-1:1; encrypt
+opt+native+check-inv invariato; gcc-compat 189/189.
 
 ## Ottimizzazioni future (performance, non correttezza)
 
