@@ -37,31 +37,36 @@ Restano solo le divergenze qui sotto + ottimizzazioni di performance.
   stesso width) funziona; il reinterpret byte-wise no. (repro
   `c_probe/t/p8_union.c`).
 
-## Opt-uncall + u64-shift: POP stack vuoto (da investigare)
+## Opt-uncall + u64-shift / opt-uncall su loop interni
 
-`--opt-uncall-user-calls` su funzioni con `uint64_t` + shift (`<<`/`>>`) è
-**escluso** (euristica `_function_uses_u64_shift` → seed in
-`uncall_extra_seeds`). Per questo su `custom_lib/des.c` l'opt non riduce le
-celle: tutte le des fn (e `main`, transitivamente) sono nel set escluso. Causa
-concreta verificata (`/tmp/u64shift.c`, `des.c`): lo shift variabile u64 lowera
-ai lib proc `__mn_shl_into`/`__mn_shr_into`, che PUSHano su `__mn_hist`; l'opt
-fa `__mn_hist_floor_snap` + `uncall`, l'inverse del proc pop `__mn_hist` ma il
-floor-snap ha già spostato il floor → `[VM] POP: stack vuoto!
-(frame=__mn_shr_into … inv=3)`. Senza il seed l'output è vuoto/crash.
+`--opt-uncall-user-calls` su funzioni con `uint64_t` + shift è ancora **escluso**
+(seed `_function_uses_u64_shift`), ma il motivo originale è cambiato.
 
-Per togliere l'esclusione (e far ottimizzare des) serve capire QUALE dei 3 lati
-sbaglia:
-1. **Mnemo emette male** — `__mn_hist_floor_snap`/snapshot non considera che il
-   callee ha già pushato su `__mn_hist` per gli shift-into; il floor andrebbe
-   calcolato DOPO quei push, o gli shift-into non dovrebbero toccare `__mn_hist`.
-2. **Kairos `uncall` rotto** — l'inverse di `call f` con shift-into non
-   ripristina il floor di `__mn_hist` correttamente.
-3. **Kairos manca un controllo statico** — un `.kairos` che perde informazione
-   (pop oltre il floor in inverse) dovrebbe essere RIFIUTATO a compile/load time
-   dal frontend Kairos, non crashare a runtime con POP vuoto. Oggi nessun check
-   statico di bilanciamento stack cross-call/uncall.
+**Bug #1 — POP stack vuoto: RISOLTO** (ipotesi "Kairos uncall rotto" confermata).
+La causa NON era il floor-snap né lo shift-into: era il native hist undo a 64-bit.
+`mn_floor_div2_signed_hist_undo` (in kairos `mn_native_arith.h`) decideva il ramo
+`>=0`/`<0` dal valore `ts` POPPATO dalla hist invece che dal valore LIVE usato dal
+replay. Su operandi int64 NEGATIVI (high bit set, es. `x>>(64-n)`) il segno
+poppato divergeva da quello live → push/pop count mismatch nel native `and/or`
+hist (`mn_and_or_hist_*` via `mn_bit_k_signed_*`) → cascata → `[VM] POP: stack
+vuoto! (frame=__mn_shr_into … inv=3)`. Diagnosi: contatori `floor_div2 replay=930
+neg=465 vs undo neg=225`. Fix: undo ora **live-value-driven** (riceve `t_in`/`tb` e
+sceglie il ramo dal segno live, come il replay), in `mn_floor_div2_signed_hist_undo`
++ caller (`mn_bit_k_signed_hist_undo` usa il `t` ricomputato, `mn_shr_into_hist_undo`,
+`mn_floor_div2_signed_native_inv` passa `*q` come proxy di segno). Verificato:
+rotate/u64shift opt+native byte-1:1 (regression guard `c_test/inv_u64_rot_opt.c`),
+encrypt opt+native+check-invertibility non regredito, gcc-compat 189/189.
 
-Finché non risolto, l'esclusione è la scelta corretta (correttezza > perf).
+**Bug #2 — DELOCAL loop-counter sotto opt-uncall: APERTO** (e NON u64-specifico).
+Tolto il seed, des fallisce con `[VM] DELOCAL: __mn_lc1 atteso=0 trovato=1
+(frame=permute)`: l'inverse del `from`-loop interno non riporta il loop-counter a 0.
+Repro minimale INT (niente u64/shift): `/tmp/loopopt.c`
+(`int acc(int in,int n){int out=0;for(i<n)out+=in+i;return out;}` opt → stesso
+DELOCAL). È un limite pre-esistente di opt-uncall su funzioni che ritornano un
+valore accumulato in un loop interno (area fragile loop-inverse/branch_trace), solo
+mai colpito dal corpus. Finché Bug #2 è aperto teniamo il seed u64-shift, così des
+resta byte-identico (CT=85E813540F0AB405). Il fix VM di Bug #1 abilita comunque
+l'opt sulle fn u64-shift **loop-free** (rotate).
 
 ## Ottimizzazioni future (performance, non correttezza)
 

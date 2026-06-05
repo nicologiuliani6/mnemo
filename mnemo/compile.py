@@ -1237,13 +1237,12 @@ def _function_uses_u64_shift(fd: c.FuncDef, u64_typedefs: set[str]) -> bool:
     """True se la fn ha vars/params u64 E performa shift (`<<` o `>>`) su tali vars.
 
     Heuristica conservativa: se la fn ha qualsiasi var u64 E qualsiasi shift,
-    consideriamo opt-uncall single-call unsafe. Causa concreta (verificata su
-    `/tmp/u64shift.c`, `des.c`): lo shift variabile u64 lowera ai lib proc
-    `__mn_shl_into`/`__mn_shr_into`, che PUSHano su `__mn_hist`. L'opt fa
-    `__mn_hist_floor_snap` + `uncall`; l'inverse del proc pop `__mn_hist` ma il
-    floor-snap ha già spostato il floor → `[VM] POP: stack vuoto!
-    (frame=__mn_shr_into … inv=3)`. Proxy grossolano del vero costrutto unsafe
-    (shift-into-hist); u32-only fns mascherano a 32-bit senza il path lib-hist.
+    consideriamo opt-uncall single-call unsafe. Il bug VM originale (POP stack
+    vuoto, native floor_div2 hist undo) è RISOLTO; il seed resta come guard del
+    Bug #2 (DELOCAL loop-counter sotto opt-uncall su fn con loop interno che
+    accumula+ritorna), non ancora risolto e non u64-specifico — ma le fn u64-shift
+    (des: permute/feistel/key_schedule) hanno tutte loop interni, quindi questo
+    seed le copre. Vedi TODO "Opt-uncall + u64-shift / opt-uncall su loop interni".
     """
     has_u64_var = False
     if fd.body is None:
@@ -2263,6 +2262,19 @@ def compile_c_to_kairos(
         and not parse_mnemo_skip_par_shared_mutex_check(src)
     ):
         check_par_shared_mutex_discipline(ast, layout)
+    # opt-uncall su fn con u64+shift: escluso via seed. Storia:
+    #  - Bug #1 (POP stack vuoto): il native hist undo
+    #    `mn_floor_div2_signed_hist_undo` decideva il ramo >=0/<0 dal `ts` POPPATO
+    #    invece che dal valore LIVE → su int64 negativi divergeva dal replay →
+    #    push/pop count mismatch → `[VM] POP: stack vuoto!` nel successivo
+    #    __mn_shr_into. RISOLTO in kairos `mn_native_arith.h` (undo live-value-driven,
+    #    verificato su rotate/u64shift: opt+native byte-1:1, encrypt non regredito).
+    #  - Bug #2 (ancora aperto): opt-uncall di una fn con un LOOP interno che
+    #    accumula+ritorna un valore → `[VM] DELOCAL: __mn_lc1 atteso=0 trovato=1`
+    #    (inverse del from-loop non riporta il loop-counter a 0). NON è u64-specifico
+    #    (repro int `/tmp/loopopt.c`): è un limite pre-esistente di opt-uncall sui
+    #    loop, solo non colpito dal corpus. Finché Bug #2 è aperto teniamo il seed
+    #    (des resta byte-identico a prima). Vedi TODO.
     u64_typedefs = _collect_u64_typedefs(ast)
     uncall_extra_seeds = frozenset(
         ext.decl.name
