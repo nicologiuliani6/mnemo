@@ -7722,6 +7722,11 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
 
     if isinstance(expr, c.Cast):
         if _cast_accepts_pointer_or_scalar(expr, ctx):
+            # Cast scalare = passthrough del valore (Mnemo è word-VM a 64 bit; il
+            # troncamento del tipo target — es. `(unsigned char)x` a 8 bit — NON è
+            # applicato: vedi divergenza int/type-width nel TODO). Un tentativo di
+            # emettere il trunc qui rompeva l'eval-arg di `printf` (%hhx, …) →
+            # crash, revertito.
             return _eval_expr(expr.expr, ctx)
         raise MnemoCompileError("cast non supportato")
 
@@ -12468,9 +12473,12 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             coord = node.coord
             # Nota Janus: `_lower_assign` fa eval(rhs) *prima* di push(lhs) che azzera lhs.
             # Per `sum += i` serve rhs = sum+i così il totale è calcolato prima del push.
+            # Usa `node.lvalue` (nome LOGICO, es. `p`), NON la cella fisica: serve a
+            # `_ptr_struct_stride_words` per scalare `p += k` di sizeof(struct)/4 su
+            # puntatore-a-struct (con la cella fisica lo stride non sarebbe risolto).
             rhs = c.BinaryOp(
                 _COMPOUND_ASSIGN_OPS[node.op],
-                c.ID(_phys(ctx, lhs), coord),
+                node.lvalue,
                 node.rvalue,
                 coord,
             )
