@@ -8499,6 +8499,16 @@ def _proc_is_pool_store_family(proc: str) -> bool:
     return base.startswith("__mn_pool_store") or base.startswith("__mn_pool_free")
 
 
+def _proc_is_pool_load_family(proc: str) -> bool:
+    """True se il proc è un LOAD/GET del pool: legge le ~tutte le celle statiche
+    (passate come arg per il dispatch `if slot==k then out += memk`) ma SCRIVE solo
+    l'arg `out` (ultima cella prima degli stack). Trattare tutti gli arg come
+    write gonfierebbe il write-set a O(celle) (era la causa del rallentamento di
+    des-opt: snapshot 917/call)."""
+    base = proc.split("@", 1)[0]
+    return base.startswith("__mn_pool_load") or base.startswith("__mn_pool_get")
+
+
 def _compute_callee_mem_writes(
     probe_map: dict[str, Function],
     total_cells: int,
@@ -8546,8 +8556,18 @@ def _compute_callee_mem_writes(
                             if ci not in writes[n]:
                                 writes[n].add(ci)
                                 changed = True
+                elif _proc_is_pool_load_family(callee):
+                    # LOAD/GET: read-only sul table, scrive solo `out` = ultimo
+                    # arg mem-cell (slot, mem0..memN, out, stacks). Aggiungere
+                    # tutti gli arg gonfierebbe a O(celle).
+                    last_mem = next(
+                        (a for a in reversed(arg_mem) if a is not None), None
+                    )
+                    if last_mem is not None and last_mem not in writes[n]:
+                        writes[n].add(last_mem)
+                        changed = True
                 else:
-                    # lib read-only (load/get/move): scrive solo gli arg mem.
+                    # altro lib (mul/and/or/divmod/move…): pochi arg, conservativo.
                     for ai in arg_mem:
                         if ai is not None and ai not in writes[n]:
                             writes[n].add(ai)
