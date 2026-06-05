@@ -3661,6 +3661,10 @@ def _func_param_names(fd: c.FuncDecl, td: dict[str, c.Node], ctx: _Ctx) -> list[
             if n is None:
                 n = _struct_pointer_param_name(p, ctx)
             if n is None:
+                _fpm = _func_ptr_decl_meta(p, td)
+                if _fpm is not None:
+                    n = _fpm[0]
+            if n is None:
                 raise MnemoCompileError("tipo parametro non supportato")
             names.append(n)
         else:
@@ -6073,8 +6077,21 @@ def _lvalue_inc_dec_prefix_postfix(
 
 
 def _func_ptr_decl_meta(node: c.Decl, td: dict[str, c.Node]) -> tuple[str, c.FuncDecl] | None:
-    """`int (*p)(int)` → (`p`, FuncDecl)."""
+    """`int (*p)(int)` → (`p`, FuncDecl). Anche via TYPEDEF: `typedef int(*BinOp)
+    (int,int); BinOp f` → (`f`, FuncDecl)."""
     cur = node.type
+    # typedef-to-fnptr: `BinOp f` con `node.type` = TypeDecl→IdentifierType(BinOp)
+    # e `BinOp` typedef di `int(*)(int,int)`. Il nome param è il declname del
+    # TypeDecl; la firma FuncDecl viene dal target del typedef.
+    td_declname: str | None = None
+    if (
+        isinstance(cur, c.TypeDecl)
+        and isinstance(cur.type, c.IdentifierType)
+        and len(cur.type.names) == 1
+        and cur.type.names[0] in td
+    ):
+        td_declname = cur.declname
+        cur = _follow_typedef_chain([cur.type.names[0]], td, set())
     if not isinstance(cur, c.PtrDecl):
         return None
     inner = cur.type
@@ -6089,7 +6106,9 @@ def _func_ptr_decl_meta(node: c.Decl, td: dict[str, c.Node]) -> tuple[str, c.Fun
     rt = inner.type
     if not isinstance(rt, c.TypeDecl) or rt.declname is None:
         return None
-    return str(rt.declname), inner
+    # Per il typedef il declname della return è il nome del typedef (BinOp): usa
+    # il nome del parametro (td_declname) come nome della variabile fn-ptr.
+    return (td_declname if td_declname is not None else str(rt.declname)), inner
 
 
 def _func_ptr_array_decl_meta(
