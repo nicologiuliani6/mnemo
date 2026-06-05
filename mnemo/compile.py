@@ -1954,10 +1954,26 @@ def auto_select_optimizations(path: str) -> tuple[bool, bool, str]:
     named_cells = _infer_arr_max_total(ast)
     native_arith = (n_arith + n_bitwise) >= 4 or n_arrayref >= 8
     opt_uncall = named_cells >= 256 and n_bitwise <= 24
+
+    def _on(b: bool) -> str:
+        return "ON " if b else "off"
+
+    na_why = (
+        f"arith+bitwise={n_arith + n_bitwise}, array-read={n_arrayref}"
+        if native_arith
+        else f"arith+bitwise={n_arith + n_bitwise}, array-read={n_arrayref} — sotto soglia"
+    )
+    if opt_uncall:
+        ou_why = f"celle≈{named_cells}, bitwise={n_bitwise} — memoria alta, corpo leggero"
+    elif named_cells < 256:
+        ou_why = f"celle≈{named_cells} — poca memoria"
+    else:
+        ou_why = f"bitwise={n_bitwise} — bitwise-heavy, opt = perdita di tempo"
+
     reason = (
-        f"auto: arith={n_arith} bitwise={n_bitwise} arrayref={n_arrayref} "
-        f"ptr={n_ptr} celle≈{named_cells} → native_arith={native_arith} "
-        f"opt_uncall={opt_uncall}"
+        "auto-opt:\n"
+        f"  native-arith : {_on(native_arith)}  ({na_why})\n"
+        f"  opt-uncall   : {_on(opt_uncall)}  ({ou_why})"
     )
     return native_arith, opt_uncall, reason
 
