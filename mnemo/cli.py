@@ -465,18 +465,34 @@ def _cmd_run(args: argparse.Namespace) -> None:
         run_env["KAIROS_VM_STATS"] = "1"
         # Propaga il flag al wrapper kairos (parse di sys.argv per --vm-stats).
         cmd = list(cmd) + ["--vm-stats"]
+    # Output in REALTIME: la VM (libvm.so printf C + wrapper Python) usa
+    # block-buffering quando stdout è una pipe → l'output uscirebbe a blocchi
+    # (tutto a fine esecuzione). Forziamo line-buffering: `stdbuf -oL` (LD_PRELOAD
+    # sui flussi stdio, copre la printf C di libvm) + PYTHONUNBUFFERED (lato wrapper).
+    run_env["PYTHONUNBUFFERED"] = "1"
+    _stdbuf = shutil.which("stdbuf")
+    if _stdbuf and not args.vm_dump:
+        cmd = [_stdbuf, "-oL"] + list(cmd)
 
     if args.verbose:
         print(f"mnemo: run {cmd!r} cwd={cwd!r}", file=sys.stderr)
+    # Streaming line-by-line: l'output del programma (printf) esce in REALTIME
+    # mentre la VM gira, invece di apparire tutto a fine esecuzione. Il filtro
+    # (rimozione del blocco «=== VM dump ===», soppressione di `__mn_exit:N`,
+    # estrazione dell'exit code, stats in coda con --vm-stats) è applicato a
+    # flusso. `--vm-dump` stampa tutto raw. stderr non-verbose scartato, verbose
+    # ereditato (stream live al terminale).
+    want_stats = getattr(args, "vm_stats", False)
+    exit_re = re.compile(r"^__mn_exit:\s*(-?\d+)\s*$")
     try:
-        r = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=cwd,
             env=run_env,
-            check=False,
             stdout=subprocess.PIPE,
-            stderr=(subprocess.PIPE if args.verbose else subprocess.DEVNULL),
+            stderr=(None if args.verbose else subprocess.DEVNULL),
             text=True,
+            bufsize=1,
         )
     except FileNotFoundError:
         print(
@@ -487,27 +503,53 @@ def _cmd_run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(127)
-    raw_stdout = r.stdout or ""
-    display = (
-        raw_stdout
-        if args.vm_dump
-        else _stdout_without_vm_dump(
-            raw_stdout, keep_stats=getattr(args, "vm_stats", False)
-        )
-    )
-    if display:
-        sys.stdout.write(display)
-    if r.stderr:
-        sys.stderr.write(r.stderr)
-    exit_out = _parse_main_exit_from_kairos_stdout(raw_stdout)
+
+    exit_out: int | None = None
+    in_dump = False
+    dump_tail: list[str] = []
+    pending_blanks: list[str] = []   # trailing newline holdback (rstrip pre-dump)
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        if args.vm_dump:
+            sys.stdout.write(line)
+            continue
+        if in_dump:
+            dump_tail.append(line)
+            continue
+        if "=== VM dump ===" in line:
+            in_dump = True
+            dump_tail.append(line)
+            continue
+        m = exit_re.match(line.rstrip("\n"))
+        if m:
+            if exit_out is None:
+                exit_out = int(m.group(1))
+            continue  # `__mn_exit:N` non fa parte dell'output mostrato
+        if line.strip() == "":
+            pending_blanks.append(line)  # non stampare blank finali pre-dump
+            continue
+        if pending_blanks:
+            sys.stdout.write("".join(pending_blanks))
+            pending_blanks = []
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    proc.wait()
+    # Stats Kairos (dal blocco dump bufferizzato) in coda, se richiesto.
+    if want_stats and not args.vm_dump:
+        tail = "".join(dump_tail)
+        marker = "=== VM stats ==="
+        if marker in tail:
+            stats_block = marker + tail.split(marker, 1)[1]
+            sys.stdout.write(stats_block if stats_block.endswith("\n") else stats_block + "\n")
+    sys.stdout.flush()
     if args.verbose:
         print(
-            f"mnemo: VM exit {r.returncode}"
+            f"mnemo: VM exit {proc.returncode}"
             + (f", main exit {exit_out}" if exit_out is not None else ""),
             file=sys.stderr,
         )
-    if r.returncode != 0:
-        sys.exit(r.returncode)
+    if proc.returncode != 0:
+        sys.exit(proc.returncode)
     if exit_out is not None:
         sys.exit(exit_out)
     sys.exit(0)
