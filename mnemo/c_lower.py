@@ -9818,7 +9818,10 @@ def _lower_predicate_simple(
             return pre_l + pre_r, (lhs_s, op, rhs_s), tm  # type: ignore[arg-type]
         pre, vn, tm = _eval_to_var(expr, ctx)
         return pre, (vn, "!=", "0"), tm
-    if isinstance(expr, (c.FuncCall, c.TernaryOp, c.ArrayRef, c.StructRef, c.UnaryOp, c.Cast)):
+    if isinstance(expr, (c.FuncCall, c.TernaryOp, c.ArrayRef, c.StructRef, c.UnaryOp, c.Cast, c.Assignment)):
+        # Assignment-as-condition (`while((c=f()))`, strcpy `while((d[i]=s[i]))`):
+        # `_eval_to_var`→`_eval_expr` esegue lo store (side effect) e rilegge il
+        # valore assegnato (troncato al tipo del lvalue), testato != 0.
         pre, vn, tm = _eval_to_var(expr, ctx)
         return pre, (vn, "!=", "0"), tm
     raise MnemoCompileError(
@@ -10784,6 +10787,27 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                             )
                             out_sc.extend(_lower_stmt(sub_sc, ctx))
                         return out_sc
+                # `struct V t = a[j];` — init da elemento di array-di-struct
+                # (indice anche runtime). Espandi in `t.f = a[j].f` per campo,
+                # delegando al lowering di StructRef su ArrayRef già esistente.
+                if isinstance(node.init, c.ArrayRef) and st_tag in ctx.struct_specs:
+                    out_ar: list[Instr] = []
+                    for fn_i, fty_i in ctx.struct_specs[st_tag]:
+                        if _type_node_is_pthread_mutex(fty_i, ctx.typedef_map):
+                            continue
+                        lhs_ref = c.StructRef(
+                            c.ID(logical, node.coord), ".",
+                            c.ID(fn_i, node.coord), node.coord,
+                        )
+                        rhs_ref = c.StructRef(
+                            node.init, ".", c.ID(fn_i, node.coord), node.coord,
+                        )
+                        out_ar.extend(
+                            _lower_stmt(
+                                c.Assignment("=", lhs_ref, rhs_ref, node.coord), ctx
+                            )
+                        )
+                    return out_ar
                 if not isinstance(node.init, c.InitList):
                     raise MnemoCompileError("init struct: serve `{ ... }`")
                 has_named_s = any(
@@ -11564,6 +11588,35 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             )
         if isinstance(node.lvalue, c.ArrayRef):
             lv = node.lvalue
+            # `a[i] = <struct>` (assegnamento WHOLE-struct a elemento di array-di-
+            # struct, indice anche runtime). rvalue = altra struct stesso tag
+            # (ID `t`, oppure altro elemento `a[j]`). Espandi in copia per-campo
+            # `a[i].f = rhs.f`, delegando ai lowering StructRef-su-ArrayRef.
+            if node.op == "=" and isinstance(lv.name, c.ID):
+                _sa_base = _scope_resolve(ctx, lv.name.name)
+                if _sa_base in ctx.struct_array_info:
+                    _sa_tag = ctx.struct_array_info[_sa_base][0]
+                    _rhs_is_struct = (
+                        (isinstance(node.rvalue, c.ID)
+                         and ctx.struct_tag_of_var.get(
+                             _scope_resolve(ctx, node.rvalue.name)) == _sa_tag)
+                        or (isinstance(node.rvalue, c.ArrayRef)
+                            and isinstance(node.rvalue.name, c.ID)
+                            and _scope_resolve(ctx, node.rvalue.name.name)
+                            in ctx.struct_array_info)
+                    )
+                    if _rhs_is_struct and _sa_tag in ctx.struct_specs:
+                        _out_ws: list[Instr] = []
+                        for _fn, _fty in ctx.struct_specs[_sa_tag]:
+                            if _type_node_is_pthread_mutex(_fty, ctx.typedef_map):
+                                continue
+                            _lhs_f = c.StructRef(lv, ".", c.ID(_fn, lv.coord), lv.coord)
+                            _rhs_f = c.StructRef(
+                                node.rvalue, ".", c.ID(_fn, lv.coord), lv.coord)
+                            _out_ws.extend(
+                                _lower_stmt(
+                                    c.Assignment("=", _lhs_f, _rhs_f, node.coord), ctx))
+                        return _out_ws
             # `s.field[i][j] = X` (campo-array multi-dim di struct var).
             _mdr = _struct_field_md_resolve(lv, ctx)
             if _mdr is not None:
@@ -13654,6 +13707,49 @@ def lower_file_to_program(
                         loc = _struct_field_local(varname, fname)
                         instrs.append(IAddEq(_phys(ctx, loc), Imm(v)))
             continue
+        # Array-DI-STRUCT a file-scope con InitList (`struct KV tab[4]={{..},..}`):
+        # emit IAddEq sulle celle flat `tab__i__field`. Va PRIMA del path array
+        # scalare (`_try_parse_array_decl` rigetta gli elementi struct).
+        if isinstance(ext.type, c.ArrayDecl) and isinstance(ext.init, c.InitList):
+            sap = _try_parse_struct_array_decl(ext, ctx)
+            if sap is not None:
+                sa_name, sa_dims, sa_tag = sap
+                sa_fields = ctx.struct_specs.get(sa_tag)
+                if sa_fields:
+                    field_order = [
+                        fn for fn, fty in sa_fields
+                        if not _type_node_is_pthread_mutex(fty, ctx.typedef_map)
+                    ]
+                    sa_tot = int(math.prod(int(d) for d in sa_dims))
+                    # Elementi top-level = un InitList per struct (ordine row-major).
+                    elems = list(ext.init.exprs or [])
+                    for i in range(min(sa_tot, len(elems))):
+                        el = elems[i]
+                        if isinstance(el, c.NamedInitializer):
+                            el = el.expr
+                        if not isinstance(el, c.InitList):
+                            continue
+                        sub = list(el.exprs or [])
+                        named_f: dict[str, c.Node] = {}
+                        pos_f: list[c.Node] = []
+                        for s in sub:
+                            if isinstance(s, c.NamedInitializer) and len(s.name) == 1 \
+                               and isinstance(s.name[0], c.ID):
+                                named_f[s.name[0].name] = s.expr
+                            else:
+                                pos_f.append(s)
+                        for fj, fname in enumerate(field_order):
+                            fe = named_f.get(fname)
+                            if fe is None and fj < len(pos_f):
+                                fe = pos_f[fj]
+                            if fe is None:
+                                continue
+                            v = _int_constant_value(fe)
+                            if v is None or v == 0:
+                                continue
+                            cell_sa = f"{sa_name}__{i}__{fname}"
+                            instrs.append(IAddEq(_phys(ctx, cell_sa), Imm(v)))
+                    continue
         # Array a file-scope con InitList: emit IAddEq cell-by-cell.
         if isinstance(ext.type, c.ArrayDecl):
             ap = _try_parse_array_decl(ext, ctx)

@@ -26,6 +26,42 @@ Restano solo le divergenze qui sotto + ottimizzazioni di performance.
   puntatore, dentro un ciclo): semantica re-alloc difficile da invertire (vedi
   anche `realloc` in "Non fattibile"). Il caso fuori-loop funziona.
   (repro `c_probe/t/p6_dyn_grow.c`).
+- **fn-ptr come CAMPO di struct** (`struct{int(*f)(int,int);}; ops[i].f(3,4)`):
+  il binding fn-ptr a indice/campo struct non è risolto (scalar fn-ptr var,
+  array di fn-ptr e fn-ptr param funzionano; il campo struct no). Serve
+  estendere `_resolve_indirect_callee` al caso `StructRef.f(...)` + dispatch su
+  tag in cella `s__field`. (repro `c_probe/t/p8_fnptr_in_struct.c`).
+- **union type-punning int↔byte** (`union{int i;unsigned char b[4];}; u.i=…;
+  u.b[k]`): il word-model (1 cella = 1 word a 4 byte) non aliasa i sotto-byte;
+  scrivere `u.i` non popola `u.b[]`. Union "tagged" (un membro alla volta dello
+  stesso width) funziona; il reinterpret byte-wise no. (repro
+  `c_probe/t/p8_union.c`).
+
+## Opt-uncall + u64-shift: POP stack vuoto (da investigare)
+
+`--opt-uncall-user-calls` su funzioni con `uint64_t` + shift (`<<`/`>>`) è
+**escluso** (euristica `_function_uses_u64_shift` → seed in
+`uncall_extra_seeds`). Per questo su `custom_lib/des.c` l'opt non riduce le
+celle: tutte le des fn (e `main`, transitivamente) sono nel set escluso. Causa
+concreta verificata (`/tmp/u64shift.c`, `des.c`): lo shift variabile u64 lowera
+ai lib proc `__mn_shl_into`/`__mn_shr_into`, che PUSHano su `__mn_hist`; l'opt
+fa `__mn_hist_floor_snap` + `uncall`, l'inverse del proc pop `__mn_hist` ma il
+floor-snap ha già spostato il floor → `[VM] POP: stack vuoto!
+(frame=__mn_shr_into … inv=3)`. Senza il seed l'output è vuoto/crash.
+
+Per togliere l'esclusione (e far ottimizzare des) serve capire QUALE dei 3 lati
+sbaglia:
+1. **Mnemo emette male** — `__mn_hist_floor_snap`/snapshot non considera che il
+   callee ha già pushato su `__mn_hist` per gli shift-into; il floor andrebbe
+   calcolato DOPO quei push, o gli shift-into non dovrebbero toccare `__mn_hist`.
+2. **Kairos `uncall` rotto** — l'inverse di `call f` con shift-into non
+   ripristina il floor di `__mn_hist` correttamente.
+3. **Kairos manca un controllo statico** — un `.kairos` che perde informazione
+   (pop oltre il floor in inverse) dovrebbe essere RIFIUTATO a compile/load time
+   dal frontend Kairos, non crashare a runtime con POP vuoto. Oggi nessun check
+   statico di bilanciamento stack cross-call/uncall.
+
+Finché non risolto, l'esclusione è la scelta corretta (correttezza > perf).
 
 ## Ottimizzazioni future (performance, non correttezza)
 

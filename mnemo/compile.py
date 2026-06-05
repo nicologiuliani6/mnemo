@@ -1237,8 +1237,13 @@ def _function_uses_u64_shift(fd: c.FuncDef, u64_typedefs: set[str]) -> bool:
     """True se la fn ha vars/params u64 E performa shift (`<<` o `>>`) su tali vars.
 
     Heuristica conservativa: se la fn ha qualsiasi var u64 E qualsiasi shift,
-    consideriamo opt-uncall single-call unsafe (mul/halve int64 wrap su valori
-    > 2^32 non roundtrip in inverse). Per u32-only fns gli shift sono safe.
+    consideriamo opt-uncall single-call unsafe. Causa concreta (verificata su
+    `/tmp/u64shift.c`, `des.c`): lo shift variabile u64 lowera ai lib proc
+    `__mn_shl_into`/`__mn_shr_into`, che PUSHano su `__mn_hist`. L'opt fa
+    `__mn_hist_floor_snap` + `uncall`; l'inverse del proc pop `__mn_hist` ma il
+    floor-snap ha già spostato il floor → `[VM] POP: stack vuoto!
+    (frame=__mn_shr_into … inv=3)`. Proxy grossolano del vero costrutto unsafe
+    (shift-into-hist); u32-only fns mascherano a 32-bit senza il path lib-hist.
     """
     has_u64_var = False
     if fd.body is None:
