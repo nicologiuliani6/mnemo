@@ -61,15 +61,16 @@ quelle solo lette (per `permute` erano 917/918).
   lo snapshot (già ristretto a write-set 917→3) né `go_to_line`: è il volume di
   PARAM-binding di `__mn_pool_load` × raddoppio opt × overhead inverse.
 
-Fix vero = **op VM nativa MEMGET/MEMSET** (vedi "Ottimizzazioni future" #1):
-rimpiazzare il `__mn_pool_load` bytecode a 917 PARAM con un accesso indicizzato
-nativo (O(log N)/O(1)) sull'array delle celle nominate, eliminando il
-param-binding e l'inversione bytecode. Toglie sia il costo baseline sia il
-raddoppio dell'opt. Feature grossa (VM + lowering + reversibilità), non fatta.
+**AGGIORNAMENTO**: il PARAM-binding di `__mn_pool_load` è stato eliminato con la
+**native interception** (kairos `df89c03`, vedi "Ottimizzazioni future"): la VM
+esegue `out=mem[slot]` in C senza legare i 917 param. des **baseline 2m23s →
+~1m32s**. Questo dimezza anche des-opt (~8x → ~4x). Il collo RESIDUO dell'opt è
+ora il replay-uncall del **bitwise di feistel** (native and/or hist O(31×31)/op,
+16 round, raddoppiato), inerente all'opt su codice bitwise-heavy.
 
-Conclusione: l'opt è CORRETTO e riduce le celle, ma su des resta impraticabile
-finché il table-access è il `pool_load` a 917 PARAM → lasciare l'opt-uncall
-**disattivato** su des (è opt-in). Conviene su fn con corpo economico.
+Conclusione: l'opt è CORRETTO e riduce le celle. Su des conviene comunque NON
+attivarlo (bitwise-heavy → net loss in tempo); `--auto` lo riconosce e attiva
+solo `--native-arith`. Su fn con corpo economico l'opt è vantaggioso.
 
 **Bug #1 — POP stack vuoto: RISOLTO** (ipotesi "Kairos uncall rotto" confermata).
 La causa NON era il floor-snap né lo shift-into: era il native hist undo a 64-bit.
@@ -111,13 +112,30 @@ deref pool `__mn_pool_load(slot, …)`, con dispatch slot→cella.
   (`CT=85E813540F0AB405`, round-trip ok); `permute(IP)` da >200s a 0.65s.
   L'accesso DIRETTO `a[i]` su array noto era già disj-chain O(N_array).
 
+- ✅ **FATTO — native interception di `__mn_pool_load`** (kairos `df89c03`). Il
+  vero collo NON era il dispatch (già O(log N)) ma il **binding dei ~917
+  parametri** del `call __mn_pool_load(slot, __mn_mem0..N, out, …)` a ogni
+  `tbl[i]`. Sotto `--native-arith` la VM intercetta `call`/uncall di pool_load ed
+  esegue `out=mem[slot]` in C sul frame chiamante, con gli STESSI 2 push su
+  `__mn_hist` del bytecode (forward+inverse interscambiabili, niente nuovo
+  opcode). **des baseline 2m23s → ~1m32s (~35%)**, 1:1 verificato (CT, corpus
+  native-arith, table-read opt+check-invertibility). Solo LOAD (read-only,
+  reversibilità banale); store/dyn invariati.
+
+- ✅ **FATTO — `mnemo run --auto`** (mnemo `5191d16`): sceglie native_arith /
+  opt_uncall dal contenuto del `.c` (conteggio arith/bitwise/arrayref + celle
+  statiche). `auto_select_optimizations` in compile.py. Es. des → native_arith
+  (1m30s), opt_uncall=False (bitwise-heavy); big-array light → opt_uncall.
+
 Idee ulteriori (se servisse altra velocità):
 
-1. **Op VM nativa di accesso indicizzato** (`MEMGET/MEMSET` su `__mn_mem`):
-   read/write diretto O(1) sull'array delle celle nominate (come `POOLGET` ma
-   sui named-cell). Risolve alla radice; tocca VM + lowering + reversibilità.
-2. **Native-arith per `&`/`|`/`<<`** anche fuori da `--native-arith`, o
-   riduzione delle iterazioni bitwise (oggi 31 iter/op nel path interpretato).
+1. **des-opt resta lento** anche col pool_load nativo (~4x, era ~8x). Collo
+   residuo: il replay-uncall del **bitwise di feistel** (native `mn_and_or_hist_*`
+   O(31×31)/op × 16 round, raddoppiato dall'opt). Inerente all'opt su codice
+   bitwise-heavy → `--auto` correttamente NON attiva opt su des. Per ridurlo
+   servirebbe un native and/or hist più compatto, o non opt-are le fn bitwise.
+2. **Op VM nativa MEMGET/MEMSET** con NUOVO opcode: scartata (bytecode congelato).
+   L'interception di pool_load (sopra) copre il caso senza toccare l'ISA.
 
 ## Divergenze per design / comportamento non-definito (non bug)
 
