@@ -10693,6 +10693,26 @@ def _stmt_has_continue(stmt: c.Node | None) -> bool:
     return False
 
 
+def _gate_tail_on_zero(ctx: _Ctx, var: str, tail: list[Instr]) -> list[Instr]:
+    """`if var==0 then tail`. Se `tail` SCRIVE `var` (es. un `continue`/`break`
+    annidato dentro la coda gated di un continue precedente), il Kairos `fi`
+    rivaluterebbe `var==0` ormai falso → IF/FI non reversibile. Fix: materializza
+    la verità `var==0` in un temp PRIMA della coda e gata su quello (stabile)."""
+    if not tail:
+        return []
+    if not _writes_cell(tail, var):
+        return [IIfKairos(var, "==", "0", tail, None)]
+    g = ctx.fresh_temp()
+    ctx.use_hist = True
+    mat: list[Instr] = [
+        IConst(g, 0),
+        IIfKairos(
+            var, "==", "0", [IHistPush(ctx.hist, g), IAddEq(g, Imm(1))], None
+        ),
+    ]
+    return mat + [IIfKairos(g, "!=", "0", tail, None)]
+
+
 def _lower_stmt_list_tail_continue(
     stmts: list[c.Node], ctx: _Ctx, ct_var: str | None
 ) -> list[Instr]:
@@ -10710,14 +10730,14 @@ def _lower_stmt_list_tail_continue(
                 raise MnemoCompileError("continue fuori da loop")
             head = _lower_stmt_list_tail_continue(stmts[:i], ctx, ct_var)
             tail = _lower_stmt_list_tail_continue(stmts[i + 1 :], ctx, ct_var)
-            rest = [IIfKairos(ct_var, "==", "0", tail, None)]
+            rest = _gate_tail_on_zero(ctx, ct_var, tail)
             return head + rest
         if isinstance(s, c.If) and _if_continue_only(s):
             if ct_var is None:
                 raise MnemoCompileError("continue fuori da loop")
             head = _lower_stmt_list_tail_continue(stmts[:i], ctx, ct_var)
             tail = _lower_stmt_list_tail_continue(stmts[i + 1 :], ctx, ct_var)
-            gated = [IIfKairos(ct_var, "==", "0", tail, None)]
+            gated = _gate_tail_on_zero(ctx, ct_var, tail)
             ctx.use_hist = True
             inc = [IHistPush(ctx.hist, ct_var), IAddEq(ct_var, Imm(1))]
             branch = _lower_if_from_expr(s.cond, inc, None, ctx)
@@ -10749,7 +10769,7 @@ def _lower_stmt_list_tail_continue(
                 body_ins.extend(_lower_stmt(ps, ctx))
             body_ins += [IHistPush(ctx.hist, br_var), IAddEq(br_var, Imm(1))]
             branch = _lower_if_from_expr(s.cond, body_ins, None, ctx)
-            gated = [IIfKairos(br_var, "==", "0", tail, None)] if tail else []
+            gated = _gate_tail_on_zero(ctx, br_var, tail)
             return head + branch + gated
     out: list[Instr] = []
     for s in stmts:
