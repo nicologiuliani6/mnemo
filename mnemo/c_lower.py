@@ -10371,6 +10371,22 @@ def _lower_unsigned_relational(
     return pre_l + pre_r, (ml, expr.op, mr), tm_l + tm_r  # type: ignore[return-value]
 
 
+def _demorgan_push_not(expr: c.UnaryOp) -> c.Node | None:
+    """De Morgan: spinge un `!` dentro un `&&`/`||`. `!(a&&b)`→`!a||!b`,
+    `!(a||b)`→`!a&&!b`. None se l'operando di `!` non è `&&`/`||`."""
+    inner = expr.expr
+    if not (isinstance(inner, c.BinaryOp) and inner.op in ("&&", "||")):
+        return None
+    co = expr.coord
+    new_op = "||" if inner.op == "&&" else "&&"
+    return c.BinaryOp(
+        new_op,
+        c.UnaryOp("!", inner.left, co),
+        c.UnaryOp("!", inner.right, co),
+        co,
+    )
+
+
 def _lower_predicate_simple(
     expr: c.Node, ctx: _Ctx
 ) -> tuple[list[Instr], tuple[str, CmpOp, str], list[str]]:
@@ -10548,6 +10564,13 @@ def _writes_cell(instrs: list[Instr], cell: str) -> bool:
 
 
 def _build_truth_incr_lc(expr: c.Node, lc: str, ctx: _Ctx) -> list[Instr]:
+    if isinstance(expr, c.UnaryOp) and expr.op == "!":
+        # `!(a && b)` / `!(a || b)` come condizione di loop: De Morgan spinge il
+        # `!` dentro (i leaf `!comparison` li gestisce predicate_simple). Senza
+        # questo il leaf `&&`/`||` sotto `!` finiva in predicate_simple → errore.
+        dm = _demorgan_push_not(expr)
+        if dm is not None:
+            return _build_truth_incr_lc(dm, lc, ctx)
     if isinstance(expr, c.BinaryOp) and expr.op == "&&":
         return _lower_if_from_expr(
             expr.left,
