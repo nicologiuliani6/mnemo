@@ -11690,6 +11690,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     ctx.func_ptr_runtime[logical_fp] = ctx.func_ptr_runtime[fp_name]
                 elif fp_name in ctx.func_ptr_runtime:
                     pass
+                # Unione coi candidati di pari arità: copre il VALORE runtime
+                # (`f = pick(1)` con `pick` che ritorna un fn-ptr) che il pre-pass
+                # dataflow non vede (nessun nome-funzione assegnato direttamente).
+                _fp_ar = _fnptr_field_candidates(_funcdecl_arity(_cfd), ctx)
+                if _fp_ar:
+                    ctx.func_ptr_runtime[logical_fp] = (
+                        ctx.func_ptr_runtime.get(logical_fp, set()) | _fp_ar
+                    )
                 ctx.use_hist = True
                 phy_fp = _phys(ctx, logical_fp)
                 out_fp: list[Instr] = [
@@ -11702,10 +11710,19 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                         ini = _fold_exprlist_as_comma_chain(ini)
                     tgt_fp = _parse_function_designator(ini, ctx)
                     if tgt_fp is None:
-                        raise MnemoCompileError(
-                            "puntatore a funzione: inizializzatore deve essere "
-                            "`nome_funzione` o `&nome_funzione`"
+                        # Init da VALORE runtime (`f = pick(1)`): la cella riceve
+                        # il TAG ritornato dalla call (o da qualunque espressione
+                        # int che valuta a un tag). Dispatch su `f(...)` userà i
+                        # candidati di pari arità registrati sopra.
+                        _iv, _iop, _itm = _eval_expr(ini, ctx)
+                        out_fp += _iv
+                        out_fp.append(
+                            IAddEq(phy_fp, _iop if isinstance(_iop, Imm) else Var(_iop.name))
                         )
+                        if _itm:
+                            ctx.use_scratch = True
+                            out_fp += [IHistPush(ctx.scratch, x) for x in reversed(_itm)]
+                        return out_fp
                     ctx.func_ptr_alias[logical_fp] = tgt_fp
                     # Scrivi tag(tgt) nella cella: serve sia al dispatch runtime
                     # sia al confronto `f == add`. Mantiene anche l'alias per le
@@ -11873,6 +11890,12 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                     return []
             tgt_as = _parse_function_designator(rhs_fp, ctx)
             if tgt_as is None:
+                # RHS è un VALORE runtime (`f = pick(0)`): la cella riceve il TAG
+                # ritornato. Overwrite reversibile (push old + set) → supporta la
+                # riassegnazione. Dispatch su `f(...)` usa i candidati registrati.
+                if lhs_fp in ctx.func_ptr_runtime:
+                    ctx.func_ptr_alias.pop(lhs_fp, None)
+                    return _lower_assign(_phys(ctx, lhs_fp), rhs_fp, ctx)
                 raise MnemoCompileError(
                     "assegnamento a puntatore a funzione: usa `g`, `&g`, o copia da "
                     "un altro puntatore già inizializzato"

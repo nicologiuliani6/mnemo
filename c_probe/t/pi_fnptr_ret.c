@@ -1,4 +1,3 @@
-// SKIP fn che ritorna fn-ptr a valore runtime (pick(1)) — limite noto, scalar fn-ptr runtime non supportato
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
