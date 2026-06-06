@@ -67,7 +67,7 @@ int s=0;for(int i=0;i<5;i++)for(int j=0;j<5;j++)if((i+j)%2==0)s+=m[i][j];printf(
 # enum as array size and index
 e("pe_enum_dim","""
 enum{N=5};
-int main(void){int a[N];for(int i=0;i<N;i++)a[i]=i*i;int s=0;for(enum{} ;0;);for(int i=0;i<N;i++)s+=a[i];printf("%d\\n",s);return 0;}""")
+int main(void){int a[N];for(int i=0;i<N;i++)a[i]=i*i;int s=0;for(int i=0;i<N;i++)s+=a[i];printf("%d\\n",s);return 0;}""")
 
 # unsigned comparison wraparound
 e("pe_unsigned_cmp","""

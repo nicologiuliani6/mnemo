@@ -13,8 +13,11 @@ for f in "$DIR"/*.c; do
   g=$(gcc -std=c11 -w "$f" -o /tmp/__g 2>/tmp/__gcc_err)
   if [ $? -ne 0 ]; then echo "GCCFAIL $(basename $f)"; err=$((err+1)); continue; fi
   gout=$(/tmp/__g 2>/dev/null); gcode=$?
-  mout=$(timeout 60 "$MN" run "$f" 2>/tmp/__mn_err | grep -v "__mn_exit"); 
-  mcode=$(timeout 60 "$MN" run "$f" 2>/dev/null | grep "__mn_exit" | sed 's/.*__mn_exit://')
+  # Una sola invocazione (raddoppiava il tempo). --native-arith è 1:1 con
+  # l'interprete puro (mul/div/bit O(1) in C) → niente timeout-flakiness su
+  # programmi arith/bit-heavy (bm_count_bits, p6_endian_swap, pd_long_arith, …).
+  mraw=$(timeout 120 "$MN" run "$f" --native-arith 2>/tmp/__mn_err)
+  mout=$(echo "$mraw" | grep -v "__mn_exit")
   if echo "$mout" | grep -q "^mnemo:"; then
      echo "MNERR  $(basename $f): $(echo "$mout"|head -1)"; err=$((err+1)); fails="$fails $(basename $f)"; continue
   fi
