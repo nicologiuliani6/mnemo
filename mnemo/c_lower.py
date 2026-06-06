@@ -6626,6 +6626,28 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         raise MnemoCompileError(f"identificatore non dichiarato: {expr.name!r}")
 
     if isinstance(expr, c.StructRef):
+        # Normalizza catena `.` annidata su base ArrayRef: `arr[i].a.b…` →
+        # `arr[i].(a__b…)` (campo flat singolo), così riusa il path arr[i].field
+        # con i nomi-cella appiattiti `arr__{i}__a__b`. Non tocca `o.a.b` (base ID).
+        if (
+            expr.type == "."
+            and isinstance(expr.field, c.ID)
+            and isinstance(expr.name, c.StructRef)
+        ):
+            _fields = [expr.field.name]
+            _b: c.Node = expr.name
+            while (
+                isinstance(_b, c.StructRef)
+                and _b.type == "."
+                and isinstance(_b.field, c.ID)
+            ):
+                _fields.insert(0, _b.field.name)
+                _b = _b.name
+            if isinstance(_b, c.ArrayRef):
+                _merged = c.StructRef(
+                    _b, ".", c.ID("__".join(_fields), expr.coord), expr.coord
+                )
+                return _eval_expr(_merged, ctx)
         # `arr[i].field` con `arr` array di struct (struct_array_info[logical]).
         # Costante i → slot diretto `arr__i__field`. Runtime i → disj-chain.
         if (
@@ -11745,6 +11767,27 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             # `BASE.arr[i].field = X` con BASE struct e campo `arr` array
             # di struct (nested struct-array field).
             lvs = node.lvalue
+            # Normalizza `arr[i].a.b… = X` (catena `.` su base ArrayRef) in
+            # `arr[i].(a__b…) = X`: campo flat singolo (come la lettura).
+            if (
+                lvs.type == "."
+                and isinstance(lvs.field, c.ID)
+                and isinstance(lvs.name, c.StructRef)
+            ):
+                _wf = [lvs.field.name]
+                _wb: c.Node = lvs.name
+                while (
+                    isinstance(_wb, c.StructRef)
+                    and _wb.type == "."
+                    and isinstance(_wb.field, c.ID)
+                ):
+                    _wf.insert(0, _wb.field.name)
+                    _wb = _wb.name
+                if isinstance(_wb, c.ArrayRef):
+                    lvs = c.StructRef(
+                        _wb, ".", c.ID("__".join(_wf), lvs.coord), lvs.coord
+                    )
+                    node = c.Assignment(node.op, lvs, node.rvalue, node.coord)
             if (
                 lvs.type == "."
                 and isinstance(lvs.name, c.ArrayRef)
