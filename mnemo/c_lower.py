@@ -1153,6 +1153,81 @@ def _malloc_block_cells(call: c.FuncCall) -> int:
     return 1
 
 
+def _malloc_mul_factors(e: c.Node) -> list[c.Node]:
+    """Appiattisce un prodotto `a*b*c` (con cast trasparenti) in lista di fattori."""
+    if isinstance(e, c.Cast):
+        return _malloc_mul_factors(e.expr)
+    if isinstance(e, c.BinaryOp) and e.op == "*":
+        return _malloc_mul_factors(e.left) + _malloc_mul_factors(e.right)
+    return [e]
+
+
+def _expr_contains_sizeof(e: c.Node) -> bool:
+    if isinstance(e, c.UnaryOp) and e.op == "sizeof":
+        return True
+    for _, ch in (e.children() if hasattr(e, "children") else []):
+        if _expr_contains_sizeof(ch):
+            return True
+    return False
+
+
+def _malloc_factor_const_bytes(e: c.Node, ctx: "_Ctx") -> int | None:
+    """Byte costanti di un fattore `malloc` (sizeof risolto ctx-aware). None se runtime."""
+    if isinstance(e, c.Cast):
+        return _malloc_factor_const_bytes(e.expr, ctx)
+    if isinstance(e, c.Constant) and e.type in ("int", "unsigned int", "long"):
+        try:
+            return int(e.value, 0)
+        except ValueError:
+            return None
+    if isinstance(e, c.UnaryOp) and e.op == "sizeof":
+        if isinstance(e.expr, (c.Typename, c.TypeDecl)):
+            try:
+                return _sizeof_of_c_type_node(e.expr, ctx)
+            except MnemoCompileError:
+                return None
+        return None
+    return None
+
+
+def _malloc_nblk_ir(call: c.FuncCall, ctx: "_Ctx"):
+    """IR per `nblk` (parole) di `malloc`/`calloc` quando la size ha un fattore
+    RUNTIME (es. `malloc(sizeof(int*)*R)`). Ritorna `(ins, op, temps)` con `op`
+    la parola-count a runtime, o `None` → usa il path statico `_malloc_block_cells`.
+
+    nblk = element_words * (prod fattori runtime), dove element_words =
+    ceil(byte_costanti/4). Per int/ptr/struct (multipli di 4) è esatto; per
+    sovra-stime (es. char) resta SAFE — niente sovrapposizione di blocchi."""
+    args = call.args.exprs if (call.args and call.args.exprs) else []
+    name = call.name.name if isinstance(call.name, c.ID) else ""
+    if name == "calloc" and len(args) == 2:
+        factors = _malloc_mul_factors(args[0]) + _malloc_mul_factors(args[1])
+    elif args:
+        factors = _malloc_mul_factors(args[0])
+    else:
+        return None
+    const_bytes = 1
+    rt_nodes: list[c.Node] = []
+    for f in factors:
+        b = _malloc_factor_const_bytes(f, ctx)
+        if b is not None:
+            const_bytes *= b
+        elif _expr_contains_sizeof(f):
+            return None  # sizeof non risolvibile → fallback statico
+        else:
+            rt_nodes.append(f)
+    if not rt_nodes:
+        return None  # interamente statico → path esistente
+    element_words = max(1, (const_bytes + 3) // 4)
+    node: c.Node | None = (
+        c.Constant("int", str(element_words), None) if element_words != 1 else None
+    )
+    for rn in rt_nodes:
+        node = rn if node is None else c.BinaryOp("*", node, rn, None)
+    ins, nm, tm = _eval_to_var(node, ctx)
+    return ins, Var(nm), tm
+
+
 def _parallel_branch_mem_actuals(
     ctx: _Ctx, *, left: bool, callee_name: str | None = None
 ) -> list[str]:
@@ -7837,9 +7912,18 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             t = ctx.fresh_temp()
             t_nblk = ctx.fresh_temp()
             t_hslot = ctx.fresh_temp()
-            nblk = _malloc_block_cells(expr)
             ctx.use_hist = True
             ctx.use_scratch = True
+            # nblk = parole del blocco. Size con fattore RUNTIME (es.
+            # `malloc(sizeof(int*)*R)`) → calcolo a runtime; altrimenti costante.
+            # Senza questo, una size runtime collassava a nblk=1 → blocchi
+            # malloc-in-loop SOVRAPPOSTI (ctr avanzava di 2, non di count+1).
+            nblk_rt = _malloc_nblk_ir(expr, ctx)
+            if nblk_rt is None:
+                head = [IConst(t_nblk, _malloc_block_cells(expr))]
+            else:
+                rt_ins, rt_op, _ = nblk_rt
+                head = rt_ins + [IAddEq(t_nblk, rt_op)]
             # Modello block-aware con header. Scrivi l'header nblk in mem{ctr}
             # (banked-aware via pool_store), poi alloc ritorna ctr+1 (inizio dati)
             # e avanza ctr di nblk+1 → blocchi concorrenti non si sovrappongono.
@@ -7847,7 +7931,8 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             # divmod del dispatch CONSUMA il dividendo → con `_PTR_POOL_CTR` diretto
             # azzererebbe il contatore e alloc vedrebbe ctr=0.
             ins = (
-                [IConst(t_nblk, nblk), IAddEq(t_hslot, Var(_PTR_POOL_CTR))]
+                head
+                + [IAddEq(t_hslot, Var(_PTR_POOL_CTR))]
                 + _ir_pool_store_call(ctx, t_hslot, t_nblk)
                 + [
                     ICall(

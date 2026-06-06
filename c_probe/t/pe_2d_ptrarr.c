@@ -1,4 +1,3 @@
-// SKIP int**g 2D malloc: g[i][j] const ok, ma malloc-in-loop+doppia-indirezione a indice runtime dà valore errato (82 vs 66)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
