@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 void *malloc(size_t n);
+void *calloc(size_t nmemb, size_t size);
 void  free(void *p);
 
 /* abs / labs / llabs: Mnemo lower built-in. */

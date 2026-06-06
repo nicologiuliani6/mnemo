@@ -3589,7 +3589,7 @@ def _file_ast_needs_ptr_pool(ast: c.FileAST) -> bool:
         if isinstance(node, c.UnaryOp) and node.op == "*":
             return True
         if isinstance(node, c.FuncCall) and isinstance(node.name, c.ID):
-            if node.name.name in ("malloc", "free"):
+            if node.name.name in ("malloc", "calloc", "free"):
                 return True
         if not hasattr(node, "children"):
             return False
@@ -7901,13 +7901,16 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             ins_d = _emit_fnptr_array_runtime_dispatch(expr, ctx, arr_log_rt_e, t_sink)
             return ins_d, Var(t_sink), [t_sink]
         expr, name = _resolve_indirect_callee(expr, ctx)
-        if name == "malloc":
+        if name in ("malloc", "calloc"):
+            # `calloc(nmemb, size)`: zero-init implicito — il pool (celle nominate
+            # e mn_pool dinamico) parte già a 0 → identico a malloc(nmemb*size),
+            # con `_malloc_nblk_ir`/`_malloc_block_cells` che gestiscono i 2 arg.
             if name not in ctx.extern_procs:
                 raise MnemoCompileError(
-                    "malloc: dichiarare es. `void *malloc(int n);` o `void *malloc(unsigned n);`"
+                    f"{name}: dichiarare es. `void *malloc(int n);` o `void *malloc(unsigned n);`"
                 )
             if not ctx.proc_returns_int.get(name, False):
-                raise MnemoCompileError("malloc deve restituire un puntatore (void* / int*)")
+                raise MnemoCompileError(f"{name} deve restituire un puntatore (void* / int*)")
             _register_ptr_pool_locals(ctx)
             t = ctx.fresh_temp()
             t_nblk = ctx.fresh_temp()
