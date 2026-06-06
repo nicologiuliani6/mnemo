@@ -1676,6 +1676,10 @@ def _sizeof_array_element_type(cur: c.Node, ctx: _Ctx) -> int | None:
                 return _SIZEOF_POINTER
             if _is_scalar_type_names(nms, td):
                 return _SIZEOF_POINTER
+        # Puntatore-a-struct/union (`struct N *arr[]`): un solo `*`, valore
+        # pointer-sized → l'elemento è un puntatore come gli altri.
+        if isinstance(inn, c.TypeDecl) and isinstance(inn.type, (c.Struct, c.Union)):
+            return _SIZEOF_POINTER
         return None
     if isinstance(cur, c.TypeDecl) and isinstance(cur.type, c.IdentifierType):
         return _sizeof_of_c_type_node(cur, ctx)
@@ -3189,6 +3193,19 @@ def _pointer_expr_struct_tag(node: c.Node, ctx: "_Ctx") -> str | None:
     if isinstance(node, c.UnaryOp) and node.op == "&":
         if isinstance(node.expr, c.ID):
             return ctx.struct_tag_of_var.get(_scope_resolve(ctx, node.expr.name))
+    if isinstance(node, c.ArrayRef) and isinstance(node.name, c.ID):
+        # Elemento di array-di-puntatori-a-struct: `arr[i]->v`.
+        log = _scope_resolve(ctx, node.name.name)
+        ty = ctx.var_types.get(log)
+        cur = ty
+        while isinstance(cur, c.ArrayDecl):
+            cur = cur.type
+        if isinstance(cur, c.PtrDecl):
+            inner = cur.type
+            while isinstance(inner, c.PtrDecl):
+                inner = inner.type
+            return _struct_tag_for_decl_type(inner, ctx)
+        return None
     if isinstance(node, c.StructRef) and isinstance(node.field, c.ID):
         # Campo di tipo puntatore-a-struct: `a.b->v`, `p->b->v`.
         if node.type == ".":
