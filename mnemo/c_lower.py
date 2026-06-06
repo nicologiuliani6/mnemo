@@ -8147,6 +8147,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 )
         t = ctx.fresh_temp()
         ins = _lower_funccall_with_ret(expr, ctx, t)
+        # Funzione che ritorna `unsigned`: il valore va troncato a 32-bit (mod
+        # 2^32) come ogni valore unsigned, ALTRIMENTI il raw 64-bit non mascherato
+        # leakava in `f() % k`, `int x = f()` ecc. (es. `next_rand() % W` dava un
+        # dividendo enorme → modulo sbagliato).
+        if _fn_returns_unsigned(name, ctx):
+            ctx.use_hist = True
+            ins = ins + [ICall("__mn_mask_u32", [t] + _kairos_stack_actuals(ctx))]
         return ins, Var(t), [t]
 
     if isinstance(expr, c.CompoundLiteral):
@@ -10226,6 +10233,28 @@ def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
     return out
 
 
+def _fn_returns_unsigned(name: str, ctx: _Ctx) -> bool:
+    """True se la funzione user `name` ha tipo di ritorno `unsigned` (typedef
+    espansi: uint32_t/size_t/…)."""
+    if ctx.file_ast is None:
+        return False
+    fd = _get_funcdef(ctx.file_ast, name)
+    if fd is None or not isinstance(fd.decl.type, c.FuncDecl):
+        return False
+    cur: c.Node | None = fd.decl.type.type
+    while cur is not None and not isinstance(cur, c.IdentifierType):
+        cur = getattr(cur, "type", None)
+    if not isinstance(cur, c.IdentifierType):
+        return False
+    if "unsigned" in cur.names:
+        return True
+    try:
+        ex = _expand_typedef_names(list(cur.names), ctx.typedef_map)
+    except MnemoCompileError:
+        return False
+    return "unsigned" in ex
+
+
 def _type_node_is_unsigned(tnode: c.Node | None) -> bool:
     """True se il type-node è `unsigned …` (IdentifierType con 'unsigned')."""
     cur = tnode
@@ -10265,6 +10294,8 @@ def _expr_is_unsigned(expr: c.Node, ctx: _Ctx) -> bool:
         return _tnode_uns(ctx.var_types.get(log))
     if isinstance(expr, c.Cast):
         return _tnode_uns(getattr(expr.to_type, "type", None))
+    if isinstance(expr, c.FuncCall) and isinstance(expr.name, c.ID):
+        return _fn_returns_unsigned(expr.name.name, ctx)
     if isinstance(expr, c.UnaryOp) and expr.op in ("+", "-", "~"):
         return _expr_is_unsigned(expr.expr, ctx)
     if isinstance(expr, c.BinaryOp) and expr.op in ("<<", ">>"):
@@ -10441,6 +10472,21 @@ def _lower_if_from_expr(
     if isinstance(expr, c.BinaryOp) and expr.op == "||":
         right_chain = _lower_if_from_expr(expr.right, then_instrs, else_instrs, ctx)
         return _lower_if_from_expr(expr.left, then_instrs, right_chain, ctx)
+    if (
+        isinstance(expr, c.UnaryOp)
+        and expr.op == "!"
+        and isinstance(expr.expr, c.BinaryOp)
+        and expr.expr.op in ("&&", "||")
+    ):
+        # `if !(a && b) then T else E` ≡ `if (a && b) then E else T`: scambia i
+        # rami e ricorri sull'espressione composta (short-circuit via nesting).
+        # Senza questo `_lower_predicate_simple` rifiutava `&&`/`||` sotto `!`.
+        return _lower_if_from_expr(
+            expr.expr,
+            else_instrs if else_instrs is not None else [],
+            then_instrs,
+            ctx,
+        )
     pre, g, tm = _lower_predicate_simple(expr, ctx)
     lh, op, rh = g
     # Reversibilità: il Kairos `if C then … else … fi C` rivaluta C alla `fi`.
@@ -10616,6 +10662,37 @@ def _if_break_only(node: c.If) -> bool:
     return _is_break_only_stmt(node.iftrue) and node.iffalse is None
 
 
+def _if_ends_with_break(node: c.Node) -> list[c.Node] | None:
+    """`if(cond){ S1; …; break; }` senza else → lista degli stmt PRIMA del break
+    (eventualmente vuota = break-only). None se non è questa forma.
+    Gli stmt pre-break non devono contenere break/continue annidati (gestiti
+    altrove); restano semplici side-effect prima dell'uscita dal loop."""
+    if not isinstance(node, c.If) or node.iffalse is not None:
+        return None
+    body = node.iftrue
+    items = list(body.block_items or []) if isinstance(body, c.Compound) else [body]
+    if not items or not isinstance(items[-1], c.Break):
+        return None
+    pre = items[:-1]
+    for ps in pre:
+        if _has_break_targeting_loop(ps, False) or _stmt_has_continue(ps):
+            return None
+    return pre
+
+
+def _stmt_has_continue(stmt: c.Node | None) -> bool:
+    if stmt is None:
+        return False
+    if isinstance(stmt, c.Continue):
+        return True
+    if isinstance(stmt, (c.For, c.While, c.DoWhile)):
+        return False  # continue annidato mira al loop interno
+    for _n, ch in (stmt.children() if hasattr(stmt, "children") else []):
+        if _stmt_has_continue(ch):
+            return True
+    return False
+
+
 def _lower_stmt_list_tail_continue(
     stmts: list[c.Node], ctx: _Ctx, ct_var: str | None
 ) -> list[Instr]:
@@ -10654,7 +10731,8 @@ def _lower_stmt_list_tail_continue(
             ctx.use_hist = True
             inc = [IHistPush(ctx.hist, br_var), IAddEq(br_var, Imm(1))]
             return head + inc
-        if isinstance(s, c.If) and _if_break_only(s):
+        pre_break = _if_ends_with_break(s) if isinstance(s, c.If) else None
+        if pre_break is not None:
             if br_var is None:
                 raise MnemoCompileError(
                     "break fuori da loop (o break in switch annidato senza loop)"
@@ -10662,8 +10740,15 @@ def _lower_stmt_list_tail_continue(
             head = _lower_stmt_list_tail_continue(stmts[:i], ctx, ct_var)
             tail = _lower_stmt_list_tail_continue(stmts[i + 1 :], ctx, ct_var)
             ctx.use_hist = True
-            inc = [IHistPush(ctx.hist, br_var), IAddEq(br_var, Imm(1))]
-            branch = _lower_if_from_expr(s.cond, inc, None, ctx)
+            # Corpo del branch: gli stmt PRIMA del break (`alive=0`, …) poi set
+            # br_var. Senza includerli + gating, `if(c){alive=0;break;}` cadeva
+            # nel lowering sequenziale e la tail (`s++`) NON veniva gated → un
+            # giro di troppo.
+            body_ins: list[Instr] = []
+            for ps in pre_break:
+                body_ins.extend(_lower_stmt(ps, ctx))
+            body_ins += [IHistPush(ctx.hist, br_var), IAddEq(br_var, Imm(1))]
+            branch = _lower_if_from_expr(s.cond, body_ins, None, ctx)
             gated = [IIfKairos(br_var, "==", "0", tail, None)] if tail else []
             return head + branch + gated
     out: list[Instr] = []
