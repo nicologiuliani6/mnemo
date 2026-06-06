@@ -4201,6 +4201,34 @@ def _row_ptr_decl_meta(node: c.Decl) -> tuple[str, int] | None:
     return str(leaf.declname), int(nval)
 
 
+def _row_ptr_param_decay_meta(node: c.Decl) -> tuple[str, int] | None:
+    """Parametro `int m[][N]` (array 2D+ come argomento) → decade a row-pointer
+    `int (*)[N]`. Ritorna (nome, stride) con stride = prodotto delle dim INTERNE
+    (la prima dim, eventualmente assente, viene scartata: come `int(*)[N]`).
+    None se non è un array-di-array di scalari con dim interne costanti."""
+    cur = node.type
+    if not isinstance(cur, c.ArrayDecl):
+        return None
+    inner = cur.type
+    if not isinstance(inner, c.ArrayDecl):
+        return None  # array 1D → decay a `int*` normale, non row-pointer
+    stride = 1
+    leaf: c.Node = inner
+    while isinstance(leaf, c.ArrayDecl):
+        if leaf.dim is None:
+            return None
+        d = _eval_const_int_expr(leaf.dim, None)
+        if d is None:
+            return None
+        stride *= int(d)
+        leaf = leaf.type
+    if not isinstance(leaf, c.TypeDecl) or leaf.declname is None:
+        return None
+    if not isinstance(leaf.type, c.IdentifierType):
+        return None
+    return str(leaf.declname), stride
+
+
 def _decl_is_char_pointer(node: c.Decl, td: dict[str, c.Node]) -> bool:
     cur = node.type
     if not isinstance(cur, c.PtrDecl):
@@ -13276,7 +13304,7 @@ def _lower_user_function(
             # `int (*row)[N]` row-pointer PARAM: registra lo stride (come il local
             # a ~11313), PRIMA del fallback int-ptr che lo tratterebbe come `int*`
             # decay 1-dim → `row[i][j]` darebbe "servono 1 indici, ne ho 2".
-            _rpm_p = _row_ptr_decl_meta(p)
+            _rpm_p = _row_ptr_decl_meta(p) or _row_ptr_param_decay_meta(p)
             if _rpm_p is not None:
                 _rn_p, _rN_p = _rpm_p
                 ctx.row_ptr_stride[_rn_p] = _rN_p
