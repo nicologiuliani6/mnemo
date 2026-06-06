@@ -1291,6 +1291,34 @@ def compute_program_mem_layout(
         ap = L._try_parse_array_decl(ext, fs_ctx)
         if ap is not None:
             name, dims, esz = ap
+            # `const char *arr[] = {"a","b"}` a livello file: stesso limite del
+            # char* scalare (le ROS per-letterale si materializzano in funzione).
+            # Senza questo check l'accesso `arr[i][j]` calcolava slot=-1 a runtime
+            # (crash) invece di un errore chiaro. Solo elemento-puntatore: il
+            # `char x[R][C]={"…"}` 2D è un caso diverso e valido.
+            _et = ext.type
+            _ndim = 0
+            while isinstance(_et, c.ArrayDecl):
+                _ndim += 1
+                _et = _et.type
+            _init_has_str = isinstance(ext.init, c.InitList) and any(
+                isinstance(e, c.Constant) and e.type == "string"
+                for e in (ext.init.exprs or [])
+            )
+            _is_char = (
+                isinstance(_et, c.TypeDecl)
+                and isinstance(_et.type, c.IdentifierType)
+                and _et.type.names
+                in (["char"], ["signed", "char"], ["unsigned", "char"])
+            )
+            if _init_has_str and (
+                isinstance(_et, c.PtrDecl)  # `const char *arr[]={"a"}`
+                or (_is_char and _ndim >= 2)  # `char arr[R][C]={"a"}`
+            ):
+                raise MnemoCompileError(
+                    "array di stringhe-letterali a livello file non supportato "
+                    "(sposta la dichiarazione in main o in una funzione)"
+                )
             tot = int(math.prod(dims))
             if name in fs_ctx.int_locals:
                 raise MnemoCompileError(f"ridichiarazione file-scope: {name}")
