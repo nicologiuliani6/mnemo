@@ -7624,6 +7624,20 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             _sw_l = _ptr_struct_stride_words(expr.left, ctx)
             _sw_r = _ptr_struct_stride_words(expr.right, ctx)
             _co = expr.coord
+            if expr.op == "-" and _sw_l > 1 and _sw_r > 1:
+                # `q - p` tra due puntatori-a-struct → numero di ELEMENTI:
+                # (differenza in word-cell) / stride. Senza la divisione tornava
+                # la differenza grezza (×stride). stride uguale per tipi compatibili.
+                _stride = _sw_l
+                _i1, _o1, _tm1 = _eval_expr(expr.left, ctx)
+                _i2, _o2, _tm2 = _eval_expr(expr.right, ctx)
+                _t_raw = ctx.fresh_temp()
+                _raw = _i1 + _i2 + [IAddEq(_t_raw, _o1), ISubEq(_t_raw, _o2)]
+                _div_ast = c.BinaryOp(
+                    "/", c.ID(_t_raw), c.Constant("int", str(_stride), _co), _co
+                )
+                _idiv, _odiv, _tmdiv = _eval_expr(_div_ast, ctx)
+                return _raw + _idiv, _odiv, _tm1 + _tm2 + [_t_raw] + _tmdiv
             if _sw_l > 1 and _sw_r == 1:
                 scaled = c.BinaryOp(
                     "*", expr.right, c.Constant("int", str(_sw_l), _co), _co
