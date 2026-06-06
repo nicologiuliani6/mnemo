@@ -6267,6 +6267,64 @@ def _func_ptr_decl_meta(node: c.Decl, td: dict[str, c.Node]) -> tuple[str, c.Fun
     return (td_declname if td_declname is not None else str(rt.declname)), inner
 
 
+def _fnptr_type_funcdecl(fty: c.Node, td: dict[str, c.Node]) -> c.FuncDecl | None:
+    """Nodo-tipo `int(*)(int,int)` (anche via typedef) → FuncDecl, altrimenti None.
+    Variante type-only di `_func_ptr_decl_meta` (per campi struct: lo spec tiene
+    il tipo, non un Decl con declname)."""
+    cur = fty
+    if (
+        isinstance(cur, c.TypeDecl)
+        and isinstance(cur.type, c.IdentifierType)
+        and len(cur.type.names) == 1
+        and cur.type.names[0] in td
+    ):
+        cur = _follow_typedef_chain([cur.type.names[0]], td, set())
+    if not isinstance(cur, c.PtrDecl):
+        return None
+    inner = cur.type
+    while isinstance(inner, c.PtrDecl):
+        inner = inner.type
+    if not isinstance(inner, c.FuncDecl) or inner.args is None:
+        return None
+    if _func_decl_has_variadic(inner):
+        return None
+    return inner
+
+
+def _funcdecl_arity(fd: c.FuncDecl) -> int:
+    """Numero di parametri SORGENTE di una FuncDecl (`(void)` → 0)."""
+    params = fd.args.params if fd.args is not None else []
+    if len(params) == 1:
+        p0 = params[0]
+        ty = getattr(p0, "type", None)
+        if (
+            isinstance(p0, c.Typename)
+            and isinstance(ty, c.TypeDecl)
+            and isinstance(ty.type, c.IdentifierType)
+            and ty.type.names == ["void"]
+        ):
+            return 0
+    return len(params)
+
+
+def _user_fn_arity(name: str, ctx: _Ctx) -> int | None:
+    if ctx.file_ast is None:
+        return None
+    fd = _get_funcdef(ctx.file_ast, name)
+    if fd is None or not isinstance(fd.decl.type, c.FuncDecl):
+        return None
+    return _funcdecl_arity(fd.decl.type)
+
+
+def _fnptr_field_candidates(arity: int, ctx: _Ctx) -> set[str]:
+    """Funzioni taggate (assegnabili a un fn-ptr) con la stessa arità sorgente.
+    Set di candidati per il dispatch runtime di un fn-ptr a valore variabile
+    (campo struct, ritorno-fn, riassegnazione scalare)."""
+    return {
+        fn for fn in ctx.func_ptr_tags if _user_fn_arity(fn, ctx) == arity
+    }
+
+
 def _func_ptr_array_decl_meta(
     node: c.Decl, ctx: _Ctx
 ) -> tuple[str, int] | None:
@@ -7991,6 +8049,18 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             and isinstance(expr.name.expr, c.ID)
         ):
             cl_e = _scope_resolve(ctx, expr.name.expr.name)
+            if cl_e in ctx.func_ptr_runtime:
+                fp_log_e = cl_e
+        elif (
+            isinstance(expr.name, c.StructRef)
+            and expr.name.type == "."
+            and isinstance(expr.name.name, c.ID)
+            and isinstance(expr.name.field, c.ID)
+        ):
+            # `o.f(...)` con `f` campo fn-ptr → dispatch sulla cella `o__f`.
+            cl_e = _struct_field_local(
+                _scope_resolve(ctx, expr.name.name.name), expr.name.field.name
+            )
             if cl_e in ctx.func_ptr_runtime:
                 fp_log_e = cl_e
         if fp_log_e is not None:
@@ -11153,6 +11223,14 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 if ctx.mem_layout is None:
                     ctx.decl_order.append(loc)
                 ctx.var_types[loc] = fty
+                # Campo fn-ptr (`struct Op{int(*f)(int,int);}`): la cella
+                # `o__f` tiene un TAG funzione runtime → registra i candidati
+                # (funzioni taggate di pari arità) per il dispatch a `o.f(...)`.
+                _ffd = _fnptr_type_funcdecl(fty, ctx.typedef_map)
+                if _ffd is not None:
+                    _cands = _fnptr_field_candidates(_funcdecl_arity(_ffd), ctx)
+                    if _cands:
+                        ctx.func_ptr_runtime[loc] = _cands
             if node.init is not None:
                 # `struct V v = f(...);` — init da FuncCall che ritorna struct
                 # con stessa firma. Multi-word return su tutte le celle dei campi.
@@ -11781,6 +11859,31 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             # `BASE.arr[i].field = X` con BASE struct e campo `arr` array
             # di struct (nested struct-array field).
             lvs = node.lvalue
+            # `o.f = fn` con `f` campo fn-ptr: memorizza il TAG della funzione
+            # nella cella `o__f` (come una fn-ptr var scalare), per il dispatch
+            # runtime a `o.f(...)`.
+            if (
+                node.op == "="
+                and lvs.type == "."
+                and isinstance(lvs.name, c.ID)
+                and isinstance(lvs.field, c.ID)
+            ):
+                _ffloc = _struct_field_local(
+                    _scope_resolve(ctx, lvs.name.name), lvs.field.name
+                )
+                if _ffloc in ctx.func_ptr_runtime:
+                    _tgt_ff = _parse_function_designator(node.rvalue, ctx)
+                    if _tgt_ff is not None and _tgt_ff in ctx.func_ptr_tags:
+                        ctx.func_ptr_alias[_ffloc] = _tgt_ff
+                        # `_lower_assign` fa l'overwrite reversibile (push old +
+                        # set new) → supporta la riassegnazione `o.f=add;o.f=mul`.
+                        return _lower_assign(
+                            _phys(ctx, _ffloc),
+                            c.Constant(
+                                "int", str(ctx.func_ptr_tags[_tgt_ff]), node.coord
+                            ),
+                            ctx,
+                        )
             # Normalizza `arr[i].a.b… = X` (catena `.` su base ArrayRef) in
             # `arr[i].(a__b…) = X`: campo flat singolo (come la lettura).
             if (

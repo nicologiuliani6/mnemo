@@ -1,4 +1,3 @@
-// SKIP fn-ptr come CAMPO struct chiamato (o.f(...)) — valore runtime riassegnato, limite noto
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
