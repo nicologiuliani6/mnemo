@@ -36,9 +36,9 @@ class TestParUncallChannels(unittest.TestCase):
         PC.c runtime resta funzionale (par regolare senza opt-uncall).
         """
         ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        pc_path = os.path.join(ROOT, "c_test", "PC.c")
+        pc_path = os.path.join(ROOT, "tests/c/repro", "PC.c")
         if not os.path.exists(pc_path):
-            self.skipTest("c_test/PC.c not present")
+            self.skipTest("tests/c/repro/PC.c not present")
         k = compile_c_to_kairos(pc_path, opt_uncall_user_calls=True)
         has_uncall_producer = re.search(r"uncall producer\(", k) is not None
         has_uncall_consumer = re.search(r"uncall consumer\(", k) is not None

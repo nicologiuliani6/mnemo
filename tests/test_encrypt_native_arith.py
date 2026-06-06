@@ -15,14 +15,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 @unittest.skipUnless(
-    os.path.exists(os.path.join(ROOT, "c_test/encrypt.c")),
+    os.path.exists(os.path.join(ROOT, "tests/c/repro/encrypt.c")),
     "encrypt.c not present",
 )
 class TestEncryptNativeArith(unittest.TestCase):
     EXPECTED = "cipher: 16713\nL: 22  R: 10\n"
 
     def _run(self, *extra: str) -> subprocess.CompletedProcess[str]:
-        cmd = [".venv/bin/mnemo", "run", "c_test/encrypt.c", *extra]
+        cmd = [".venv/bin/mnemo", "run", "tests/c/repro/encrypt.c", *extra]
         return subprocess.run(
             cmd,
             capture_output=True,

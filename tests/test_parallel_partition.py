@@ -24,7 +24,7 @@ def _relpath(*parts: str) -> str:
 
 class TestParallelTwoRegions(unittest.TestCase):
     def test_ex33_par_branch_args_disjoint(self) -> None:
-        k = compile_c_to_kairos(_relpath("c_examples", "ex33_parallel2_fib.c"))
+        k = compile_c_to_kairos(_relpath("tests", "c", "examples", "ex33_parallel2_fib.c"))
         self.assertIn("par", k)
         # fib_left: regione 0 — __mn_mem0, …; fib_right: stessa S celle, base S
         m0 = re.search(
@@ -56,7 +56,7 @@ class TestParallelTwoRegions(unittest.TestCase):
             )
 
     def test_ex32_parallel_with_worker_and_cont_regions(self) -> None:
-        k = compile_c_to_kairos(_relpath("c_examples", "ex32_parallel_with.c"))
+        k = compile_c_to_kairos(_relpath("tests", "c", "examples", "ex32_parallel_with.c"))
         self.assertIn("par", k)
         m0 = re.search(
             r"call worker_side\(([^)]+)\)", k,

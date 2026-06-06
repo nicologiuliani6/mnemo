@@ -5,8 +5,8 @@ KAIROS_ROOT ?= $(abspath $(MNEMO_ROOT)/../kairos)
 KAIROS_PY := $(KAIROS_ROOT)/venv/bin/python
 MNEMO_PY := $(MNEMO_ROOT)/.venv/bin/python
 
-C_FILES := $(sort $(wildcard $(MNEMO_ROOT)/c_examples/*.c))
-GCC_COMPAT_FILES := $(sort $(wildcard $(MNEMO_ROOT)/c_examples/gcc_compat/generic_*.c))
+C_FILES := $(sort $(wildcard $(MNEMO_ROOT)/tests/c/examples/*.c))
+GCC_COMPAT_FILES := $(sort $(wildcard $(MNEMO_ROOT)/tests/c/examples/gcc_compat/generic_*.c))
 
 CYAN := \033[0;36m
 GREEN := \033[0;32m
@@ -21,14 +21,14 @@ help:
 	@echo ""
 	@echo "$(CYAN)Mnemo$(RESET)"
 	@echo "  $(GREEN)make venv$(RESET)          python3 -m venv .venv && pip install -e ."
-	@echo "  $(GREEN)make compile$(RESET)       mnemo dump-kairos su c_examples/*.c → .kairos"
+	@echo "  $(GREEN)make compile$(RESET)       mnemo dump-kairos su tests/c/examples/*.c → .kairos"
 	@echo "  $(GREEN)make run FILE=<path>$(RESET)  un solo .c (compila) o .kairos — path relativo a mnemo/"
 	@echo "  $(GREEN)make run FILE=... MAIN_ARGC=N$(RESET)  opzionale: sovrascrive argc (come mnemo compile --main-argc N)"
 	@echo "  $(GREEN)make test$(RESET)         compile + esegue ogni .kairos (timeout 600s — opt-uncall su encrypt ~5min)"
-	@echo "  $(GREEN)make test-gcc-compat$(RESET) confronto mnemo vs gcc su c_examples/gcc_compat/generic_*.c"
+	@echo "  $(GREEN)make test-gcc-compat$(RESET) confronto mnemo vs gcc su tests/c/examples/gcc_compat/generic_*.c"
 	@echo "  $(GREEN)make test-gcc-compat-stop$(RESET) come sopra ma stop al primo fail"
 	@echo "  $(GREEN)make test-unit$(RESET)    unittest Python (parallelismo / lowering, senza VM)"
-	@echo "  $(GREEN)make clean-kairos$(RESET) rimuove c_examples/*.kairos"
+	@echo "  $(GREEN)make clean-kairos$(RESET) rimuove tests/c/examples/*.kairos"
 	@echo "  $(CYAN)Kairos VM$(RESET): $(GREEN)KAIROS_ROOT$(RESET) default $(abspath $(MNEMO_ROOT)/../kairos) → $(GREEN)$(KAIROS_PY)$(RESET)"
 	@echo ""
 
@@ -43,7 +43,7 @@ test-unit: $(MNEMO_PY)
 	@cd $(MNEMO_ROOT) && $(MNEMO_PY) -m unittest discover -s tests -p 'test_*.py' -v
 
 compile: $(MNEMO_PY)
-	@test -n "$(C_FILES)" || (echo "$(RED)nessun file in c_examples/$(RESET)"; exit 1)
+	@test -n "$(C_FILES)" || (echo "$(RED)nessun file in tests/c/examples/$(RESET)"; exit 1)
 	@for c in $(C_FILES); do \
 	  echo "$(CYAN)mnemo dump-kairos $$(basename $$c)$(RESET)"; \
 	  $(MNEMO_PY) -m mnemo dump-kairos $$c || exit 1; \
@@ -73,20 +73,20 @@ test: compile
 	  fi; \
 	done; \
 	echo ""; \
-	echo "$(CYAN)Mnemo c_examples:$(RESET) $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
+	echo "$(CYAN)Mnemo examples:$(RESET) $(GREEN)$$passed PASS$(RESET) / $(RED)$$failed FAIL$(RESET)"; \
 	if [ $$failed -gt 0 ]; then exit 1; fi
 
 test-gcc-compat: $(MNEMO_PY)
-	@test -n "$(GCC_COMPAT_FILES)" || (echo "$(RED)nessun file generic_*.c in c_examples/gcc_compat/$(RESET)"; exit 1)
-	@cd $(MNEMO_ROOT) && $(MNEMO_PY) c_examples/gcc_compat/run_compare.py $(COMPAT_ARGS)
+	@test -n "$(GCC_COMPAT_FILES)" || (echo "$(RED)nessun file generic_*.c in tests/c/examples/gcc_compat/$(RESET)"; exit 1)
+	@cd $(MNEMO_ROOT) && $(MNEMO_PY) tests/c/examples/gcc_compat/run_compare.py $(COMPAT_ARGS)
 
 test-gcc-compat-stop: $(MNEMO_PY)
-	@test -n "$(GCC_COMPAT_FILES)" || (echo "$(RED)nessun file generic_*.c in c_examples/gcc_compat/$(RESET)"; exit 1)
-	@cd $(MNEMO_ROOT) && $(MNEMO_PY) c_examples/gcc_compat/run_compare.py --stop-on-first-fail $(COMPAT_ARGS)
+	@test -n "$(GCC_COMPAT_FILES)" || (echo "$(RED)nessun file generic_*.c in tests/c/examples/gcc_compat/$(RESET)"; exit 1)
+	@cd $(MNEMO_ROOT) && $(MNEMO_PY) tests/c/examples/gcc_compat/run_compare.py --stop-on-first-fail $(COMPAT_ARGS)
 
 run: $(MNEMO_PY)
 ifndef FILE
-	$(error Specifica FILE= relativo a questa directory, es.: make run FILE=c_examples/ex01_mul_small.c oppure FILE=c_examples/ex01_mul_small.kairos — senza spazi attorno a =)
+	$(error Specifica FILE= relativo a questa directory, es.: make run FILE=tests/c/examples/ex01_mul_small.c oppure FILE=tests/c/examples/ex01_mul_small.kairos — senza spazi attorno a =)
 endif
 	@test -f $(KAIROS_PY) || (echo "$(RED)Manca $(KAIROS_PY). Imposta KAIROS_ROOT sulla root del repo Kairos (venv con python -m src.kairos) o clona kairos accanto a mnemo: ../kairos$(RESET)"; exit 1)
 	@$(MAKE) -C $(KAIROS_ROOT) build-release >/dev/null
@@ -102,4 +102,4 @@ endif
 	cd $(KAIROS_ROOT) && $(KAIROS_PY) -m src.kairos "$$runf" --dump-bytecode
 
 clean-kairos:
-	rm -f $(MNEMO_ROOT)/c_examples/*.kairos
+	rm -f $(MNEMO_ROOT)/tests/c/examples/*.kairos

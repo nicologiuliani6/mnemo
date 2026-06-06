@@ -3,15 +3,23 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-c_examples/*.kairos
-c_examples/gcc_compat/*.kairos
-c_test/*.kairos
-c_test/libvm.so
-c_examples/libvm.so
-# gcc-compiled binaries di test
-c_test/fib
-c_examples/ex21_loops_cond_main
-c_examples/gcc_compat/*.gcc.out
+
+# .kairos generati (rigenerabili da `mnemo dump-kairos` / make compile / gen*.py).
+# I sorgenti scritti a mano (regression-guard in tests/c/repro, lib/, fixtures)
+# restano tracciati: git continua a versionarli anche se il pattern li copre.
+tests/c/**/*.kairos
+
+# librerie/artefatti VM compilati nelle dir di test
+tests/c/**/libvm.so
+
+# binari compilati da gcc nei test
+tests/c/**/*.gcc.out
+tests/c/repro/fib
+tests/c/repro/encrypt
+tests/c/examples/ex21_loops_cond_main
+tests/c/examples_advanced/encrypt
+tests/c/examples_advanced/kernel
+
 .claude/
 .cursor/
 CLAUDE.md

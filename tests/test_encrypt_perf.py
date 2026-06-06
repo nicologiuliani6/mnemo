@@ -12,14 +12,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 @unittest.skipUnless(
-    os.path.exists(os.path.join(ROOT, "c_test/encrypt.c")),
+    os.path.exists(os.path.join(ROOT, "tests/c/repro/encrypt.c")),
     "encrypt.c not present"
 )
 class TestEncryptPerf(unittest.TestCase):
     MAX_RATIO = 3.0  # opt deve essere <3x baseline. Stato attuale ~2.4x.
 
     def _run(self, opt: bool) -> tuple[float, str]:
-        cmd = [".venv/bin/mnemo", "run", "c_test/encrypt.c"]
+        cmd = [".venv/bin/mnemo", "run", "tests/c/repro/encrypt.c"]
         if opt:
             cmd.append("--opt-uncall-user-calls")
         t0 = time.perf_counter()
