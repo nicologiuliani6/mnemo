@@ -3189,6 +3189,27 @@ def _pointer_expr_struct_tag(node: c.Node, ctx: "_Ctx") -> str | None:
     if isinstance(node, c.UnaryOp) and node.op == "&":
         if isinstance(node.expr, c.ID):
             return ctx.struct_tag_of_var.get(_scope_resolve(ctx, node.expr.name))
+    if isinstance(node, c.StructRef) and isinstance(node.field, c.ID):
+        # Campo di tipo puntatore-a-struct: `a.b->v`, `p->b->v`.
+        if node.type == ".":
+            base_tag = (
+                ctx.struct_tag_of_var.get(_scope_resolve(ctx, node.name.name))
+                if isinstance(node.name, c.ID)
+                else None
+            )
+        elif node.type == "->":
+            base_tag = _pointer_expr_struct_tag(node.name, ctx)
+        else:
+            base_tag = None
+        if base_tag is not None:
+            spec = ctx.struct_specs.get(base_tag)
+            if spec:
+                fty = next((ft for fn, ft in spec if fn == node.field.name), None)
+                if fty is not None and _pointer_level(fty) >= 1:
+                    cur = fty
+                    while isinstance(cur, c.PtrDecl):
+                        cur = cur.type
+                    return _struct_tag_for_decl_type(cur, ctx)
     return None
 
 
