@@ -1,4 +1,3 @@
-// SKIP array di fn-ptr come CAMPO struct (t.ops[i](...)) — limite noto fn-ptr in struct
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

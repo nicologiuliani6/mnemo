@@ -8072,6 +8072,13 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             t_sink = ctx.fresh_temp()
             ins_d = _emit_fnptr_array_runtime_dispatch(expr, ctx, arr_log_rt_e, t_sink)
             return ins_d, Var(t_sink), [t_sink]
+        _sfa_e = _struct_fnptr_array_cells(expr, ctx)
+        if _sfa_e is not None:
+            t_sink = ctx.fresh_temp()
+            ins_d = _emit_struct_fnptr_array_dispatch(
+                expr, ctx, _sfa_e[0], _sfa_e[1], t_sink
+            )
+            return ins_d, Var(t_sink), [t_sink]
         expr, name = _resolve_indirect_callee(expr, ctx)
         if name in ("malloc", "calloc"):
             # `calloc(nmemb, size)`: zero-init implicito — il pool (celle nominate
@@ -9186,6 +9193,66 @@ def _emit_fnptr_array_runtime_dispatch(
     return out
 
 
+def _struct_fnptr_array_cells(
+    node: c.FuncCall, ctx: _Ctx
+) -> tuple[list[str], c.Node] | None:
+    """`o.ops[i](…)` con `ops` campo array-di-fn-ptr → (celle `o__ops__0..N-1`
+    registrate in func_ptr_runtime, sottoscritto). None se non applicabile."""
+    nm = node.name
+    if not (
+        isinstance(nm, c.ArrayRef)
+        and isinstance(nm.name, c.StructRef)
+        and nm.name.type == "."
+        and isinstance(nm.name.name, c.ID)
+        and isinstance(nm.name.field, c.ID)
+    ):
+        return None
+    base = _struct_field_local(
+        _scope_resolve(ctx, nm.name.name.name), nm.name.field.name
+    )
+    if (base + "__0") not in ctx.func_ptr_runtime:
+        return None
+    cells: list[str] = []
+    k = 0
+    while (base + "__" + str(k)) in ctx.func_ptr_runtime:
+        cells.append(base + "__" + str(k))
+        k += 1
+    return cells, nm.subscript
+
+
+def _emit_struct_fnptr_array_dispatch(
+    node: c.FuncCall,
+    ctx: _Ctx,
+    cells: list[str],
+    subscript: c.Node,
+    ret_sink: str | list[str] | None,
+) -> list[Instr]:
+    """Dispatch `o.ops[i](…)`: indice costante → dispatch sulla singola cella;
+    runtime → chain `if i==k then <dispatch tag su o__ops__k>`."""
+    if isinstance(subscript, c.Constant):
+        k = int(subscript.value)
+        if k < 0 or k >= len(cells):
+            raise MnemoCompileError(
+                f"o.ops[{k}]: indice fuori range (0..{len(cells) - 1})"
+            )
+        return _emit_fp_runtime_dispatch(node, ctx, cells[k], ret_sink)
+    pre, op, tm = _eval_expr(subscript, ctx)
+    ctx.use_hist = True
+    t_idx = ctx.fresh_temp()
+    out: list[Instr] = list(pre)
+    if isinstance(op, Imm):
+        out.append(IConst(t_idx, op.value))
+    else:
+        out += [IHistPush(ctx.hist, t_idx), IAddEq(t_idx, op)]
+    for k, cell in enumerate(cells):
+        sub_ir = _emit_fp_runtime_dispatch(node, ctx, cell, ret_sink)
+        out.append(IIfKairos(t_idx, "==", str(k), sub_ir, None))
+    ctx.use_scratch = True
+    out += [IHistPush(ctx.scratch, x) for x in reversed(tm)]
+    out.append(IHistPush(ctx.scratch, t_idx))
+    return out
+
+
 def _resolve_pi_int_recv_dest(expr: c.Node, ctx: _Ctx) -> str:
     if isinstance(expr, c.UnaryOp) and expr.op == "&" and isinstance(expr.expr, c.ID):
         return _phys(ctx, expr.expr.name)
@@ -9215,6 +9282,9 @@ def _lower_funccall_with_ret(
     arr_log_rt = _is_runtime_fnptr_array_call(node, ctx)
     if arr_log_rt is not None:
         return _emit_fnptr_array_runtime_dispatch(node, ctx, arr_log_rt, ret_sink)
+    _sfa = _struct_fnptr_array_cells(node, ctx)
+    if _sfa is not None:
+        return _emit_struct_fnptr_array_dispatch(node, ctx, _sfa[0], _sfa[1], ret_sink)
     node, name = _resolve_indirect_callee(node, ctx)
     assert isinstance(node.name, c.ID)
     if name == "putchar":
