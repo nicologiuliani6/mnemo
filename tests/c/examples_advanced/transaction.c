@@ -39,6 +39,7 @@ int main(void) {
             }
             accepted += 1;          // tenuto solo se l'ordine è evadibile
         } rollback {
+            printf("Ordine %d rifiutato\n", j);
             // ordine non evadibile: stock e accepted ripristinati
             // automaticamente (nessun backup) → passa al prossimo
         }
