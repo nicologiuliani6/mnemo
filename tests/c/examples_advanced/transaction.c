@@ -15,15 +15,18 @@
 
 #include <stdio.h>
 
-#define N 4    // slot di magazzino
-#define M 3    // numero di ordini
+#define N 6    // slot di magazzino
+#define M 6    // numero di ordini
 
 int main(void) {
-    int stock[N] = {5, 3, 8, 2};
+    int stock[N] = {5, 3, 8, 2, 7, 4};
     int orders[M][N] = {
-        {2, 1, 9, 0},   // slot 2 chiede 9 > 8 → NON evadibile → rollback
-        {1, 1, 1, 1},   // evadibile → accettato
-        {0, 2, 7, 0},   // evadibile sullo stock aggiornato → accettato
+        {2, 1, 9, 0, 0, 0},   // slot 2 chiede 9 > 8 → NON evadibile → rollback
+        {1, 1, 1, 1, 1, 1},   // evadibile → accettato
+        {0, 2, 7, 0, 0, 0},   // evadibile sullo stock aggiornato → accettato
+        {5, 0, 0, 0, 0, 0},   // slot 0: 5 > 4 rimasti → NON evadibile → rollback
+        {0, 0, 0, 0, 3, 2},   // evadibile → accettato
+        {1, 0, 0, 2, 0, 0},   // slot 3: 2 > 1 rimasto → NON evadibile → rollback
     };
 
     int accepted = 0;
@@ -48,5 +51,5 @@ int main(void) {
     printf("ordini accettati: %d  stock finale:", accepted);
     for (j = 0; j < N; j++) printf(" %d", stock[j]);
     printf("\n");
-    return accepted;                // atteso: 2 (stock 4 0 0 1)
+    return accepted;                // atteso: 3 (stock 4 0 0 1 3 1)
 }
