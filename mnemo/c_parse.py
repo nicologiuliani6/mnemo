@@ -312,6 +312,7 @@ def parse_c(path: str) -> c_ast.FileAST:
         cpp_args.extend([
             "-include", os.path.join(mnemo_fake, "stddef.h"),
             "-include", os.path.join(mnemo_fake, "stdint.h"),
+            "-include", os.path.join(mnemo_fake, "stdbool.h"),
         ])
     fake = _fake_libc_include()
     if os.path.isdir(fake):
