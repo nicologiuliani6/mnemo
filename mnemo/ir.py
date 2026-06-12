@@ -211,6 +211,22 @@ class IPar:
     branches: list[list[Any]]
 
 
+@dataclass
+class ITry:
+    """try cond / rollback / yrt cond — costrutto reversibile Kairos.
+
+    Esegue body in avanti; se la condizione (rivalutata dopo il body) è vera il
+    body resta, altrimenti viene invertito ed esegue rollback. La condizione è
+    un atomo Kairos (lhs op rhs), usata sia per `try` che per `yrt`.
+    """
+
+    lhs: str
+    op: CmpOp
+    rhs: str
+    body_instrs: list[Any]
+    rollback_instrs: list[Any] | None = None
+
+
 Instr = Union[
     IConst,
     ICopy,
@@ -235,6 +251,7 @@ Instr = Union[
     ISsend,
     ISrecv,
     IPar,
+    ITry,
 ]
 
 

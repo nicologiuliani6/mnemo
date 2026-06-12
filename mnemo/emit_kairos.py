@@ -29,6 +29,7 @@ from mnemo.ir import (
     ISrecv,
     ISsend,
     IShow,
+    ITry,
     IVmDump,
     IStoreRev,
     ISubEq,
@@ -176,6 +177,16 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         lines.append(
             f"{indent}until {ins.until_lhs} {ins.until_op} {ins.until_rhs}"
         )
+        return
+    if isinstance(ins, ITry):
+        cond = f"{ins.lhs} {ins.op} {ins.rhs}"
+        lines.append(f"{indent}try {cond}")
+        ind2 = indent + "    "
+        _emit_instr_seq(lines, ins.body_instrs, ind2)
+        if ins.rollback_instrs is not None:
+            lines.append(f"{indent}rollback")
+            _emit_instr_seq(lines, ins.rollback_instrs, ind2)
+        lines.append(f"{indent}yrt {cond}")
         return
     if isinstance(ins, ILocalBlock):
         lines.append(f"{indent}local int {ins.var} = 0")

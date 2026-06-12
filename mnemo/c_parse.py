@@ -201,6 +201,85 @@ def _rewrite_builtin_offsetof(text: str) -> str:
     return "".join(out)
 
 
+_TRY_RE = re.compile(r"\btry\b\s*\(")
+_ROLLBACK_RE = re.compile(r"\s*\brollback\b\s*\{")
+
+
+def _match_delim(text: str, open_idx: int, opench: str, closech: str) -> int:
+    """Indice del delimitatore di chiusura bilanciato per quello aperto a open_idx."""
+    depth = 0
+    n = len(text)
+    i = open_idx
+    while i < n:
+        ch = text[i]
+        if ch == opench:
+            depth += 1
+        elif ch == closech:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise MnemoCompileError("try/rollback: delimitatori non bilanciati")
+
+
+def _rewrite_try_rollback(text: str) -> str:
+    """Converte `try (COND) { BODY } [rollback { RB }]` in marker parsabili.
+
+    pycparser non conosce `try`/`rollback`. Riscriviamo in costrutti C validi —
+    chiamate-marker (non dichiarate, come `__mn_generic`) + blocchi `{ }` — che
+    c_lower riconosce e abbassa al costrutto Kairos `try/rollback/yrt`:
+
+        { __mn_try_begin((COND)); { BODY } __mn_try_else(); { RB } __mn_try_end(); }
+
+    BODY/RB sono riscritti ricorsivamente (try annidati).
+    """
+    out: list[str] = []
+    pos = 0
+    while True:
+        m = _TRY_RE.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:m.start()])
+        # COND tra parentesi bilanciate.
+        lpar = m.end() - 1
+        rpar = _match_delim(text, lpar, "(", ")")
+        cond = text[lpar + 1:rpar].strip()
+        # BODY: prossimo `{ ... }`. Se dopo `)` non c'è `{`, non è il costrutto
+        # try ma una normale chiamata a una funzione di nome `try` → lascia com'è.
+        j = rpar + 1
+        while j < len(text) and text[j].isspace():
+            j += 1
+        if j >= len(text) or text[j] != "{":
+            out.append(text[m.start():rpar + 1])
+            pos = rpar + 1
+            continue
+        body_close = _match_delim(text, j, "{", "}")
+        body = text[j + 1:body_close]
+        # rollback opzionale.
+        rb_m = _ROLLBACK_RE.match(text, body_close + 1)
+        if rb_m:
+            rb_open = rb_m.end() - 1
+            rb_close = _match_delim(text, rb_open, "{", "}")
+            rb = text[rb_open + 1:rb_close]
+            out.append(
+                "{ __mn_try_begin((" + cond + ")); { "
+                + _rewrite_try_rollback(body)
+                + " } __mn_try_else(); { "
+                + _rewrite_try_rollback(rb)
+                + " } __mn_try_end(); }"
+            )
+            pos = rb_close + 1
+        else:
+            out.append(
+                "{ __mn_try_begin((" + cond + ")); { "
+                + _rewrite_try_rollback(body)
+                + " } __mn_try_end(); }"
+            )
+            pos = body_close + 1
+    return "".join(out)
+
+
 def parse_c(path: str) -> c_ast.FileAST:
     """
     Legge un file .c: preprocessa con gcc -E e parsa con pycparser.
@@ -246,6 +325,8 @@ def parse_c(path: str) -> c_ast.FileAST:
             text = _rewrite_builtin_offsetof(text)
         if "_Generic" in text:
             text = _rewrite_generic(text)
+        if re.search(r"\btry\b\s*\(", text):
+            text = _rewrite_try_rollback(text)
         parser = CParser()
         return parser.parse(text, path)
     except MnemoCompileError:

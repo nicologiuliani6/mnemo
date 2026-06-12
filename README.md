@@ -87,6 +87,14 @@ struct), `enum`, bit-field NO, `__attribute__` NO.
 `for`. `_Generic` risolto per tipo del selettore (distingue `char`/`int`/
 puntatori). **No** `goto`, `setjmp`/`longjmp`, `_Atomic`, inline asm, VLA.
 
+**`try`/`rollback` (estensione Mnemo, reversibile)**: `try (COND) { BODY }
+[rollback { RB }]`. Esegue `BODY`; se `COND` (rivalutata dopo il body) è vera
+il body resta, altrimenti il body viene **annullato** (inversione) ed esegue
+`RB` — backtracking nativo. Abbassa al costrutto Kairos `try/rollback/yrt`.
+`COND` deve essere una **comparazione semplice** (`x < 10`), niente
+sotto-espressioni con temporanei; niente `par`/canali nel body. Esempi:
+`tests/c/repro/try_commit.c`, `try_rollback.c`, `try_backtracking.c`.
+
 **Funzioni**: function pointer compile-time-resolved (`p = f`, `&f`, `f`
 stesso file) + array di fn-ptr a indice runtime (`ops[i](…)` → dispatch
 chain). No variadic user-defined. `main` accetta `void`, `int argc`, o

@@ -53,6 +53,7 @@ from mnemo.ir import (
     IShow,
     ISubEq,
     ISwap,
+    ITry,
     IXorEq,
     Instr,
     Program,
@@ -11109,6 +11110,68 @@ def _lower_substmt(stmt: c.Node | None, ctx: _Ctx) -> list[Instr]:
     return _lower_stmt(stmt, ctx)
 
 
+def _is_marker_call(node: c.Node, name: str) -> bool:
+    return (
+        isinstance(node, c.FuncCall)
+        and isinstance(node.name, c.ID)
+        and node.name.name == name
+    )
+
+
+def _match_try_compound(node: c.Node):
+    """Riconosce il Compound-marker prodotto dal rewrite di `try/rollback`.
+
+    Ritorna (cond_expr, body_compound, rb_compound|None) oppure None.
+    Forma attesa (vedi c_parse._rewrite_try_rollback):
+        { __mn_try_begin((COND)); { BODY } [__mn_try_else(); { RB }] __mn_try_end(); }
+    """
+    if not isinstance(node, c.Compound):
+        return None
+    items = list(node.block_items or [])
+    if len(items) < 3 or not _is_marker_call(items[0], "__mn_try_begin"):
+        return None
+    begin = items[0]
+    if not begin.args or len(begin.args.exprs) != 1:
+        raise MnemoCompileError("try: marker __mn_try_begin malformato")
+    cond = begin.args.exprs[0]
+    if not isinstance(items[1], c.Compound):
+        raise MnemoCompileError("try: corpo mancante")
+    body = items[1]
+    # senza rollback: [begin, body, end]
+    if len(items) == 3 and _is_marker_call(items[2], "__mn_try_end"):
+        return (cond, body, None)
+    # con rollback: [begin, body, else, rb, end]
+    if (
+        len(items) == 5
+        and _is_marker_call(items[2], "__mn_try_else")
+        and isinstance(items[3], c.Compound)
+        and _is_marker_call(items[4], "__mn_try_end")
+    ):
+        return (cond, body, items[3])
+    raise MnemoCompileError("try: struttura marker non riconosciuta")
+
+
+def _lower_try(cond: c.Node, body: c.Compound, rb: c.Compound | None,
+               ctx: _Ctx) -> list[Instr]:
+    pre, g, tm = _lower_predicate_simple(cond, ctx)
+    if pre or tm:
+        raise MnemoCompileError(
+            "try: la condizione deve essere una comparazione semplice su "
+            "variabili/costanti (es. `x < 10`), senza sotto-espressioni che "
+            "richiedono temporanei (la condizione è rivalutata dopo il body)."
+        )
+    lh, op, rh = g
+    _scope_enter(ctx)
+    body_instrs = _lower_compound_block_items(list(body.block_items or []), ctx)
+    _scope_exit(ctx)
+    rb_instrs: list[Instr] | None = None
+    if rb is not None:
+        _scope_enter(ctx)
+        rb_instrs = _lower_compound_block_items(list(rb.block_items or []), ctx)
+        _scope_exit(ctx)
+    return [ITry(lh, op, rh, body_instrs, rb_instrs)]
+
+
 def _lower_if(node: c.If, ctx: _Ctx) -> list[Instr]:
     then_instrs = _lower_substmt(node.iftrue, ctx)
     else_instrs: list[Instr] | None = (
@@ -13265,6 +13328,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
         return [IReturn()]
 
     if isinstance(node, c.Compound):
+        tr = _match_try_compound(node)
+        if tr is not None:
+            return _lower_try(tr[0], tr[1], tr[2], ctx)
         _scope_enter(ctx)
         out = _lower_compound_block_items(list(node.block_items or []), ctx)
         _scope_exit(ctx)
