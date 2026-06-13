@@ -22,6 +22,7 @@ from mnemo.ir import (
     IStoreRev,
     ISubEq,
     ISwap,
+    ITry,
     IXorEq,
     Instr,
     Operand,
@@ -90,6 +91,17 @@ def _dump_instr(i: Instr, prefix: str = "") -> str:
         p2 = prefix + "    "
         for sub in i.body_instrs:
             lines.append(_dump_instr(sub, p2))
+        return "\n".join(lines)
+    if isinstance(i, ITry):
+        lines = [f"{prefix}  try {i.lhs} {i.op} {i.rhs}"]
+        p2 = prefix + "    "
+        for sub in i.body_instrs:
+            lines.append(_dump_instr(sub, p2))
+        if i.rollback_instrs is not None:
+            lines.append(f"{prefix}  rollback")
+            for sub in i.rollback_instrs:
+                lines.append(_dump_instr(sub, p2))
+        lines.append(f"{prefix}  yrt {i.lhs} {i.op} {i.rhs}")
         return "\n".join(lines)
     raise TypeError(f"istruzione IR sconosciuta: {type(i)}")
 

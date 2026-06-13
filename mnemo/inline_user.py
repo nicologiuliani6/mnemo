@@ -37,6 +37,7 @@ from mnemo.ir import (
     IStoreRev,
     ISubEq,
     ISwap,
+    ITry,
     IXorEq,
     Imm,
     Instr,
@@ -188,6 +189,15 @@ def _rename_one_instr(ins: Instr, ren: Callable[[str], str]) -> Instr:
             ren(ins.var),
             _rename_instrs(ins.body_instrs, ren),
         )
+    if isinstance(ins, ITry):
+        rhs = ren(ins.rhs) if _should_rename_atom(ins.rhs) else ins.rhs
+        return ITry(
+            ren(ins.lhs) if _should_rename_atom(ins.lhs) else ins.lhs,
+            ins.op,
+            rhs,
+            _rename_instrs(ins.body_instrs, ren),
+            _rename_instrs(ins.rollback_instrs, ren) if ins.rollback_instrs is not None else None,
+        )
     if isinstance(ins, ISsend):
         return ISsend(
             ren(ins.channel),
@@ -270,6 +280,13 @@ def _collect_decl_names(instrs: list[Instr]) -> set[str]:
             return
         elif isinstance(ins, ILocalBlock):
             walk(ins.body_instrs)
+            return
+        elif isinstance(ins, ITry):
+            maybe_add(ins.lhs)
+            maybe_add(ins.rhs)
+            walk(ins.body_instrs)
+            if ins.rollback_instrs:
+                walk(ins.rollback_instrs)
             return
         elif isinstance(ins, ISsend):
             maybe_add(ins.channel)
@@ -382,6 +399,16 @@ def _expand_user_calls(
             elif isinstance(ins, ILocalBlock):
                 res.append(
                     ILocalBlock(ins.var, expand_one(ins.body_instrs))
+                )
+            elif isinstance(ins, ITry):
+                res.append(
+                    ITry(
+                        ins.lhs,
+                        ins.op,
+                        ins.rhs,
+                        expand_one(ins.body_instrs),
+                        expand_one(ins.rollback_instrs) if ins.rollback_instrs is not None else None,
+                    )
                 )
             elif isinstance(ins, IPar):
                 res.append(IPar([expand_one(br) for br in ins.branches]))

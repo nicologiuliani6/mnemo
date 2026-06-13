@@ -8549,6 +8549,11 @@ def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
                     return True
+            elif isinstance(ins, ITry):
+                if rec(ins.body_instrs):
+                    return True
+                if ins.rollback_instrs is not None and rec(ins.rollback_instrs):
+                    return True
             elif isinstance(ins, ICall) and ins.proc in _UNCALL_UNSAFE_LIB_PROCS:
                 return True
         return False
@@ -8575,6 +8580,11 @@ def _instr_list_uses_pool_ops(instrs: list[Instr]) -> bool:
                     return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ITry):
+                if rec(ins.body_instrs):
+                    return True
+                if ins.rollback_instrs is not None and rec(ins.rollback_instrs):
                     return True
             elif isinstance(ins, ICall) and ins.proc in _SINGLE_CALL_UNSAFE_LIB_PROCS:
                 return True
@@ -8604,6 +8614,11 @@ def _instr_list_uses_show(instrs: list[Instr]) -> bool:
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
                     return True
+            elif isinstance(ins, ITry):
+                if rec(ins.body_instrs):
+                    return True
+                if ins.rollback_instrs is not None and rec(ins.rollback_instrs):
+                    return True
             elif isinstance(ins, IShow):
                 return True
         return False
@@ -8630,6 +8645,11 @@ def _instr_list_uses_channels(instrs: list[Instr]) -> bool:
                     return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ITry):
+                if rec(ins.body_instrs):
+                    return True
+                if ins.rollback_instrs is not None and rec(ins.rollback_instrs):
                     return True
             elif isinstance(ins, (ISsend, ISrecv)):
                 return True
@@ -8672,6 +8692,11 @@ def _function_ir_calls_proc_in(fn: Function, names: set[str]) -> bool:
                     return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
+                    return True
+            elif isinstance(ins, ITry):
+                if rec(ins.body_instrs):
+                    return True
+                if ins.rollback_instrs is not None and rec(ins.rollback_instrs):
                     return True
             elif isinstance(ins, ICall):
                 if ins.proc in names:
@@ -8730,6 +8755,11 @@ def _collect_mem_refs_from_seq(seq: list[Any]) -> tuple[set[int], list[tuple[str
                 add(ins.entry_lhs); add(ins.entry_rhs)
                 add(ins.until_lhs); add(ins.until_rhs)
                 rec(ins.body_instrs)
+            elif isinstance(ins, ITry):
+                add(ins.lhs); add(ins.rhs)
+                rec(ins.body_instrs)
+                if ins.rollback_instrs is not None:
+                    rec(ins.rollback_instrs)
             elif isinstance(ins, ILocalBlock):
                 add(ins.var)
                 rec(ins.body_instrs)
@@ -8788,6 +8818,10 @@ def _collect_mem_writes_from_seq(seq: list[Any]) -> tuple[set[int], list[tuple[s
                     rec(ins.else_instrs)
             elif isinstance(ins, IFromUntilKairos):
                 rec(ins.body_instrs)
+            elif isinstance(ins, ITry):
+                rec(ins.body_instrs)
+                if ins.rollback_instrs is not None:
+                    rec(ins.rollback_instrs)
             elif isinstance(ins, ILocalBlock):
                 add(ins.var)
                 rec(ins.body_instrs)
@@ -9088,6 +9122,11 @@ def _malloc_using_transitive_closure(
                 return True
             if isinstance(ins, ILocalBlock) and uses_alloc(ins.body_instrs):
                 return True
+            if isinstance(ins, ITry):
+                if uses_alloc(ins.body_instrs):
+                    return True
+                if ins.rollback_instrs is not None and uses_alloc(ins.rollback_instrs):
+                    return True
         return False
 
     blocked: set[str] = {
@@ -10556,6 +10595,9 @@ def _writes_cell(instrs: list[Instr], cell: str) -> bool:
                 return True
         if isinstance(ins, ILocalBlock):
             if _writes_cell(ins.body_instrs or [], cell):
+                return True
+        if isinstance(ins, ITry):
+            if _writes_cell(ins.body_instrs or [], cell) or _writes_cell(ins.rollback_instrs or [], cell):
                 return True
         if isinstance(ins, IPar):
             for blk in ins.branches:
@@ -14827,6 +14869,10 @@ def lower_file_to_program(
         val: int | None = _int_constant_value(init_expr)
         if val is None and isinstance(init_expr, c.ID):
             val = ctx.enum_constants.get(init_expr.name)
+        if val is None:
+            # Inizializzatore a espressione costante (`int GY = H-1;` →
+            # dopo il preprocessor `3 - 1`): folda a compile-time.
+            val = _eval_const_int_expr(init_expr, ctx)
         if val is None or val == 0:
             continue
         pn = _phys(ctx, nm)

@@ -28,6 +28,7 @@ from mnemo.ir import (
     ILocalBlock,
     IPar,
     Instr,
+    ITry,
     IUncall,
     IVmDump,
     Program,
@@ -1786,6 +1787,11 @@ def _instr_list_uses_ptr_pool(instrs: list[Instr]) -> bool:
         if isinstance(ins, ILocalBlock):
             if _instr_list_uses_ptr_pool(ins.body_instrs):
                 return True
+        if isinstance(ins, ITry):
+            if _instr_list_uses_ptr_pool(ins.body_instrs):
+                return True
+            if ins.rollback_instrs and _instr_list_uses_ptr_pool(ins.rollback_instrs):
+                return True
     return False
 
 
@@ -1813,6 +1819,9 @@ def _instr_list_uses_floor_snap_instr(instrs: list[Instr]) -> bool:
                 stack.append(ins.body_instrs or [])
             elif isinstance(ins, ILocalBlock):
                 stack.append(ins.body_instrs or [])
+            elif isinstance(ins, ITry):
+                stack.append(ins.body_instrs or [])
+                stack.append(ins.rollback_instrs or [])
             elif isinstance(ins, IPar):
                 for br in ins.branches or []:
                     stack.append(br)
