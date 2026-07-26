@@ -2159,10 +2159,11 @@ def _infer_ptr_pool_size(ast: c.FileAST) -> int:
     Una malloc dentro un loop a bound COSTANTE è contata × trip-count
     (auto-sizing dei loop statici, vedi `_const_loop_trip_count`).
 
-    Preferenza static-over-dynamic (punto 3 migrazione pura): questo bound
+    Preferenza static-over-dynamic (punto 2 migrazione pura): questo bound
     diventa `heap_base` (fine del range statico, vedi layout_collect.py). Ogni
-    slot >= heap_base è servito dal fallback esplicito su heap VM dinamico
-    (poolpush/pooladd/poolget in ptr_pool_kairos.py._emit_dynamic_pool_procs).
+    slot >= heap_base è servito dallo heap dinamico 100% Kairos puro (stack
+    di record indirizzo/valore + contatore, scansione lineare O(n) — vedi
+    ptr_pool_kairos.py._emit_dynamic_pool_procs; nessun opcode nativo).
     Un bound qui SOTTOSTIMATO non è un bug di correttezza (il routing
     `if slot < heap_base` a runtime spilla semplicemente le eccedenze sul
     dinamico), solo di performance/staticità. Pattern C che restano

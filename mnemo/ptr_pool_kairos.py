@@ -7,19 +7,20 @@ e il dispatcher `if slot == k` è generato in Python in base a N (compile-time).
 Quando N è grande, una singola procedura supera i limiti della VM sui parametri / argomenti
 di `call`: si emettono slice (`__mn_pool_*_b0`, …) e il lowering IR dispatcha con divmod.
 
-Politica static-preferred / dynamic-fallback (migrazione verso il sottoinsieme puro Kairos,
-vedi kairos_sos.tex — poolpush/pooladd/poolget sono un'estensione VM non nella spec pura):
-il dispatch STATICO (`if slot==k`, celle nominate __mn_mem*, dimensione decisa a
-compile-time da `compile._infer_ptr_pool_size` + eventuale `--ptr-pool-size`) è SEMPRE la
-via preferita ed è quello che copre la stragrande maggioranza dei programmi (malloc con size
-costante, fuori da loop o dentro loop a trip-count costante). Il pool DINAMICO
-(`_emit_dynamic_pool_procs`, sotto) è un fallback esplicito attivato SOLO per gli slot
-`>= heap_base`, cioè solo quando il numero/dimensione delle allocazioni non è determinabile
-staticamente (malloc dentro un loop a bound runtime, o con argomento size non costante — vedi
-i commenti in `compile._infer_ptr_pool_size` per l'elenco esatto dei pattern C che restano
-dipendenti da questo fallback). Con `heap_base=None` il modello dinamico è disattivato del
-tutto (compat legacy): non è il path usato da `compile.py`, che passa sempre un `heap_base`
-esplicito quando il programma usa il pool puntatori.
+Due livelli, entrambi 100% Kairos puro (nessun opcode VM nativo — vedi
+kairos_sos.tex, σ:Var⇀ℤ∪ℤ*∪Chan, POOLPUSH/POOLADD/POOLGET erano un'estensione
+VM fuori da questa spec, rimossa): il dispatch STATICO (`if slot==k`, celle
+nominate __mn_mem*, dimensione = celle nominate del programma, calcolata da
+`layout_collect.py`) copre la stragrande maggioranza degli accessi (qualunque
+slot con alias nominato — array/struct/scalari). Lo heap DINAMICO
+(`_emit_dynamic_pool_procs`, sotto) copre gli slot `>= heap_base` (malloc,
+senza alias nominato: size non costante o allocazioni in un loop a
+trip-count runtime) — non più un array C nativo cresciuto on-demand, ma una
+struttura associativa (indirizzo,valore) costruita sopra uno `stack` Kairos
+con scansione lineare O(n) per get/set. Con `heap_base=None` il modello
+dinamico è disattivato del tutto (compat legacy): non è il path usato da
+`compile.py`, che passa sempre un `heap_base` esplicito quando il programma
+usa il pool puntatori.
 """
 
 from __future__ import annotations
@@ -61,29 +62,153 @@ def emit_ptr_pool_kairos(n: int, heap_base: int | None = None) -> str:
 
 
 def _emit_dynamic_pool_procs(heap_base: int) -> str:
-    """Procedure heap dinamico: slot >= heap_base → `vm->mn_pool[slot]` via ops
-    VM POOLPUSH/POOLADD/POOLGET (indice runtime, pool cresce on-demand). Guardia
-    `if slot >= heap_base` → no-op per gli slot statici (serviti dal dispatch
-    `if slot==k`); mutuamente esclusive, quindi store/load chiamano entrambe."""
+    """Procedure heap dinamico, 100% Kairos puro: slot >= heap_base non ha una
+    cella nominata (__mn_mem*), quindi vive su una struttura associativa
+    costruita sopra uno `stack` Kairos (`__mn_pool_heap`, coppie
+    indirizzo/valore) + un contatore `__mn_pool_heap_n` (int, threaded by-ref
+    come `__mn_pool_ctr`) — non più sull'array C nativo `vm->mn_pool` (opcode
+    POOLPUSH/POOLADD/POOLGET, rimossi: erano un'estensione VM fuori dalla
+    spec pura σ:Var⇀ℤ∪ℤ*∪Chan). Store/load fanno scansione LINEARE O(n) sui
+    record correnti (più lento del pool nativo, accettato per restare 100%
+    puro — vedi commenti nelle singole procedure sotto)."""
     hb = heap_base
     return "\n".join(
         [
-            f"// Heap dinamico (vm->mn_pool): slot >= {hb} (heap malloc, no alias nominato).",
-            "// Cresce on-demand → niente --ptr-pool-size per malloc-in-loop runtime.",
-            "procedure __mn_pool_store_dyn(int slot, int val, stack __mn_hist, stack __mn_scratch)",
+            "// Heap dinamico PURO (100% Kairos, nessun opcode nativo POOLPUSH/POOLADD/",
+            f"// POOLGET): slot >= {hb} (heap malloc, no alias nominato). Sostituisce",
+            "// `vm->mn_pool` (array C nativo cresciuto on-demand) con una struttura dati",
+            "// costruita sopra uno `stack` Kairos — coppie (indirizzo, valore), 2 celle",
+            "// stack per record — e scansione LINEARE O(n) per get/set (più lento del",
+            "// pool nativo ma 100% puro, come da direttiva). `__mn_pool_heap_n` (int,",
+            "// threaded by-ref come `__mn_pool_ctr`) conta i record correnti: serve",
+            "// perché `from...until` in Kairos è un do-while (esegue il corpo almeno una",
+            "// volta), quindi uno scan su heap vuoto (n=0) va evitato con un `if n>0`",
+            "// esterno, altrimenti `pop` su stack vuoto è un errore runtime (Pop-Err).",
+            "// Store: scansiona TUTTI gli n record (nessun early-exit — Kairos non ha",
+            "// guardie booleane composte tipo `i==n || found==1`, solo confronti",
+            "// singoli), drenando __mn_pool_heap in un temporaneo __mn_pool_tmp mentre",
+            "// decodifica; se il record combacia, salva il vecchio valore su hist (come",
+            "// POOLPUSH) e aggiunge `val` (come POOLADD); poi ripristina tutti i record",
+            "// da __mn_pool_tmp a __mn_pool_heap (stesso ordine originale — pop/push",
+            "// LIFO simmetrico). Se non trovato, appende un nuovo record (indirizzo,",
+            "// val) e incrementa il contatore.",
+            "// Load: stessa scansione, legge il valore SENZA azzerarlo (come POOLGET);",
+            "// se non trovato, valore = 0 (heap \"zero-filled\" come l'array nativo).",
+            f"procedure __mn_pool_store_dyn(int slot, int val, stack __mn_pool_heap, int __mn_pool_heap_n, stack __mn_hist, stack __mn_scratch)",
             f"    if slot >= {hb} then",
-            "        poolpush(slot, __mn_hist)",
-            "        pooladd(slot, val)",
+            "        local int found = 0",
+            "        local stack __mn_pool_tmp = nil",
+            "        if __mn_pool_heap_n > 0 then",
+            "            local int i = 0",
+            "            from i == 0 loop",
+            "                local int a_i = 0",
+            "                local int v_i = 0",
+            "                pop(v_i, __mn_pool_heap)",
+            "                pop(a_i, __mn_pool_heap)",
+            "                local int match = 0",
+            "                if a_i == slot then",
+            "                    match += 1",
+            "                fi a_i == slot",
+            "                if match == 1 then",
+            "                    push(v_i, __mn_hist)",
+            "                    v_i += val",
+            "                    found += 1",
+            "                fi match == 1",
+            "                push(a_i, __mn_pool_tmp)",
+            "                push(v_i, __mn_pool_tmp)",
+            "                push(match, __mn_hist)",
+            "                delocal int match = 0",
+            "                delocal int v_i = 0",
+            "                delocal int a_i = 0",
+            "                i += 1",
+            "            until i == __mn_pool_heap_n",
+            "            local int j = 0",
+            "            from j == 0 loop",
+            "                local int a_j = 0",
+            "                local int v_j = 0",
+            "                pop(v_j, __mn_pool_tmp)",
+            "                pop(a_j, __mn_pool_tmp)",
+            "                push(a_j, __mn_pool_heap)",
+            "                push(v_j, __mn_pool_heap)",
+            "                delocal int v_j = 0",
+            "                delocal int a_j = 0",
+            "                j += 1",
+            "            until j == __mn_pool_heap_n",
+            "            push(j, __mn_hist)",
+            "            delocal int j = 0",
+            "            push(i, __mn_hist)",
+            "            delocal int i = 0",
+            "        fi __mn_pool_heap_n > 0",
+            "        delocal stack __mn_pool_tmp = nil",
+            "        if found == 0 then",
+            "            local int slot_copy = 0",
+            "            slot_copy += slot",
+            "            local int newval = 0",
+            "            newval += val",
+            "            push(slot_copy, __mn_pool_heap)",
+            "            push(newval, __mn_pool_heap)",
+            "            __mn_pool_heap_n += 1",
+            "            push(newval, __mn_hist)",
+            "            delocal int newval = 0",
+            "            push(slot_copy, __mn_hist)",
+            "            delocal int slot_copy = 0",
+            "        fi found == 0",
+            "        push(found, __mn_hist)",
+            "        delocal int found = 0",
             f"    fi slot >= {hb}",
             "",
-            "procedure __mn_pool_load_dyn(int slot, int out, stack __mn_hist, stack __mn_scratch)",
+            f"procedure __mn_pool_load_dyn(int slot, int out, stack __mn_pool_heap, int __mn_pool_heap_n, stack __mn_hist, stack __mn_scratch)",
             f"    if slot >= {hb} then",
-            "        local int t = 0",
-            "            poolget(slot, t)",
-            "            push(out, __mn_hist)",
-            "            out += t",
-            "            push(t, __mn_hist)",
-            "        delocal int t = 0",
+            "        local int found = 0",
+            "        local int foundval = 0",
+            "        local stack __mn_pool_tmp = nil",
+            "        if __mn_pool_heap_n > 0 then",
+            "            local int i = 0",
+            "            from i == 0 loop",
+            "                local int a_i = 0",
+            "                local int v_i = 0",
+            "                pop(v_i, __mn_pool_heap)",
+            "                pop(a_i, __mn_pool_heap)",
+            "                local int match = 0",
+            "                if a_i == slot then",
+            "                    match += 1",
+            "                fi a_i == slot",
+            "                if match == 1 then",
+            "                    foundval += v_i",
+            "                    found += 1",
+            "                fi match == 1",
+            "                push(a_i, __mn_pool_tmp)",
+            "                push(v_i, __mn_pool_tmp)",
+            "                push(match, __mn_hist)",
+            "                delocal int match = 0",
+            "                delocal int v_i = 0",
+            "                delocal int a_i = 0",
+            "                i += 1",
+            "            until i == __mn_pool_heap_n",
+            "            local int j = 0",
+            "            from j == 0 loop",
+            "                local int a_j = 0",
+            "                local int v_j = 0",
+            "                pop(v_j, __mn_pool_tmp)",
+            "                pop(a_j, __mn_pool_tmp)",
+            "                push(a_j, __mn_pool_heap)",
+            "                push(v_j, __mn_pool_heap)",
+            "                delocal int v_j = 0",
+            "                delocal int a_j = 0",
+            "                j += 1",
+            "            until j == __mn_pool_heap_n",
+            "            push(j, __mn_hist)",
+            "            delocal int j = 0",
+            "            push(i, __mn_hist)",
+            "            delocal int i = 0",
+            "        fi __mn_pool_heap_n > 0",
+            "        delocal stack __mn_pool_tmp = nil",
+            "        push(out, __mn_hist)",
+            "        out += foundval",
+            "        push(foundval, __mn_hist)",
+            "        delocal int foundval = 0",
+            "        push(found, __mn_hist)",
+            "        delocal int found = 0",
             f"    fi slot >= {hb}",
             "",
         ]

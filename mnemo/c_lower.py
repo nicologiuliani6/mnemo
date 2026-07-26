@@ -351,6 +351,13 @@ def _func_reads_partition1_file_vars(
 
 # Contatore pool; le celle sono `__mn_mem0` … `__mn_mem{N-1}` con N = `ctx.ptr_pool_size`.
 _PTR_POOL_CTR = "__mn_pool_ctr"
+# Heap dinamico puro (sostituisce vm->mn_pool nativo, vedi ptr_pool_kairos.py
+# `_emit_dynamic_pool_procs`): stack di record (indirizzo,valore) + contatore,
+# threaded by-ref esattamente come `_PTR_POOL_CTR` ma verso `pool_using_targets`
+# (ogni funzione che fa un deref, non solo malloc/free) invece di
+# `pool_ctr_targets` (solo alloc/free).
+_PTR_POOL_HEAP = "__mn_pool_heap"
+_PTR_POOL_HEAP_N = "__mn_pool_heap_n"
 
 MN_RET = "__mn_ret"
 
@@ -1387,7 +1394,11 @@ def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
     proc `_dyn`). Guardia runtime `if slot < heap_base` perché lo slot è il
     valore di un puntatore (noto solo a runtime)."""
     dyn = [
-        ICall("__mn_pool_store_dyn", [slot_var, val_var] + _kairos_stack_actuals(ctx))
+        ICall(
+            "__mn_pool_store_dyn",
+            [slot_var, val_var, _PTR_POOL_HEAP, _PTR_POOL_HEAP_N]
+            + _kairos_stack_actuals(ctx),
+        )
     ]
     if not _pool_dyn_active(ctx):
         return _ir_pool_store_static(ctx, slot_var, val_var)
@@ -1400,7 +1411,11 @@ def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
 
 def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
     dyn = [
-        ICall("__mn_pool_load_dyn", [slot_var, out_var] + _kairos_stack_actuals(ctx))
+        ICall(
+            "__mn_pool_load_dyn",
+            [slot_var, out_var, _PTR_POOL_HEAP, _PTR_POOL_HEAP_N]
+            + _kairos_stack_actuals(ctx),
+        )
     ]
     if not _pool_dyn_active(ctx):
         return _ir_pool_load_static(ctx, slot_var, out_var)
@@ -3652,11 +3667,12 @@ def _file_ast_needs_ptr_pool(ast: c.FileAST) -> bool:
 
 def _register_ptr_pool_locals(ctx: _Ctx) -> None:
     if ctx.mem_layout is not None:
-        if _PTR_POOL_CTR not in ctx.int_locals:
-            ctx.int_locals.add(_PTR_POOL_CTR)
-            ctx.decl_order.append(_PTR_POOL_CTR)
+        for pn in (_PTR_POOL_CTR, _PTR_POOL_HEAP_N):
+            if pn not in ctx.int_locals:
+                ctx.int_locals.add(pn)
+                ctx.decl_order.append(pn)
         return
-    for n in _ptr_pool_mem_names(ctx) + (_PTR_POOL_CTR,):
+    for n in _ptr_pool_mem_names(ctx) + (_PTR_POOL_CTR, _PTR_POOL_HEAP_N):
         if n not in ctx.int_locals:
             ctx.int_locals.add(n)
             ctx.decl_order.append(n)
@@ -9620,7 +9636,15 @@ def _lower_funccall_with_ret(
             pool_actual = (
                 [_PTR_POOL_CTR] if name in ctx.pool_ctr_targets else []
             )
-            stk = pool_actual + _kairos_stack_actuals(ctx)
+            # `__mn_pool_heap`/`__mn_pool_heap_n`: stesso meccanismo di
+            # `pool_actual` ma verso `pool_using_targets` (vedi costruzione
+            # Function e ptr_pool_kairos.py `_emit_dynamic_pool_procs`).
+            heap_actual = (
+                [_PTR_POOL_HEAP, _PTR_POOL_HEAP_N]
+                if name in ctx.pool_using_targets
+                else []
+            )
+            stk = pool_actual + heap_actual + _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
             # show-using fn (printf transitivo): storicamente escluse da
@@ -13724,6 +13748,12 @@ def _locals_list(ctx: _Ctx, *, for_main: bool = True) -> list[tuple[str, str]]:
         # (la VM segnala `__mn_scratch` non def se solo la procedura callee usa scratch).
         locals_list.append(("stack", ctx.hist))
         locals_list.append(("stack", ctx.scratch))
+        # `__mn_pool_heap` (stack): main possiede il record dell'heap dinamico
+        # puro come local (le altre pool_using_targets lo ricevono come
+        # param — vedi `_lower_user_function`). `__mn_pool_heap_n` è già
+        # incluso sopra via `ctx.decl_order` (_register_ptr_pool_locals).
+        if _PTR_POOL_HEAP_N in ctx.int_locals:
+            locals_list.append(("stack", _PTR_POOL_HEAP))
     return locals_list
 
 
@@ -13914,15 +13944,28 @@ def _lower_user_function(
     pool_formal: list[tuple[str, str]] = (
         [("int", _PTR_POOL_CTR)] if pool_thread else []
     )
+    # `__mn_pool_heap`/`__mn_pool_heap_n` (heap dinamico puro, vedi
+    # ptr_pool_kairos.py): threaded by-ref verso OGNI funzione che fa un
+    # deref via pool (pool_using_targets, superset di pool_ctr_targets — un
+    # semplice `*p` senza malloc/free non tocca `__mn_pool_ctr` ma può
+    # comunque colpire lo heap dinamico). `main` li possiede come local
+    # (vedi `_locals_list`), le altre li ricevono come param.
+    heap_thread = name in ctx.pool_using_targets
+    heap_formal: list[tuple[str, str]] = (
+        [("stack", _PTR_POOL_HEAP), ("int", _PTR_POOL_HEAP_N)] if heap_thread else []
+    )
     locals_list = _locals_list(ctx, for_main=False)
     if pool_thread:
         locals_list = [lv for lv in locals_list if lv[1] != _PTR_POOL_CTR]
+    if heap_thread:
+        locals_list = [lv for lv in locals_list if lv[1] != _PTR_POOL_HEAP_N]
     return Function(
         name=name,
         params=[("int", p) for p in param_order]
         + ch_pi_formals
         + ch_formals
         + pool_formal
+        + heap_formal
         + stack_formals,
         locals=locals_list,
         blocks=[Block("entry", [IComment(f"funzione C {name}")] + instrs)],
