@@ -11989,6 +11989,86 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             # ripetibile (tipo `!` del π-calcolo) che il sottoinsieme Kairos
             # corrente (sessioni binarie statiche, `par` a rami fissi e
             # joining) non esprime. NON RIMUOVERE il prefisso `__mn_mtx_`.
+            #
+            # TERZO TENTATIVO REALE (ramo kairos-pure-mutex-redesign): prima di
+            # ripetere gli swap già falliti sopra, analizzati TUTTI gli usi
+            # reali di pthread_mutex_t nel repo per capire se rientrano in un
+            # pattern più ristretto rimovibile con token-passing su canale
+            # sincrono puro CONFINATO in un unico `par` a rami fissi:
+            #   - ex30_pthread_pi.c / ex34_...sketch.c: mutex generato come
+            #     `local channel __mn_mtx_m` DENTRO ciascun worker (verificato
+            #     nel .kairos emesso) — MAI condiviso tra i due rami del par.
+            #     Zero contesa reale: non è un test rappresentativo di un
+            #     mutex, è un test sintattico (nessun canale da rimuovere).
+            #   - `mps_t.lane` (mps.h, usato da PC.c/kernel.c via i wrapper
+            #     ssend/srecv): già NON passa dalla mailbox oggi — vedi sotto
+            #     `file_scope_channel_kairos` (~riga 14563) e
+            #     `_lower_mps_ssend_inline`/`_lower_mps_srecv_inline` (~riga
+            #     8466+): chiave che termina in `__lane` → prefisso puro
+            #     `__mn_kch_`. Funziona perché è un handoff produttore→
+            #     consumatore ASIMMETRICO e a ordine fisso noto staticamente
+            #     (producer manda sempre N volte, consumer riceve sempre N
+            #     volte, mai il contrario): non è un mutex reale, è un canale
+            #     travestito da mutex. `init_mutexes`/`destroy_mutexes` per
+            #     questo caso sono no-op apposta (vedi ~riga 8439) proprio
+            #     perché non serve alcun token/deposito iniziale.
+            #   - `mnemo_sync_print_mutex` (mnemo_sync_print.h, righe 39/46/
+            #     55/57, usato da PC.c e kernel.c per serializzare printf/
+            #     sys_write tra i DUE rami del par): pthread_mutex_t GENERICO,
+            #     non wrappato da mps_t/ssend/srecv, quindi passa dal ramo
+            #     mailbox generico qui sopra. Lock/unlock chiamati da
+            #     ENTRAMBI i rami, in più punti sparsi (ogni printf), con
+            #     ordine di arrivo non noto staticamente (dipende dallo
+            #     scheduling reale dei thread VM — vedi vm_par.h/vm_channel.h,
+            #     pthread veri, non un interprete a turni fissi). QUESTO è il
+            #     caso che rompe l'ipotesi del pattern ristretto: è un mutex
+            #     simmetrico vero, non un canale travestito.
+            #
+            # Verificato empiricamente (non solo a occhio) con due repro
+            # nuovi, DIVERSI dal test single-thread già usato nel primo
+            # tentativo sopra, salvati nello scratchpad della sessione
+            # (mutex_shared_repro.c/.kairos, mutex_shared_repro_confined.kairos):
+            #  (1) mutex FILE-SCOPE condiviso da due rami reali di un par
+            #      (worker_a/worker_b, ciascuno lock;write;unlock sul proprio
+            #      contatore), init prima del par, destroy dopo — esattamente
+            #      la forma di mnemo_sync_print_mutex. Con la mailbox
+            #      (attuale): `__mn_exit: 2` corretto. Con SOLO il prefisso
+            #      sostituito `__mn_mtx_` → `__mn_kch_` (canale puro,
+            #      nessun'altra modifica): timeout/deadlock (exit 124).
+            #  (2) Variante "confinata": rimossi a mano `ssend` di init e
+            #      `srecv` di destroy dal .kairos, lasciando SOLO lock/unlock
+            #      dei due rami dentro il par (per testare l'ipotesi del
+            #      pattern ristretto richiesta da questo tentativo: canale
+            #      interamente dentro un unico par a rami fissi, non a
+            #      cavallo del bordo par come nel tentativo 1). Deadlock
+            #      comunque (exit 124): con un mutex reale entrambi i rami
+            #      fanno SEMPRE lock (srecv) come primissima operazione sul
+            #      canale — mai un unlock (ssend) senza un lock precedente,
+            #      per costruzione (non si rilascia ciò che non si è preso).
+            #      Quindi nessuno dei due può mai essere il primo "sender":
+            #      entrambi si accodano in recv_q (vm_channel.h:op_wait,
+            #      ramo `else`/is_send=0, righe 103-124) e nessuno sblocca
+            #      l'altro. Un mutex simmetrico richiede una risorsa
+            #      "disponibile fin da subito, senza un partner che la
+            #      richieda" — esattamente la semantica a buffer (mailbox,
+            #      `allow_mailbox_idle`, vm_channel.h riga 87-92) che un
+            #      canale sincrono puro non ha per definizione, indipendente-
+            #      mente da come si posiziona il codice rispetto ai confini
+            #      del `par` (non è quindi (solo) un problema di "dove sta il
+            #      par", come nei tentativi 1-2, ma una impossibilità più
+            #      di fondo: rendezvous puro non può rappresentare "primo
+            #      arrivato, servito subito" quando ENTRAMBE le parti possono
+            #      essere la prima a voler ricevere).
+            #
+            # Conclusione: NON tutti gli usi reali rientrano in un pattern
+            # ristretto rimovibile. `mnemo_sync_print_mutex` (mutex simmetrico
+            # reale, contesa non nota staticamente, usato da due file di test
+            # reali: PC.c e kernel.c) è un controesempio concreto che rompe
+            # l'ipotesi. Il mailbox (`__mn_mtx_*`) resta un'estensione VM
+            # NECESSARIA per questo sottoinsieme di programmi, non rimovibile
+            # restando nel sottoinsieme puro Kairos (solo rendez-vous binario
+            # a sessione statica, nessuna memoria condivisa tra rami `par`).
+            # NON RIMUOVERE il prefisso `__mn_mtx_`.
             kai = f"__mn_mtx_{logical}"
             ctx.channel_kairos[logical] = kai
             ctx.channel_decl_order.append(logical)
