@@ -449,9 +449,73 @@ procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scrat
 //   come p62+p62 solo DOPO aver sottratto qab+rab da un p62 "di scorta"
 //   (delta = p62 - qab - rab, poi q_u = p62 + delta) così nessun risultato
 //   intermedio supera mai 2^63-1 (max int64).
-procedure __mn_uhalve64(int x, int q, int r, stack __mn_hist, stack __mn_scratch)
+// BUGFIX (hotfix-divmod-nonneg-fast-bug): il ramo x != INT64_MIN qui sotto
+// faceva `call __mn_divmod_nonneg_fast` seguita, nello STESSO ramo if/else,
+// dalla sua `uncall` (pattern "call tmp; accumula risultato; uncall tmp").
+// Finché __mn_uhalve64 viene solo chiamata forward (mai essa stessa
+// uncall-ata) questo va bene — ma __mn_shr_into (sotto) la richiama dentro un
+// from-loop, e se l'INTERO chiamante finisce per essere uncall-ato da un
+// contesto esterno (es. un `try/rollback` che fa rollback: maze_backtrack.c,
+// grid[ny][nx] via pool-dispatch bitwise → shr_into → uhalve64), la VM deve
+// ri-invertire quel call+uncall annidato dentro l'if — e lì corrompe lo stato
+// locale del frame `__mn_divmod_nonneg_fast` (osservato: `doable` finiva con
+// un valore residuo pari a un peso w_i, es. 2^60, invece di 0; variante:
+// "POP: stack vuoto"). Stessa classe del bug "nested if" già documentato per
+// and_into/or_into più sotto in questo file. Fix identico: estrarre il
+// contenuto del ramo in una procedura propria, cosi la reversal esterna vede
+// un solo call/uncall opaco (non un call+uncall annidato dentro l'if).
+// Riprodotto e verificato con: call __mn_uhalve64(5,q,r,...) seguita da
+// `uncall __mn_uhalve64(...)` a livello esterno — falliva prima del fix,
+// pulito dopo. Vedi tests/c/repro/hotfix_divmod_nonneg_fast_uhalve64.kairos.
+procedure __mn_uhalve64_general(int x, int p62, int q, int r, stack __mn_hist, stack __mn_scratch)
     local int two = 0
     two += 2
+    local int neg = 0
+    if x < 0 then
+        neg += 1
+    fi x < 0
+    local int ab = 0
+    if neg == 1 then
+        ab -= x
+    else
+        ab += x
+    fi neg == 1
+    local int qab = 0
+    local int rab = 0
+    call __mn_divmod_nonneg_fast(ab, two, qab, rab, __mn_hist, __mn_scratch)
+    if neg == 1 then
+        local int delta = 0
+        delta += p62
+        delta -= qab
+        delta -= rab
+        q += delta
+        q += p62
+        push(delta, __mn_hist)
+        delocal int delta = 0
+        r += rab
+    else
+        q += qab
+        r += rab
+    fi neg == 1
+    uncall __mn_divmod_nonneg_fast(ab, two, qab, rab, __mn_hist, __mn_scratch)
+    delocal int rab = 0
+    delocal int qab = 0
+    if neg == 1 then
+        ab += x
+    else
+        ab -= x
+    fi neg == 1
+    delocal int ab = 0
+    local int sink2 = 0
+    call __mn_move_int(sink2, x, __mn_hist, __mn_scratch)
+    push(sink2, __mn_hist)
+    delocal int sink2 = 0
+    push(neg, __mn_hist)
+    delocal int neg = 0
+    two -= 2
+    delocal int two = 0
+
+procedure __mn_uhalve64(int x, int q, int r, stack __mn_hist, stack __mn_scratch)
     // min64 = -2^63 (raddoppio sicuro da -1: resta negativo, mai overflow).
     // p62 = 2^62 (raddoppio sicuro da 1: resta positivo, mai overflow).
     local int min64 = 0
@@ -487,48 +551,7 @@ procedure __mn_uhalve64(int x, int q, int r, stack __mn_hist, stack __mn_scratch
         push(sink, __mn_hist)
         delocal int sink = 0
     else
-        local int neg = 0
-        if x < 0 then
-            neg += 1
-        fi x < 0
-        local int ab = 0
-        if neg == 1 then
-            ab -= x
-        else
-            ab += x
-        fi neg == 1
-        local int qab = 0
-        local int rab = 0
-        call __mn_divmod_nonneg_fast(ab, two, qab, rab, __mn_hist, __mn_scratch)
-        if neg == 1 then
-            local int delta = 0
-            delta += p62
-            delta -= qab
-            delta -= rab
-            q += delta
-            q += p62
-            push(delta, __mn_hist)
-            delocal int delta = 0
-            r += rab
-        else
-            q += qab
-            r += rab
-        fi neg == 1
-        uncall __mn_divmod_nonneg_fast(ab, two, qab, rab, __mn_hist, __mn_scratch)
-        delocal int rab = 0
-        delocal int qab = 0
-        if neg == 1 then
-            ab += x
-        else
-            ab -= x
-        fi neg == 1
-        delocal int ab = 0
-        local int sink2 = 0
-        call __mn_move_int(sink2, x, __mn_hist, __mn_scratch)
-        push(sink2, __mn_hist)
-        delocal int sink2 = 0
-        push(neg, __mn_hist)
-        delocal int neg = 0
+        call __mn_uhalve64_general(x, p62, q, r, __mn_hist, __mn_scratch)
     fi is_min == 1
     push(is_min, __mn_hist)
     delocal int is_min = 0
@@ -538,8 +561,6 @@ procedure __mn_uhalve64(int x, int q, int r, stack __mn_hist, stack __mn_scratch
     delocal int p62 = 0
     push(min64, __mn_hist)
     delocal int min64 = 0
-    two -= 2
-    delocal int two = 0
 
 // dst += (x >> n) unsigned (logical shift). Necessario per u32/u64 dove
 // bit pattern del cell può avere high bit set (signed-negative); aritmetico
