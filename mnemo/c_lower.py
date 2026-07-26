@@ -11949,6 +11949,46 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
             # come intero reversibile con guardie if, non più ssend/srecv) — un
             # refactor molto più ampio, fuori scope qui. Lasciato invariato:
             # NON RIMUOVERE il prefisso `__mn_mtx_`.
+            #
+            # SECONDO TENTATIVO REALE (design "buffer relay via par", non il
+            # semplice swap sopra): un terzo ramo `par` che fa `srecv` su un
+            # canale sincrono puro `raw` (dove init/unlock depositano) e
+            # immediatamente `ssend` su un secondo canale `buffered` (da cui
+            # lock legge), per disaccoppiare temporalmente sender e receiver
+            # con SOLO rendez-vous puri + un `par` in più. Verificato con un
+            # .kairos minimo scritto a mano (init→par{ssend raw}+{relay:
+            # srecv raw, ssend buffered}, poi FUORI dal par un srecv su
+            # buffered che simula lock sequenziale successivo): la VM Kairos
+            # RIFIUTA STATICAMENTE il programma, non va nemmeno in deadlock
+            # runtime — "[STATIC] channel 'buffered' usato da un solo thread
+            # nel blocco PAR (deve essere una sessione binaria, esattamente 2
+            # endpoint); manca il thread partner". Motivo strutturale: ogni
+            # `par` Kairos richiede che ENTRAMBI gli endpoint di ogni canale
+            # usato al suo interno siano risolti nello STESSO blocco `par`
+            # (sessione binaria statica) — non è ammesso un canale con un solo
+            # endpoint dentro il `par` e il partner risolto più tardi da
+            # codice sequenziale FUORI da quel `par` (confermato aggiungendo
+            # il consumer `buffered` come TERZO ramo dello STESSO par: in quel
+            # caso funziona, cf. scratchpad relay_test2.kairos). Per un mutex
+            # reale, però, `lock`/`unlock` successivi sono chiamate arbitrarie
+            # e sequenziali — possibilmente in loop, in funzioni diverse,
+            # condizionali — che NON possono essere note staticamente al
+            # momento di `init` per essere infilate nello stesso `par`. L'unica
+            # via sarebbe avvolgere l'INTERO corpo funzione (dal punto di
+            # deposito fino all'ultimo lock/unlock) in un `par` con il relay
+            # come ramo persistente: non un fix incrementale ("aggiungi un
+            # ramo buffer"), ma una ristrutturazione whole-function per OGNI
+            # funzione che usa un mutex, che non compone con mutex multipli
+            # (ognuno servirebbe il proprio relay annidato) né con loop/
+            # ricorsione/altri `par` che attraversano la vita del mutex — un
+            # refactor categoricamente diverso e più grande, fuori scope qui,
+            # con alto rischio di regressioni sui test mutex/producer-consumer
+            # già passanti (ex30_pthread_pi.c, mps.h). Onere architetturale
+            # residuo: mailbox asincrona genuina da canali sincroni + `par`
+            # fork-join richiederebbe un processo "server" persistente/
+            # ripetibile (tipo `!` del π-calcolo) che il sottoinsieme Kairos
+            # corrente (sessioni binarie statiche, `par` a rami fissi e
+            # joining) non esprime. NON RIMUOVERE il prefisso `__mn_mtx_`.
             kai = f"__mn_mtx_{logical}"
             ctx.channel_kairos[logical] = kai
             ctx.channel_decl_order.append(logical)
