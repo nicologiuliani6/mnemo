@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
         help=(
             "isola il corpo del main C in procedura `__main__` con stack hist+scratch; "
             "in Kairos `main` fa `call __main__ ; uncall __main__` per verificare "
-            "che TUTTO il programma sia reversibile al 100%"
+            "che TUTTO il programma sia reversibile al 100%%"
         ),
     )
     p_c.set_defaults(handler=_cmd_compile)
