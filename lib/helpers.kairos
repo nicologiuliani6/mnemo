@@ -7,16 +7,79 @@ procedure __mn_move_int(int dst, int src, stack __mn_hist, stack __mn_scratch)
     pop(dst, __mn_g)
     delocal stack __mn_g = nil
 
-// Mask x a 32 bit bassi: x = x & 0xFFFFFFFF. Reversibile via mnsplit32
-// (forward: x=0, hi=high32, lo=low32) + restore low32 in x. I bit alti
-// vengono salvati su __mn_hist (per la lap di inversione).
-// Costo: O(1) — MNSPLIT32 è un opcode VM singolo.
+// Mask x a 32 bit bassi: x = x & 0xFFFFFFFF, puro (nessun opcode nativo,
+// era MNSPLIT32 O(1) host C — ora __mn_divmod_nonneg_fast contro 2^32,
+// O(32) iterazioni, costruito via raddoppio puro).
+// lo = unsigned64(x) mod 2^32: per x >= 0 è la divmod diretta; per x < 0
+// (bit pattern col high bit set) si usa l'identità "negate mod":
+// (-a) mod m = 0 se (a mod m)==0, altrimenti m - (a mod m), con a = |x|.
+// Negare x è sempre sicuro qui (m = 2^32 è minuscolo rispetto a 2^63, non
+// serve la cautela INT64_MIN di __mn_uhalve64 in bits.kairos).
 procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
-    local int hi = 0
+    local int xorig = 0
+    xorig += x
+    local int mod32 = 1
+    local int i = 0
+    from i == 0 loop
+        local int m2 = 0
+        m2 += mod32
+        m2 += mod32
+        push(mod32, __mn_hist)
+        call __mn_move_int(mod32, m2, __mn_hist, __mn_scratch)
+        push(m2, __mn_hist)
+        delocal int m2 = 0
+        i += 1
+    until i == 32
+    local int neg = 0
+    if xorig < 0 then
+        neg += 1
+    fi xorig < 0
+    local int ab = 0
+    if neg == 1 then
+        ab -= xorig
+    else
+        ab += xorig
+    fi neg == 1
+    local int q = 0
+    local int r = 0
+    call __mn_divmod_nonneg_fast(ab, mod32, q, r, __mn_hist, __mn_scratch)
     local int lo = 0
-    mnsplit32(x, hi, lo)
+    if neg == 1 then
+        local int rz = 0
+        if r == 0 then
+            rz += 1
+        fi r == 0
+        if rz == 0 then
+            lo += mod32
+            lo -= r
+        fi rz == 0
+        push(rz, __mn_hist)
+        delocal int rz = 0
+    else
+        lo += r
+    fi neg == 1
+    uncall __mn_divmod_nonneg_fast(ab, mod32, q, r, __mn_hist, __mn_scratch)
+    delocal int r = 0
+    delocal int q = 0
+    if neg == 1 then
+        ab += xorig
+    else
+        ab -= xorig
+    fi neg == 1
+    delocal int ab = 0
+    push(neg, __mn_hist)
+    delocal int neg = 0
+    // Consuma x (mnsplit32 lo azzerava come effetto nativo; qui esplicito).
+    local int sink = 0
+    call __mn_move_int(sink, x, __mn_hist, __mn_scratch)
+    push(sink, __mn_hist)
+    delocal int sink = 0
     x += lo
     push(lo, __mn_hist)
     delocal int lo = 0
-    push(hi, __mn_hist)
-    delocal int hi = 0
+    push(xorig, __mn_hist)
+    delocal int xorig = 0
+    push(mod32, __mn_hist)
+    delocal int mod32 = 0
+    push(i, __mn_hist)
+    delocal int i = 0

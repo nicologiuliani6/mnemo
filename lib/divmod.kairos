@@ -67,101 +67,381 @@ procedure __mn_divmod_signed(int a, int b, int q, int r, stack __mn_hist, stack 
     delocal int abs_a = 0
     delocal int z = 0
 
-// Divmod reversibile O(log a) shift-and-subtract via halving nativo VM
-// (opcode MNHALVE = O(1) host C). Algoritmo:
-//   Phase 1: dimezza a iterativamente, push bit LSB su __mn_scratch.
-//            nbits = numero halvings (bits significativi di a).
-//   Phase 2: pop bit MSB first; r' = 2*r + bit; if r' >= b: r' -= b; q += pow.
-//            pow inizia a 2^(nbits-1), halved ad ogni iter.
+// Divmod reversibile O(63) passi FISSI, 100% Kairos puro (nessun opcode
+// nativo). Sostituisce la vecchia versione basata su MNHALVE nativo — stessa
+// interfaccia. Fase 1 costruisce 63 pesi 1,2,4,...,2^62 via variabili
+// FRESCHE (w0..w62, mai self-referenziali: `x += x` è un errore statico in
+// Kairos) — NESSUNA `call` nel loop di raddoppio (a differenza di and_into/
+// or_into che usano `call __mn_move_int` per il proprio raddoppio: qui va
+// evitato perché __mn_divmod_nonneg_fast è a sua volta nel path caldo di
+// and_into/or_into via __mn_divmod_nonneg_div2 → __mn_bit_k_signed, chiamato
+// O(k^2) volte; l'overhead di call/return per ogni raddoppio moltiplicato per
+// le tante invocazioni rendeva and/or impraticabilmente lenti). 63 pesi
+// coprono qualunque nonneg int64 (2^62 = bit più alto per un nonneg a 63 bit).
+// Fase 2 ripopa MSB-first (stack LIFO: pushati crescenti, escono
+// decrescenti), decodifica il bit di t confrontando t>=w, e fa la divisione
+// binaria a scorrimento contro b: r=2r+bit; se r>=b, r-=b e q+=w (stesso peso
+// serve sia per il bit di a sia per il bit di q — bit i di a e bit i di q
+// condividono 2^i nella divisione binaria standard).
 // Input: a >= 0, b > 0, q = 0, r = 0. Output: q=a/b, r=a%b, a inalterato.
 procedure __mn_divmod_nonneg_fast(int a, int b, int q, int r, stack __mn_hist, stack __mn_scratch)
     local int t = 0
     t += a
-    local int nbits = 0
-    local int pow = 0
+    local int w0 = 1
+    local int w1 = 0
+    w1 += w0
+    w1 += w0
+    local int w2 = 0
+    w2 += w1
+    w2 += w1
+    local int w3 = 0
+    w3 += w2
+    w3 += w2
+    local int w4 = 0
+    w4 += w3
+    w4 += w3
+    local int w5 = 0
+    w5 += w4
+    w5 += w4
+    local int w6 = 0
+    w6 += w5
+    w6 += w5
+    local int w7 = 0
+    w7 += w6
+    w7 += w6
+    local int w8 = 0
+    w8 += w7
+    w8 += w7
+    local int w9 = 0
+    w9 += w8
+    w9 += w8
+    local int w10 = 0
+    w10 += w9
+    w10 += w9
+    local int w11 = 0
+    w11 += w10
+    w11 += w10
+    local int w12 = 0
+    w12 += w11
+    w12 += w11
+    local int w13 = 0
+    w13 += w12
+    w13 += w12
+    local int w14 = 0
+    w14 += w13
+    w14 += w13
+    local int w15 = 0
+    w15 += w14
+    w15 += w14
+    local int w16 = 0
+    w16 += w15
+    w16 += w15
+    local int w17 = 0
+    w17 += w16
+    w17 += w16
+    local int w18 = 0
+    w18 += w17
+    w18 += w17
+    local int w19 = 0
+    w19 += w18
+    w19 += w18
+    local int w20 = 0
+    w20 += w19
+    w20 += w19
+    local int w21 = 0
+    w21 += w20
+    w21 += w20
+    local int w22 = 0
+    w22 += w21
+    w22 += w21
+    local int w23 = 0
+    w23 += w22
+    w23 += w22
+    local int w24 = 0
+    w24 += w23
+    w24 += w23
+    local int w25 = 0
+    w25 += w24
+    w25 += w24
+    local int w26 = 0
+    w26 += w25
+    w26 += w25
+    local int w27 = 0
+    w27 += w26
+    w27 += w26
+    local int w28 = 0
+    w28 += w27
+    w28 += w27
+    local int w29 = 0
+    w29 += w28
+    w29 += w28
+    local int w30 = 0
+    w30 += w29
+    w30 += w29
+    local int w31 = 0
+    w31 += w30
+    w31 += w30
+    local int w32 = 0
+    w32 += w31
+    w32 += w31
+    local int w33 = 0
+    w33 += w32
+    w33 += w32
+    local int w34 = 0
+    w34 += w33
+    w34 += w33
+    local int w35 = 0
+    w35 += w34
+    w35 += w34
+    local int w36 = 0
+    w36 += w35
+    w36 += w35
+    local int w37 = 0
+    w37 += w36
+    w37 += w36
+    local int w38 = 0
+    w38 += w37
+    w38 += w37
+    local int w39 = 0
+    w39 += w38
+    w39 += w38
+    local int w40 = 0
+    w40 += w39
+    w40 += w39
+    local int w41 = 0
+    w41 += w40
+    w41 += w40
+    local int w42 = 0
+    w42 += w41
+    w42 += w41
+    local int w43 = 0
+    w43 += w42
+    w43 += w42
+    local int w44 = 0
+    w44 += w43
+    w44 += w43
+    local int w45 = 0
+    w45 += w44
+    w45 += w44
+    local int w46 = 0
+    w46 += w45
+    w46 += w45
+    local int w47 = 0
+    w47 += w46
+    w47 += w46
+    local int w48 = 0
+    w48 += w47
+    w48 += w47
+    local int w49 = 0
+    w49 += w48
+    w49 += w48
+    local int w50 = 0
+    w50 += w49
+    w50 += w49
+    local int w51 = 0
+    w51 += w50
+    w51 += w50
+    local int w52 = 0
+    w52 += w51
+    w52 += w51
+    local int w53 = 0
+    w53 += w52
+    w53 += w52
+    local int w54 = 0
+    w54 += w53
+    w54 += w53
+    local int w55 = 0
+    w55 += w54
+    w55 += w54
+    local int w56 = 0
+    w56 += w55
+    w56 += w55
+    local int w57 = 0
+    w57 += w56
+    w57 += w56
+    local int w58 = 0
+    w58 += w57
+    w58 += w57
+    local int w59 = 0
+    w59 += w58
+    w59 += w58
+    local int w60 = 0
+    w60 += w59
+    w60 += w59
+    local int w61 = 0
+    w61 += w60
+    w61 += w60
+    local int w62 = 0
+    w62 += w61
+    w62 += w61
+    push(w0, __mn_scratch)
+    push(w1, __mn_scratch)
+    push(w2, __mn_scratch)
+    push(w3, __mn_scratch)
+    push(w4, __mn_scratch)
+    push(w5, __mn_scratch)
+    push(w6, __mn_scratch)
+    push(w7, __mn_scratch)
+    push(w8, __mn_scratch)
+    push(w9, __mn_scratch)
+    push(w10, __mn_scratch)
+    push(w11, __mn_scratch)
+    push(w12, __mn_scratch)
+    push(w13, __mn_scratch)
+    push(w14, __mn_scratch)
+    push(w15, __mn_scratch)
+    push(w16, __mn_scratch)
+    push(w17, __mn_scratch)
+    push(w18, __mn_scratch)
+    push(w19, __mn_scratch)
+    push(w20, __mn_scratch)
+    push(w21, __mn_scratch)
+    push(w22, __mn_scratch)
+    push(w23, __mn_scratch)
+    push(w24, __mn_scratch)
+    push(w25, __mn_scratch)
+    push(w26, __mn_scratch)
+    push(w27, __mn_scratch)
+    push(w28, __mn_scratch)
+    push(w29, __mn_scratch)
+    push(w30, __mn_scratch)
+    push(w31, __mn_scratch)
+    push(w32, __mn_scratch)
+    push(w33, __mn_scratch)
+    push(w34, __mn_scratch)
+    push(w35, __mn_scratch)
+    push(w36, __mn_scratch)
+    push(w37, __mn_scratch)
+    push(w38, __mn_scratch)
+    push(w39, __mn_scratch)
+    push(w40, __mn_scratch)
+    push(w41, __mn_scratch)
+    push(w42, __mn_scratch)
+    push(w43, __mn_scratch)
+    push(w44, __mn_scratch)
+    push(w45, __mn_scratch)
+    push(w46, __mn_scratch)
+    push(w47, __mn_scratch)
+    push(w48, __mn_scratch)
+    push(w49, __mn_scratch)
+    push(w50, __mn_scratch)
+    push(w51, __mn_scratch)
+    push(w52, __mn_scratch)
+    push(w53, __mn_scratch)
+    push(w54, __mn_scratch)
+    push(w55, __mn_scratch)
+    push(w56, __mn_scratch)
+    push(w57, __mn_scratch)
+    push(w58, __mn_scratch)
+    push(w59, __mn_scratch)
+    push(w60, __mn_scratch)
+    push(w61, __mn_scratch)
+    push(w62, __mn_scratch)
     local int j = 0
-    local int kp = 0
-    local int nbits_minus = 0
-    local int a_pos = 0
-    if a > 0 then
-        a_pos += 1
-    fi a > 0
-    if a_pos == 1 then
-        // Phase 1: extract bits LSB-first to scratch.
-        from nbits == 0 loop
-            local int qh = 0
-            local int ph = 0
-            mnhalve(t, qh, ph)
-            push(ph, __mn_scratch)
-            t += qh
-            push(ph, __mn_hist)
-            delocal int ph = 0
-            push(qh, __mn_hist)
-            delocal int qh = 0
-            nbits += 1
-        until t == 0
-        // Phase 2: pow = 2^(nbits-1) via doubling.
-        pow += 1
-        nbits_minus += nbits
-        nbits_minus -= 1
-        from kp == 0 loop
-            local int np_d = 0
-            np_d += pow
-            np_d += pow
-            push(pow, __mn_hist)
-            pow += np_d
-            push(np_d, __mn_hist)
-            delocal int np_d = 0
-            kp += 1
-        until kp == nbits_minus
-        // Phase 3: pop MSB-first, sub b, accumulate q, halve pow.
-        from j == 0 loop
-            local int bit = 0
-            pop(bit, __mn_scratch)
-            local int r_dbl = 0
-            r_dbl += r
-            r += r_dbl
-            push(r_dbl, __mn_hist)
-            delocal int r_dbl = 0
-            r += bit
-            local int doable = 0
-            if r >= b then
-                doable += 1
-            fi r >= b
-            if doable == 1 then
-                r -= b
-                q += pow
-            fi doable == 1
-            push(doable, __mn_hist)
-            delocal int doable = 0
-            push(bit, __mn_hist)
-            delocal int bit = 0
-            // Halve pow for next iter.
-            local int qh2 = 0
-            local int ph2 = 0
-            mnhalve(pow, qh2, ph2)
-            pow += qh2
-            push(ph2, __mn_hist)
-            delocal int ph2 = 0
-            push(qh2, __mn_hist)
-            delocal int qh2 = 0
-            j += 1
-        until j == nbits
-    fi a_pos == 1
-    push(a_pos, __mn_hist)
-    delocal int a_pos = 0
-    push(nbits_minus, __mn_hist)
-    delocal int nbits_minus = 0
-    push(kp, __mn_hist)
-    delocal int kp = 0
+    from j == 0 loop
+        local int w = 0
+        pop(w, __mn_scratch)
+        local int fits = 0
+        if t >= w then
+            fits += 1
+        fi t >= w
+        local int bit = 0
+        if fits == 1 then
+            bit += 1
+            t -= w
+        fi fits == 1
+        local int r_dbl = 0
+        r_dbl += r
+        r += r_dbl
+        push(r_dbl, __mn_hist)
+        delocal int r_dbl = 0
+        r += bit
+        local int doable = 0
+        if r >= b then
+            doable += 1
+        fi r >= b
+        if doable == 1 then
+            r -= b
+            q += w
+        fi doable == 1
+        push(doable, __mn_hist)
+        delocal int doable = 0
+        push(bit, __mn_hist)
+        delocal int bit = 0
+        push(fits, __mn_hist)
+        delocal int fits = 0
+        push(w, __mn_hist)
+        delocal int w = 0
+        j += 1
+    until j == 63
     push(j, __mn_hist)
     delocal int j = 0
-    push(pow, __mn_hist)
-    delocal int pow = 0
-    push(nbits, __mn_hist)
-    delocal int nbits = 0
+    delocal int w62 = 0
+    delocal int w61 = 0
+    delocal int w60 = 0
+    delocal int w59 = 0
+    delocal int w58 = 0
+    delocal int w57 = 0
+    delocal int w56 = 0
+    delocal int w55 = 0
+    delocal int w54 = 0
+    delocal int w53 = 0
+    delocal int w52 = 0
+    delocal int w51 = 0
+    delocal int w50 = 0
+    delocal int w49 = 0
+    delocal int w48 = 0
+    delocal int w47 = 0
+    delocal int w46 = 0
+    delocal int w45 = 0
+    delocal int w44 = 0
+    delocal int w43 = 0
+    delocal int w42 = 0
+    delocal int w41 = 0
+    delocal int w40 = 0
+    delocal int w39 = 0
+    delocal int w38 = 0
+    delocal int w37 = 0
+    delocal int w36 = 0
+    delocal int w35 = 0
+    delocal int w34 = 0
+    delocal int w33 = 0
+    delocal int w32 = 0
+    delocal int w31 = 0
+    delocal int w30 = 0
+    delocal int w29 = 0
+    delocal int w28 = 0
+    delocal int w27 = 0
+    delocal int w26 = 0
+    delocal int w25 = 0
+    delocal int w24 = 0
+    delocal int w23 = 0
+    delocal int w22 = 0
+    delocal int w21 = 0
+    delocal int w20 = 0
+    delocal int w19 = 0
+    delocal int w18 = 0
+    delocal int w17 = 0
+    delocal int w16 = 0
+    delocal int w15 = 0
+    delocal int w14 = 0
+    delocal int w13 = 0
+    delocal int w12 = 0
+    delocal int w11 = 0
+    delocal int w10 = 0
+    delocal int w9 = 0
+    delocal int w8 = 0
+    delocal int w7 = 0
+    delocal int w6 = 0
+    delocal int w5 = 0
+    delocal int w4 = 0
+    delocal int w3 = 0
+    delocal int w2 = 0
+    delocal int w1 = 0
+    delocal int w0 = 0
     push(t, __mn_hist)
     delocal int t = 0
+
 
 // Resto signed: estrae solo r da __mn_divmod_signed, scarta q via uncall
 // dopo aver salvato r. Reversibilità preservata: uncall ripristina q=0,

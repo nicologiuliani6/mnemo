@@ -136,10 +136,134 @@ procedure __mn_putx_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     push(d, __mn_hist)
     delocal int d = 0
 
-// Helper reversibile per split u64 in hi/lo 32-bit (via opcode MNSPLIT32).
-// Forward azzera src; inverse (uncall) ripristina src e azzera hi/lo.
+// Split u64 hi/lo (bit 32-63 / 0-31) di un cell a 64 bit, puro (nessun
+// opcode nativo — era MNSPLIT32 O(1) host C, ora __mn_divmod_nonneg_fast
+// contro 2^32, O(32) iterazioni via raddoppio puro). Forward azzera src
+// (consumato, come il contratto nativo originale); inverse (uncall)
+// ripristina src e azzera hi/lo.
+// x >= 0: divmod diretta contro 2^32. x < 0 (high bit set = valore unsigned
+// grande in complemento a 2, x_u = x + 2^64): ab = |x| (negazione sicura
+// salvo x == INT64_MIN, caso limite gestito a parte — stessa cautela di
+// __mn_uhalve64 in bits.kairos), qab = ab/2^32, rab = ab%2^32:
+//   lo = (rab==0) ? 0 : (2^32 - rab);  hi = 2^32 - qab - (rab==0 ? 0 : 1)
+// (qui il modulo è 2^32, non 2^63: hi resta sempre < 2^32, ben dentro il
+// range int64 positivo — nessun accorgimento extra per overflow intermedi,
+// a differenza di __mn_uhalve64).
 procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_scratch)
-    mnsplit32(src, hi, lo)
+    local int xorig = 0
+    xorig += src
+    local int mod32 = 1
+    local int i = 0
+    from i == 0 loop
+        local int m2 = 0
+        m2 += mod32
+        m2 += mod32
+        push(mod32, __mn_hist)
+        call __mn_move_int(mod32, m2, __mn_hist, __mn_scratch)
+        push(m2, __mn_hist)
+        delocal int m2 = 0
+        i += 1
+    until i == 32
+    local int min64 = 0
+    min64 -= 1
+    local int j = 0
+    from j == 0 loop
+        local int m2b = 0
+        m2b += min64
+        m2b += min64
+        push(min64, __mn_hist)
+        call __mn_move_int(min64, m2b, __mn_hist, __mn_scratch)
+        push(m2b, __mn_hist)
+        delocal int m2b = 0
+        j += 1
+    until j == 63
+    local int is_min = 0
+    if xorig == min64 then
+        is_min += 1
+    fi xorig == min64
+    if is_min == 1 then
+        // src = INT64_MIN: x_u = 2^63 esatto. hi = 2^31, lo = 0.
+        local int p31 = 1
+        local int k = 0
+        from k == 0 loop
+            local int p2 = 0
+            p2 += p31
+            p2 += p31
+            push(p31, __mn_hist)
+            call __mn_move_int(p31, p2, __mn_hist, __mn_scratch)
+            push(p2, __mn_hist)
+            delocal int p2 = 0
+            k += 1
+        until k == 31
+        hi += p31
+        push(k, __mn_hist)
+        delocal int k = 0
+        push(p31, __mn_hist)
+        delocal int p31 = 0
+    else
+        local int neg = 0
+        if xorig < 0 then
+            neg += 1
+        fi xorig < 0
+        local int ab = 0
+        if neg == 1 then
+            ab -= xorig
+        else
+            ab += xorig
+        fi neg == 1
+        local int qab = 0
+        local int rab = 0
+        call __mn_divmod_nonneg_fast(ab, mod32, qab, rab, __mn_hist, __mn_scratch)
+        if neg == 1 then
+            local int rz = 0
+            if rab == 0 then
+                rz += 1
+            fi rab == 0
+            if rz == 0 then
+                lo += mod32
+                lo -= rab
+                hi += mod32
+                hi -= qab
+                hi -= 1
+            else
+                hi += mod32
+                hi -= qab
+            fi rz == 0
+            push(rz, __mn_hist)
+            delocal int rz = 0
+        else
+            lo += rab
+            hi += qab
+        fi neg == 1
+        uncall __mn_divmod_nonneg_fast(ab, mod32, qab, rab, __mn_hist, __mn_scratch)
+        delocal int rab = 0
+        delocal int qab = 0
+        if neg == 1 then
+            ab += xorig
+        else
+            ab -= xorig
+        fi neg == 1
+        delocal int ab = 0
+        push(neg, __mn_hist)
+        delocal int neg = 0
+    fi is_min == 1
+    push(is_min, __mn_hist)
+    delocal int is_min = 0
+    // Consuma src (mnsplit32 lo azzerava nativamente).
+    local int sink = 0
+    call __mn_move_int(sink, src, __mn_hist, __mn_scratch)
+    push(sink, __mn_hist)
+    delocal int sink = 0
+    push(j, __mn_hist)
+    delocal int j = 0
+    push(min64, __mn_hist)
+    delocal int min64 = 0
+    push(xorig, __mn_hist)
+    delocal int xorig = 0
+    push(mod32, __mn_hist)
+    delocal int mod32 = 0
+    push(i, __mn_hist)
+    delocal int i = 0
 
 // Stampa intero u64 in esadecimale lowercase, no leading zeros.
 // Per cell >= 2^32 oppure cell < 0 (high bit set in signed int64), serve

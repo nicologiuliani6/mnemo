@@ -16,7 +16,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     "encrypt.c not present"
 )
 class TestEncryptPerf(unittest.TestCase):
-    MAX_RATIO = 3.0  # opt deve essere <3x baseline. Stato attuale ~2.4x.
+    MAX_RATIO = 3.0  # opt deve essere <3x baseline. Stato attuale ~1.0x.
+
+    # Timeout bump (era 120s): migrazione Kairos puro (rimozione mnhalve/
+    # mnsplit32 nativi, vedi lib/bits.kairos e lib/divmod.kairos) rende
+    # and_into/or_into/shr_into O(k^2 log a)/O(n log a) invece di O(k^2)/O(n)
+    # con halving nativo O(1) — costo intrinseco, non un regressione VM.
+    # encrypt.c (DES-like, molte and/or/shr per round) passa da ~4s a ~190s
+    # in modalità interpretata pura (sia baseline che opt, ratio invariato
+    # ~1.0x — l'overhead è nel primitivo di halving condiviso da entrambi i
+    # path, non nell'opt-uncall stesso).
+    RUN_TIMEOUT = 300
 
     def _run(self, opt: bool) -> tuple[float, str]:
         cmd = [".venv/bin/mnemo", "run", "tests/c/repro/encrypt.c"]
@@ -24,7 +34,7 @@ class TestEncryptPerf(unittest.TestCase):
             cmd.append("--opt-uncall-user-calls")
         t0 = time.perf_counter()
         res = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=ROOT, timeout=120
+            cmd, capture_output=True, text=True, cwd=ROOT, timeout=self.RUN_TIMEOUT
         )
         dt = time.perf_counter() - t0
         return dt, res.stdout

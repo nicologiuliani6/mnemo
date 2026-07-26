@@ -1192,6 +1192,23 @@ def _is_u32_type_node(t: c.Node | None, u32_typedefs: set[str]) -> bool:
     return False
 
 
+def _ast_has_u32_vars(ast: c.FileAST) -> bool:
+    """True se esiste almeno una variabile/param u32 nel programma.
+
+    Usato per garantire che `divmod.kairos` (dipendenza di `__mn_mask_u32`,
+    che ora usa `__mn_divmod_nonneg_fast` puro invece dell'opcode nativo
+    `mnsplit32`) sia incluso anche quando il C non usa altrimenti `*`, `/`,
+    `%`, bitwise o `printf` — l'unico segnale sintattico di u32 è la
+    dichiarazione stessa, non un operatore che triggeri gli euristici in
+    `infer_auto_lib_files`.
+    """
+    u32_typedefs = _collect_u32_typedefs(ast)
+    for n in _iter_c_nodes(ast):
+        if isinstance(n, c.Decl) and _is_u32_type_node(getattr(n, "type", None), u32_typedefs):
+            return True
+    return False
+
+
 def _transform_exit_in_main(ast: c.FileAST) -> None:
     """`exit(N)` / `abort()` dentro main → `return N` / `return 134`.
 
@@ -2261,13 +2278,22 @@ def compile_c_to_kairos(
     # `T* p = &BASE.arr[i]; ... p->f ...` → alias inline a `BASE.arr[p].f` (int p).
     _transform_struct_array_pointer_alias(ast)
     # u32 vars: inserisce `__mn_mask_u32(&x)` dopo ogni assignment per emulare
-    # semantica modular C. Helper lib basato su mnsplit32 (O(1) VM op).
+    # semantica modular C. Helper lib puro Kairos (divmod binario, vedi
+    # helpers.kairos) — nessun opcode nativo.
     _transform_u32_modular_masks(ast)
     proc_index = lib_procedure_index()
     lib_names = _merge_lib_lists(
         infer_auto_lib_files(ast),
         infer_lib_files_from_calls(ast, proc_index),
     )
+    # `__mn_mask_u32` (helpers.kairos) ora chiama `__mn_divmod_nonneg_fast`
+    # (divmod.kairos) invece dell'opcode nativo `mnsplit32`. Un programma con
+    # SOLO variabili u32 (nessun `*`/`/`/`%`/bitwise/`printf` altrove) non fa
+    # scattare nessuno degli euristici sopra: forziamo qui la dipendenza,
+    # altrimenti `__mn_divmod_nonneg_fast` risulterebbe chiamata ma non
+    # definita a runtime.
+    if _ast_has_u32_vars(ast):
+        lib_names = _merge_lib_lists(lib_names, ["helpers.kairos", "divmod.kairos"])
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")
