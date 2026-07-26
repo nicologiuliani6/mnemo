@@ -9411,6 +9411,25 @@ def _lower_funccall_with_ret(
             lane = _resolve_pi_channel_endpoint(exprs[0], ctx)
             pre, atom, tm = _kairos_atom(exprs[1], ctx)
             reply = _resolve_pi_channel_endpoint(exprs[2], ctx)
+            # NB (tentativo di migrazione verso il sottoinsieme puro Kairos —
+            # kairos_sos.tex richiede ssend/srecv SOLO su canali scalari — poi
+            # RIPRISTINATO): sembrava che `reply` fosse risolto solo per nome
+            # lessicale statico (`_resolve_pi_channel_endpoint`, mai dal valore
+            # ricevuto), quindi vestigiale nel payload. Verificato empiricamente
+            # con `tests/c/repro/pi_calculus.c`: togliendo `reply` dal payload di
+            # ISsend/ISrecv il programma va in DEADLOCK nella VM reale (hang,
+            # nessun output). Motivo: `return_path` è dichiarato come variabile
+            # LOCALE indipendente in ciascuna procedura (client/server), NON
+            # unificata a livello file da `collect_file_scope_kairos_pi_channels`
+            # (quella raccoglie solo `mnemo_kairos_channel_t` a scope FILE, non
+            # dentro i corpi funzione) — quindi client.return_path e
+            # server.return_path sono due canali Kairos distinti collegati SOLO
+            # dal riferimento a canale (VM TYPE_CHANNEL/CHANNEL_REF_MARKER,
+            # vm_ops.h) trasmesso realmente a runtime via questo payload: è
+            # channel-passing dinamico genuino (non instradamento statico), e
+            # resta STRUTTURALMENTE dipendente da questa estensione VM finché
+            # `return_path` non diventa un canale realmente condiviso (es. file-
+            # scope o passato per parametro a entrambi i lati) — vedi report.
             post: list[Instr] = []
             if tm:
                 ctx.use_scratch = True
@@ -9424,6 +9443,9 @@ def _lower_funccall_with_ret(
             lane = _resolve_pi_channel_endpoint(exprs[0], ctx)
             msg_d = _resolve_pi_int_recv_dest(exprs[1], ctx)
             rp_d = _resolve_pi_channel_endpoint(exprs[2], ctx)
+            # Vedi commento in mnemo_pi_ssend_request sopra: NON rimuovere `rp_d`
+            # dal payload, il receive scrive qui il riferimento a canale reale
+            # ricevuto a runtime (channel-passing dinamico, non statico).
             return [ISrecv([msg_d, rp_d], lane)]
         if name == "mnemo_pi_ssend_reply":
             if len(exprs) != 2:
@@ -11878,6 +11900,31 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 raise MnemoCompileError("pthread_mutex_t: nome variabile mancante")
             name = str(node.type.declname)
             logical = _scope_declare(ctx, name)
+            # Prefisso `__mn_mtx` (NON `__mn_kch_`): la VM (vm_ops.h, op_ssend)
+            # riconosce questo prefisso e attiva semantica "mailbox" (SSEND non
+            # bloccante: deposita nel buffer del canale anche senza un ricevitore
+            # già in attesa). Estensione VM fuori dal sottoinsieme puro Kairos
+            # (kairos_sos.tex prevede solo ssend/srecv sincroni, rendez-vous puro).
+            #
+            # TENTATIVO REALE di eliminarla (migrazione verso il sottoinsieme
+            # puro): verificato con un test minimo single-thread (init; lock;
+            # unlock; destroy, NESSUNA concorrenza) che sostituendo il prefisso
+            # con un canale normale (`__mn_kch_`, rendez-vous puro) la VM va in
+            # DEADLOCK — l'op_ssend di pthread_mutex_init blocca il thread in
+            # attesa di un ricevitore, ma il corrispondente pthread_mutex_lock
+            # (srecv) è sequenziale DOPO, nello stesso thread: nessuno può mai
+            # ricevere mentre il sender è bloccato in attesa di essere ricevuto
+            # (autodeadlock strutturale). Vedi vm_channel.h:op_wait — per canali
+            # non-mailbox un SSEND senza ricevitore già in coda si accoda e
+            # blocca (`while (!self->ready) pthread_cond_wait(...)`), non
+            # ritorna mai finché qualcuno non fa srecv — ma qui quel qualcuno è
+            # lo stesso thread, più avanti nel proprio flusso sequenziale.
+            # Nessuna topologia di canali puri (token-ring incluso) risolve
+            # questo caso: serve un deposito asincrono (mailbox) OPPURE
+            # riscrivere pthread_mutex_* per non passare da un canale (es. stato
+            # come intero reversibile con guardie if, non più ssend/srecv) — un
+            # refactor molto più ampio, fuori scope qui. Lasciato invariato:
+            # NON RIMUOVERE il prefisso `__mn_mtx_`.
             kai = f"__mn_mtx_{logical}"
             ctx.channel_kairos[logical] = kai
             ctx.channel_decl_order.append(logical)
@@ -14432,6 +14479,10 @@ def lower_file_to_program(
     fs_ch_order = file_scope_channel_order(mutex_keys, fs_pi)
     # `*__lane` (campo `lane` di mps_t single-channel): prefisso `__mn_kch_` per evitare
     # le semantiche mailbox `__mn_mtx_*` della VM (la mailbox sovrascrive — qui serve FIFO).
+    # Il ramo `else` (mutex file-scope veri) resta `__mn_mtx_*` apposta: vedi il
+    # commento esteso sul caso locale `pthread_mutex_t` sopra (~riga 11898) —
+    # verificato empiricamente che togliere il prefisso mailbox causa deadlock
+    # anche nel caso più semplice (mutex single-thread, zero concorrenza).
     file_scope_channel_kairos = {
         k: (
             f"__mn_kch_{k}"
