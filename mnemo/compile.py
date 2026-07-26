@@ -2133,14 +2133,38 @@ def _const_loop_trip_count(node: c.Node) -> int | None:
 
 
 def _infer_ptr_pool_size(ast: c.FileAST) -> int:
-    """Dimensiona auto il pool puntatori. Modello block-aware con header:
-    `__mn_pool_alloc` riserva nblk+1 celle per ogni malloc (1 header + nblk dati)
-    e avanza il contatore di nblk+1, quindi malloc concorrenti non si
-    sovrappongono. Bound conservativo (tutte le alloc vive insieme, nessuna free
-    intermedia): `pool ≥ Σ(nblk_i + 1)`, +1 sentinella. Una malloc dentro un loop
-    a bound COSTANTE è contata × trip-count (auto-sizing dei loop statici); per
-    loop a bound RUNTIME serve ancora --ptr-pool-size (i blocchi si riusano via
-    free LIFO, quindi spesso basta il max concorrente)."""
+    """Dimensiona auto il pool puntatori STATICO (celle nominate __mn_mem*,
+    dispatch `if slot==k` generato a compile-time — vedi ptr_pool_kairos.py).
+    Modello block-aware con header: `__mn_pool_alloc` riserva nblk+1 celle per
+    ogni malloc (1 header + nblk dati) e avanza il contatore di nblk+1, quindi
+    malloc concorrenti non si sovrappongono. Bound conservativo (tutte le alloc
+    vive insieme, nessuna free intermedia): `pool ≥ Σ(nblk_i + 1)`, +1 sentinella.
+    Una malloc dentro un loop a bound COSTANTE è contata × trip-count
+    (auto-sizing dei loop statici, vedi `_const_loop_trip_count`).
+
+    Preferenza static-over-dynamic (punto 3 migrazione pura): questo bound
+    diventa `heap_base` (fine del range statico, vedi layout_collect.py). Ogni
+    slot >= heap_base è servito dal fallback esplicito su heap VM dinamico
+    (poolpush/pooladd/poolget in ptr_pool_kairos.py._emit_dynamic_pool_procs).
+    Un bound qui SOTTOSTIMATO non è un bug di correttezza (il routing
+    `if slot < heap_base` a runtime spilla semplicemente le eccedenze sul
+    dinamico), solo di performance/staticità. Pattern C che restano
+    STRUTTURALMENTE dipendenti dal fallback dinamico, perché il numero o la
+    dimensione delle allocazioni non è calcolabile qui a compile-time:
+      1. malloc/calloc dentro un `for`/`while` con trip-count RUNTIME (bound
+         non riconosciuto da `_const_loop_trip_count`: dipende da una variabile
+         non-costante, es. `for(i=0;i<argc;i++)`, o qualunque `while` con
+         condizione diversa da `while(0)`). Vedi test `test_pool_runtime_loop.py`.
+      2. malloc/calloc il cui argomento size non è un'espressione costante
+         valutabile da `_malloc_block_cells` (es. `malloc(n * sizeof(int))` con
+         `n` runtime): la size reale è nota solo a runtime (passata come
+         parametro `nblk` a `__mn_pool_alloc`), qui viene stimata a 1 cella.
+      3. Conteggio allocazioni che dipende da input/dati a runtime in generale
+         (es. numero di malloc deciso da una condizione data-dependent, non da
+         un loop bound sintattico).
+    In tutti e tre i casi il programma resta corretto (il fallback dinamico
+    copre lo spillover), ma perde il vantaggio di un dispatch statico O(log N)
+    per le celle oltre heap_base."""
     total = 0
 
     def visit(n: c.Node, mult: int) -> None:

@@ -6,6 +6,20 @@ e il dispatcher `if slot == k` è generato in Python in base a N (compile-time).
 
 Quando N è grande, una singola procedura supera i limiti della VM sui parametri / argomenti
 di `call`: si emettono slice (`__mn_pool_*_b0`, …) e il lowering IR dispatcha con divmod.
+
+Politica static-preferred / dynamic-fallback (migrazione verso il sottoinsieme puro Kairos,
+vedi kairos_sos.tex — poolpush/pooladd/poolget sono un'estensione VM non nella spec pura):
+il dispatch STATICO (`if slot==k`, celle nominate __mn_mem*, dimensione decisa a
+compile-time da `compile._infer_ptr_pool_size` + eventuale `--ptr-pool-size`) è SEMPRE la
+via preferita ed è quello che copre la stragrande maggioranza dei programmi (malloc con size
+costante, fuori da loop o dentro loop a trip-count costante). Il pool DINAMICO
+(`_emit_dynamic_pool_procs`, sotto) è un fallback esplicito attivato SOLO per gli slot
+`>= heap_base`, cioè solo quando il numero/dimensione delle allocazioni non è determinabile
+staticamente (malloc dentro un loop a bound runtime, o con argomento size non costante — vedi
+i commenti in `compile._infer_ptr_pool_size` per l'elenco esatto dei pattern C che restano
+dipendenti da questo fallback). Con `heap_base=None` il modello dinamico è disattivato del
+tutto (compat legacy): non è il path usato da `compile.py`, che passa sempre un `heap_base`
+esplicito quando il programma usa il pool puntatori.
 """
 
 from __future__ import annotations
