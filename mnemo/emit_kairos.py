@@ -170,13 +170,20 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         return
     if isinstance(ins, IFromUntilKairos):
         lines.append(
-            f"{indent}from {ins.entry_lhs} {ins.entry_op} {ins.entry_rhs} loop"
+            f"{indent}from {ins.entry_lhs} {ins.entry_op} {ins.entry_rhs} do"
         )
         ind2 = indent + "    "
         _emit_instr_seq(lines, ins.body_instrs, ind2)
-        lines.append(
-            f"{indent}until {ins.until_lhs} {ins.until_op} {ins.until_rhs}"
-        )
+        until = f"until {ins.until_lhs} {ins.until_op} {ins.until_rhs}"
+        if ins.body2_instrs:
+            lines.append(f"{indent}loop")
+            _emit_instr_seq(lines, ins.body2_instrs, ind2)
+            lines.append(f"{indent}{until}")
+        else:
+            # `loop` sulla stessa riga di `until`: il conteggio righe resta
+            # identico alla forma a un corpo, e con esso i tag @line del
+            # bytecode su cui si basa l'inverter della VM.
+            lines.append(f"{indent}loop {until}")
         return
     if isinstance(ins, ITry):
         cond = f"{ins.lhs} {ins.op} {ins.rhs}"

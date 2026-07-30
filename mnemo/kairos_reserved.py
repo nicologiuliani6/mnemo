@@ -24,6 +24,7 @@ KAIROS_RESERVED_IDS: frozenset[str] = frozenset(
         "else",
         "fi",
         "from",
+        "do",
         "loop",
         "until",
         "par",

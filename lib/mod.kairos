@@ -2,6 +2,6 @@
 // Stesso schema di sottrazioni ripetute di divmod, senza tracciare il quoziente.
 procedure __mn_mod_nonneg(int a, int b, int r, stack __mn_hist, stack __mn_scratch)
     call __mn_move_int(r, a, __mn_hist, __mn_scratch)
-    from r >= b loop
+    from r >= b do
         r -= b
-    until r < b
+    loop until r < b

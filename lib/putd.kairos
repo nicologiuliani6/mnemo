@@ -141,14 +141,14 @@ procedure __mn_emit_spaces(int count, stack __mn_hist, stack __mn_scratch)
     if count > z then
         local int rem = 0
         rem += count
-        from rem == count loop
+        from rem == count do
             local int sp = 0
             sp += 32
             show(sp, char)
             sp -= 32
             delocal int sp = 0
             rem -= 1
-        until rem == 0
+        loop until rem == 0
         delocal int rem = 0
     fi count > z
     delocal int z = 0
@@ -159,14 +159,14 @@ procedure __mn_emit_zeros(int count, stack __mn_hist, stack __mn_scratch)
     if count > z then
         local int rem = 0
         rem += count
-        from rem == count loop
+        from rem == count do
             local int zc = 0
             zc += 48
             show(zc, char)
             zc -= 48
             delocal int zc = 0
             rem -= 1
-        until rem == 0
+        loop until rem == 0
         delocal int rem = 0
     fi count > z
     delocal int z = 0

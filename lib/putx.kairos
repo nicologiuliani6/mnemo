@@ -154,7 +154,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
     xorig += src
     local int mod32 = 1
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int m2 = 0
         m2 += mod32
         m2 += mod32
@@ -163,11 +163,11 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
         push(m2, __mn_hist)
         delocal int m2 = 0
         i += 1
-    until i == 32
+    loop until i == 32
     local int min64 = 0
     min64 -= 1
     local int j = 0
-    from j == 0 loop
+    from j == 0 do
         local int m2b = 0
         m2b += min64
         m2b += min64
@@ -176,7 +176,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
         push(m2b, __mn_hist)
         delocal int m2b = 0
         j += 1
-    until j == 63
+    loop until j == 63
     local int is_min = 0
     if xorig == min64 then
         is_min += 1
@@ -185,7 +185,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
         // src = INT64_MIN: x_u = 2^63 esatto. hi = 2^31, lo = 0.
         local int p31 = 1
         local int k = 0
-        from k == 0 loop
+        from k == 0 do
             local int p2 = 0
             p2 += p31
             p2 += p31
@@ -194,7 +194,7 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
             push(p2, __mn_hist)
             delocal int p2 = 0
             k += 1
-        until k == 31
+        loop until k == 31
         hi += p31
         push(k, __mn_hist)
         delocal int k = 0

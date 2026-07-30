@@ -1801,6 +1801,8 @@ def _instr_list_uses_ptr_pool(instrs: list[Instr]) -> bool:
         if isinstance(ins, IFromUntilKairos):
             if _instr_list_uses_ptr_pool(ins.body_instrs):
                 return True
+            if _instr_list_uses_ptr_pool(ins.body2_instrs):
+                return True
         if isinstance(ins, ILocalBlock):
             if _instr_list_uses_ptr_pool(ins.body_instrs):
                 return True
@@ -1834,6 +1836,7 @@ def _instr_list_uses_floor_snap_instr(instrs: list[Instr]) -> bool:
                     stack.append(ins.else_instrs)
             elif isinstance(ins, IFromUntilKairos):
                 stack.append(ins.body_instrs or [])
+                stack.append(ins.body2_instrs or [])
             elif isinstance(ins, ILocalBlock):
                 stack.append(ins.body_instrs or [])
             elif isinstance(ins, ITry):

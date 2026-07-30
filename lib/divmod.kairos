@@ -7,10 +7,10 @@ procedure __mn_divmod_nonneg(int a, int b, int q, int r, stack __mn_hist, stack 
     local int saved_r = 0
     saved_r += r
     if saved_r >= b then
-        from q == 0 loop
+        from q == 0 do
             r -= b
             q += 1
-        until r < b
+        loop until r < b
     fi saved_r >= b
     push(saved_r, __mn_hist)
     delocal int saved_r = 0
@@ -338,7 +338,7 @@ procedure __mn_divmod_nonneg_fast(int a, int b, int q, int r, stack __mn_hist, s
     push(w61, __mn_scratch)
     push(w62, __mn_scratch)
     local int j = 0
-    from j == 0 loop
+    from j == 0 do
         local int w = 0
         pop(w, __mn_scratch)
         local int fits = 0
@@ -373,7 +373,7 @@ procedure __mn_divmod_nonneg_fast(int a, int b, int q, int r, stack __mn_hist, s
         push(w, __mn_hist)
         delocal int w = 0
         j += 1
-    until j == 63
+    loop until j == 63
     push(j, __mn_hist)
     delocal int j = 0
     delocal int w62 = 0

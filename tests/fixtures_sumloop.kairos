@@ -2,10 +2,10 @@
 // b deve essere >= 0; a e b non vengono distrutti. (b == 0 → nessuna iterazione.)
 procedure __mn_mul_into(int dst, int a, int b)
     local int i = 0
-    from i < b loop
+    from i < b do
         i += 1
         dst += a
-    until i == b
+    loop until i == b
     delocal int i = b
 
 procedure main()
@@ -32,7 +32,7 @@ procedure main()
             push(__mn_e0, __mn_hist)
             __mn_e0 += 1
         fi __mn_mem1 < 10
-        from __mn_e0 != 0 loop
+        from __mn_e0 != 0 do
             push(__mn_mem0, __mn_hist)
             __mn_mem0 += __mn_mem1
             __mn_e1 += __mn_mem1
@@ -46,7 +46,7 @@ procedure main()
                 push(__mn_e0, __mn_hist)
                 __mn_e0 += 1
             fi __mn_mem1 < 10
-        until __mn_e0 == 0
+        loop until __mn_e0 == 0
         __mn_e2 += 100
         call __mn_mul_into(__mn_e3, __mn_mem0, __mn_e2)
         push(__mn_e2, __mn_scratch)

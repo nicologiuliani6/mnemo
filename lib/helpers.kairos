@@ -20,7 +20,7 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
     xorig += x
     local int mod32 = 1
     local int i = 0
-    from i == 0 loop
+    from i == 0 do
         local int m2 = 0
         m2 += mod32
         m2 += mod32
@@ -29,7 +29,7 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
         push(m2, __mn_hist)
         delocal int m2 = 0
         i += 1
-    until i == 32
+    loop until i == 32
     local int neg = 0
     if xorig < 0 then
         neg += 1

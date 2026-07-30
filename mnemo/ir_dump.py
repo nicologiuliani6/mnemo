@@ -82,6 +82,10 @@ def _dump_instr(i: Instr, prefix: str = "") -> str:
         p2 = prefix + "    "
         for sub in i.body_instrs:
             lines.append(_dump_instr(sub, p2))
+        if i.body2_instrs:
+            lines.append(f"{prefix}  loop")
+            for sub in i.body2_instrs:
+                lines.append(_dump_instr(sub, p2))
         lines.append(
             f"{prefix}  until {i.until_lhs} {i.until_op} {i.until_rhs}"
         )

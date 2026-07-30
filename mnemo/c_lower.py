@@ -8562,6 +8562,8 @@ def _instr_list_uncall_unsafe_via_vm(instrs: list[Instr]) -> bool:
             elif isinstance(ins, IFromUntilKairos):
                 if rec(ins.body_instrs):
                     return True
+                if rec(ins.body2_instrs):
+                    return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
                     return True
@@ -8593,6 +8595,8 @@ def _instr_list_uses_pool_ops(instrs: list[Instr]) -> bool:
                     return True
             elif isinstance(ins, IFromUntilKairos):
                 if rec(ins.body_instrs):
+                    return True
+                if rec(ins.body2_instrs):
                     return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
@@ -8627,6 +8631,8 @@ def _instr_list_uses_show(instrs: list[Instr]) -> bool:
             elif isinstance(ins, IFromUntilKairos):
                 if rec(ins.body_instrs):
                     return True
+                if rec(ins.body2_instrs):
+                    return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
                     return True
@@ -8658,6 +8664,8 @@ def _instr_list_uses_channels(instrs: list[Instr]) -> bool:
                     return True
             elif isinstance(ins, IFromUntilKairos):
                 if rec(ins.body_instrs):
+                    return True
+                if rec(ins.body2_instrs):
                     return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
@@ -8705,6 +8713,8 @@ def _function_ir_calls_proc_in(fn: Function, names: set[str]) -> bool:
                     return True
             elif isinstance(ins, IFromUntilKairos):
                 if rec(ins.body_instrs):
+                    return True
+                if rec(ins.body2_instrs):
                     return True
             elif isinstance(ins, ILocalBlock):
                 if rec(ins.body_instrs):
@@ -8771,6 +8781,7 @@ def _collect_mem_refs_from_seq(seq: list[Any]) -> tuple[set[int], list[tuple[str
                 add(ins.entry_lhs); add(ins.entry_rhs)
                 add(ins.until_lhs); add(ins.until_rhs)
                 rec(ins.body_instrs)
+                rec(ins.body2_instrs)
             elif isinstance(ins, ITry):
                 add(ins.lhs); add(ins.rhs)
                 rec(ins.body_instrs)
@@ -8834,6 +8845,7 @@ def _collect_mem_writes_from_seq(seq: list[Any]) -> tuple[set[int], list[tuple[s
                     rec(ins.else_instrs)
             elif isinstance(ins, IFromUntilKairos):
                 rec(ins.body_instrs)
+                rec(ins.body2_instrs)
             elif isinstance(ins, ITry):
                 rec(ins.body_instrs)
                 if ins.rollback_instrs is not None:
@@ -9134,7 +9146,9 @@ def _malloc_using_transitive_closure(
                     ins.else_instrs is not None and uses_alloc(ins.else_instrs)
                 ):
                     return True
-            if isinstance(ins, IFromUntilKairos) and uses_alloc(ins.body_instrs):
+            if isinstance(ins, IFromUntilKairos) and (
+                uses_alloc(ins.body_instrs) or uses_alloc(ins.body2_instrs)
+            ):
                 return True
             if isinstance(ins, ILocalBlock) and uses_alloc(ins.body_instrs):
                 return True
@@ -10639,6 +10653,8 @@ def _writes_cell(instrs: list[Instr], cell: str) -> bool:
         if isinstance(ins, IFromUntilKairos):
             if _writes_cell(ins.body_instrs or [], cell):
                 return True
+            if _writes_cell(ins.body2_instrs or [], cell):
+                return True
         if isinstance(ins, ILocalBlock):
             if _writes_cell(ins.body_instrs or [], cell):
                 return True
@@ -10924,7 +10940,9 @@ def _build_counter_loop_instrs(
     ctx.use_hist = True
     body_with_cnt = orig_body + [IAddEq(cnt, Imm(1))]
     loop_block = [ILocalBlock(cnt, [
-        IFromUntilKairos(cnt, "==", "0", body_with_cnt, exit_lhs, exit_op, exit_rhs),
+        # c2 vuoto: i cicli C sono il caso particolare `c2 = skip` del ciclo
+        # a due corpi Janus, e Kairos ne emette il bytecode a un corpo.
+        IFromUntilKairos(cnt, "==", "0", body_with_cnt, exit_lhs, exit_op, exit_rhs, []),
         IHistPush("__mn_hist", cnt),
     ])]
     if not needs_entry_guard:

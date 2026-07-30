@@ -169,7 +169,14 @@ class IIfKairos:
 
 @dataclass
 class IFromUntilKairos:
-    """from entry op loop body until until_op — stessa semantica bytecode Kairos."""
+    """from b1 do c1 loop c2 until b2 — ciclo a due corpi, traccia ``c1 [c2 c1]*``.
+
+    ``body_instrs`` è ``c1``, ``body2_instrs`` è ``c2``. Mnemo emette sempre
+    ``c2`` vuoto: i cicli C (``while``/``for``/``do…while``) sono il caso
+    particolare ``c2 = skip``, che in Kairos produce il bytecode a un corpo.
+    Il campo sta in coda e ha default vuoto: i costruttori posizionali esistenti
+    restano validi.
+    """
 
     entry_lhs: str
     entry_op: CmpOp
@@ -178,6 +185,7 @@ class IFromUntilKairos:
     until_lhs: str
     until_op: CmpOp
     until_rhs: str
+    body2_instrs: list[Any] = field(default_factory=list)
 
 
 @dataclass

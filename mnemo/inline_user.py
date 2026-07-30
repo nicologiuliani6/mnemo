@@ -183,6 +183,7 @@ def _rename_one_instr(ins: Instr, ren: Callable[[str], str]) -> Instr:
             ren(ins.until_lhs),
             ins.until_op,
             ren(ins.until_rhs),
+            _rename_instrs(ins.body2_instrs, ren),
         )
     if isinstance(ins, ILocalBlock):
         return ILocalBlock(
@@ -277,6 +278,7 @@ def _collect_decl_names(instrs: list[Instr]) -> set[str]:
             maybe_add(ins.until_lhs)
             maybe_add(ins.until_rhs)
             walk(ins.body_instrs)
+            walk(ins.body2_instrs)
             return
         elif isinstance(ins, ILocalBlock):
             walk(ins.body_instrs)
@@ -394,6 +396,7 @@ def _expand_user_calls(
                         ins.until_lhs,
                         ins.until_op,
                         ins.until_rhs,
+                        expand_one(ins.body2_instrs),
                     )
                 )
             elif isinstance(ins, ILocalBlock):
