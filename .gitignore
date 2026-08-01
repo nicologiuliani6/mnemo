@@ -24,3 +24,8 @@ tests/c/examples_advanced/kernel
 .cursor/
 CLAUDE.md
 resume
+
+# artefatti generati dal driver di lossless/
+lossless/generato_*
+lossless/ricostruito_*
+lossless/*.rle
