@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "c_examples/gcc_compat/**"
       - "lib/**"
       - "mnemo/**"
       - "tests/**"
@@ -12,7 +11,6 @@ on:
       - ".github/workflows/mnemo-vs-gcc.yml"
   pull_request:
     paths:
-      - "c_examples/gcc_compat/**"
       - "lib/**"
       - "mnemo/**"
       - "tests/**"
@@ -26,16 +24,16 @@ jobs:
       KAIROS_ROOT: ${{ github.workspace }}/kairos
     steps:
       - name: Checkout Mnemo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Checkout Kairos VM
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: nicologiuliani6/kairos
           path: kairos
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -43,7 +41,10 @@ jobs:
         run: make venv
 
       - name: Build Kairos VM
-        run: make -C "$KAIROS_ROOT" build-release
+        run: |
+          python -m venv "$KAIROS_ROOT/venv"
+          "$KAIROS_ROOT/venv/bin/pip" install -q ply
+          make -C "$KAIROS_ROOT" build-release
 
       - name: Run gcc parity suite
         run: make test-gcc-compat
