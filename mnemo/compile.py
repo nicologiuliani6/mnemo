@@ -2224,14 +2224,10 @@ def compile_c_to_kairos(
         infer_auto_lib_files(ast),
         infer_lib_files_from_calls(ast, proc_index),
     )
-    # `__mn_mask_u32` (helpers.kairos) ora chiama `__mn_divmod_nonneg_fast`
-    # (divmod.kairos) invece dell'opcode nativo `mnsplit32`. Un programma con
-    # SOLO variabili u32 (nessun `*`/`/`/`%`/bitwise/`printf` altrove) non fa
-    # scattare nessuno degli euristici sopra: forziamo qui la dipendenza,
-    # altrimenti `__mn_divmod_nonneg_fast` risulterebbe chiamata ma non
-    # definita a runtime.
+    # Variabili u32: le scritture passano per `__mn_mask_u32` (helpers.kairos),
+    # anche se nessun operatore del programma la richiede.
     if _ast_has_u32_vars(ast):
-        lib_names = _merge_lib_lists(lib_names, ["helpers.kairos", "divmod.kairos"])
+        lib_names = _merge_lib_lists(lib_names, ["helpers.kairos"])
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")

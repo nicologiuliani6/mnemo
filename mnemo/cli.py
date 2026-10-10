@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> None:
         type=int,
         default=0,
         metavar="N",
-        help="celle pool malloc/free (__mn_mem0..__mn_mem{N-1}); default 0 = auto-inferito da numero di malloc/calloc nel sorgente; override solo verso l'alto se serve più capacità",
+        help="celle di heap per malloc/calloc in coda all'array __mn_mem; default 0 = auto (dalle malloc del sorgente, almeno 1024 se ce ne sono); N alza il minimo",
     )
     p_c.add_argument(
         "--arr-max",

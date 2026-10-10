@@ -13,11 +13,16 @@ ramo destro (rami diversi di un `par` non possono usare lo stesso array).
   ma non dove serve un identificatore (push, show, ssend/srecv, argomenti di
   call): lì la cella passa per un temporaneo `local … delocal`.
 - `a[i] += e` non può citare `a` in `e`: anche lì un temporaneo.
+- Il lowering indicizza a runtime con catene `if ix==0 … else if ix==k …` il cui
+  ramo k è lo stesso schema sulla cella base+k: qui la catena diventa un solo
+  accesso `__mn_mem[(base + ix)]` (O(1) invece di O(N)).
 """
 
 from __future__ import annotations
 
 import re
+
+from dataclasses import fields, replace
 
 from mnemo.errors import MnemoCompileError
 from mnemo.ir import (
@@ -46,11 +51,66 @@ from mnemo.ir import (
 MEM = "__mn_mem"
 MEM_R = "__mn_memR"
 _CELL = re.compile(r"__mn_mem(\d+)\b")
+# cella a indice calcolato (catene affini): __mn_mem<base>+<ix>[+<iy>…]
+_ANY_CELL = re.compile(r"__mn_mem(\d+)((?:\+\w+)*)\b")
 
 
 def _cell_idx(name: str) -> int | None:
     m = _CELL.fullmatch(name)
     return int(m.group(1)) if m else None
+
+
+def _map_names(x, fn):
+    """Applica `fn` a ogni stringa di un'istruzione IR (nomi, guardie, Var),
+    ricorsivamente nei corpi annidati."""
+    if isinstance(x, str):
+        return fn(x)
+    if isinstance(x, Var):
+        return Var(fn(x.name))
+    if isinstance(x, list):
+        return [_map_names(e, fn) for e in x]
+    if hasattr(x, "__dataclass_fields__") and not isinstance(x, Imm):
+        return replace(x, **{fl.name: _map_names(getattr(x, fl.name), fn) for fl in fields(x)})
+    return x
+
+
+_CELL_CALL = re.compile(r"I(?:Un)?[Cc]all\(proc='[^']*', args=\[[^\]]*__mn_mem\d")
+
+
+def _has_cell_call(instrs: list) -> bool:
+    """Corpo con call che ricevono celle, par o try: non lo si riscrive."""
+    r = repr(instrs)
+    return bool(_CELL_CALL.search(r)) or "IPar(" in r or "ITry(" in r
+
+
+def _affine_chain(ins) -> list | None:
+    """Se `ins` è una catena `if ix==0 then B0 else if ix==1 then B1 … fi` in cui
+    B_k è B_0 con ogni cella spostata di k, ritorna B_0 con le celle riscritte
+    `__mn_mem<base>+<ix>`; altrimenti None."""
+    ix = ins.lhs
+    bodies = []
+    node = ins
+    while True:
+        if not (isinstance(node, IIfKairos) and node.lhs == ix and node.op == "=="
+                and node.rhs == str(len(bodies))):
+            return None
+        bodies.append(node.then_instrs)
+        if node.else_instrs is None:
+            break
+        if len(node.else_instrs) != 1:
+            return None
+        node = node.else_instrs[0]
+    if len(bodies) < 2 or not _CELL.search(repr(bodies[0])) or _has_cell_call(bodies[0]):
+        return None
+
+    def shift(k):
+        return lambda s: _CELL.sub(lambda m: f"__mn_mem{int(m.group(1)) - k}", s)
+
+    norm0 = repr(bodies[0])
+    for k in range(1, len(bodies)):
+        if repr(_map_names(bodies[k], shift(k))) != norm0:
+            return None
+    return _map_names(bodies[0], lambda s: _CELL.sub(lambda m: f"{m.group(0)}+{ix}", s))
 
 
 class _Fn:
@@ -64,14 +124,24 @@ class _Fn:
         self.par_post: list = []  # e il loro annullamento, dopo
         self.n_tmp = 0
 
-    def ref(self, k: int) -> str:
-        if k < self.window:
-            return f"{MEM}[{k}]"
-        if not self.owns_right:
-            raise MnemoCompileError(
-                f"arrayize: cella {k} fuori dalla finestra ({self.window}) fuori da main"
-            )
-        return f"{MEM_R}[{k - self.window}]"
+    def ref(self, k: int, off: str = "") -> str:
+        """Cella k (più gli indici runtime `off` = "+ix+iy…")."""
+        arr, base = MEM, k
+        if k >= self.window:
+            if not self.owns_right:
+                raise MnemoCompileError(
+                    f"arrayize: cella {k} fuori dalla finestra ({self.window}) fuori da main"
+                )
+            arr, base = MEM_R, k - self.window
+        if not off:
+            return f"{arr}[{base}]"
+        terms = " + ".join([str(base)] + [self.sub(v) for v in off[1:].split("+")])
+        return f"{arr}[({terms})]"
+
+    def cell(self, name: str) -> str | None:
+        """Riferimento Kairos se `name` è una cella (statica o calcolata)."""
+        m = _ANY_CELL.fullmatch(name)
+        return self.ref(int(m.group(1)), m.group(2)) if m else None
 
     def tmp(self) -> str:
         self.n_tmp += 1
@@ -79,7 +149,7 @@ class _Fn:
 
     def sub(self, s: str) -> str:
         """Riscrive ogni `__mn_memK` in una stringa (nome o espressione)."""
-        return _CELL.sub(lambda m: self.ref(int(m.group(1))), s)
+        return _ANY_CELL.sub(lambda m: self.ref(int(m.group(1)), m.group(2)), s)
 
     def op(self, o):
         if isinstance(o, Var):
@@ -90,24 +160,6 @@ class _Fn:
 def _array_of(cell_ref: str) -> str | None:
     i = cell_ref.find("[")
     return cell_ref[:i] if i > 0 else None
-
-
-def _wrap_id(f: _Fn, name: str, use) -> list:
-    """`use(t)` dove serviva un identificatore e c'era la cella `name`:
-    t riceve il valore (spostato: la cella va a 0), poi torna nella cella."""
-    k = _cell_idx(name)
-    if k is None:
-        return use(name)
-    c = f.ref(k)
-    t = f.tmp()
-    return [
-        ILocalBlock(
-            t,
-            [IAddEq(t, Var(c)), ISubEq(c, Var(t))]
-            + use(t)
-            + [IAddEq(c, Var(t)), ISubEq(t, Var(c))],
-        )
-    ]
 
 
 def _assign(f: _Fn, cls, dst: str, rhs) -> list:
@@ -146,12 +198,13 @@ def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[s
         seen: dict[str, str] = {}
         out = []
         for a in args:
-            if _cell_idx(a) is None:
+            c = f.cell(a)
+            if c is None:
                 out.append(a)
                 continue
             if a not in seen:
                 seen[a] = f.tmp()
-                moved.append((f.ref(_cell_idx(a)), seen[a]))
+                moved.append((c, seen[a]))
             out.append(seen[a])
         if len(moved) > 8:
             # guardia: decine di celle passate una a una a una procedura di
@@ -217,25 +270,25 @@ def _one(f: _Fn, ins, fns: dict[str, Function]) -> list:
                                     IAddEq(b, Var(t)), ISubEq(t, Var(b))])]
         return [ISwap(a, b)]
     if isinstance(ins, IHistPush):
-        k = _cell_idx(ins.var)
-        if k is None:
+        c = f.cell(ins.var)
+        if c is None:
             return [ins]
-        c, t = f.ref(k), f.tmp()
+        t = f.tmp()
         return [ILocalBlock(t, [IAddEq(t, Var(c)), ISubEq(c, Var(t)), IHistPush(ins.hist, t)])]
     if isinstance(ins, IShow):
-        k = _cell_idx(ins.var)
-        if k is None:
+        c = f.cell(ins.var)
+        if c is None:
             return [ins]
-        c, t = f.ref(k), f.tmp()
+        t = f.tmp()
         return [ILocalBlock(t, [IAddEq(t, Var(c)), IShow(t, ins.as_char), ISubEq(t, Var(c))])]
     if isinstance(ins, ISsend):
         pre, atoms = [], []
         for a in ins.payload_atoms:
-            k = _cell_idx(a)
-            if k is None:
+            c = f.cell(a)
+            if c is None:
                 atoms.append(a)
                 continue
-            c, t = f.ref(k), f.tmp()
+            t = f.tmp()
             pre.append((t, [IAddEq(t, Var(c)), ISubEq(c, Var(t))]))
             atoms.append(t)
         body: list = [ISsend(ins.channel, atoms)]
@@ -245,11 +298,11 @@ def _one(f: _Fn, ins, fns: dict[str, Function]) -> list:
     if isinstance(ins, ISrecv):
         post, dests = [], []
         for d in ins.dests:
-            k = _cell_idx(d)
-            if k is None:
+            c = f.cell(d)
+            if c is None:
                 dests.append(d)
                 continue
-            c, t = f.ref(k), f.tmp()
+            t = f.tmp()
             post.append((t, [IAddEq(c, Var(t)), ISubEq(t, Var(c))]))
             dests.append(t)
         body = [ISrecv(dests, ins.channel)]
@@ -277,6 +330,9 @@ def _one(f: _Fn, ins, fns: dict[str, Function]) -> list:
                                 + [IAddEq(c, Var(t)), ISubEq(t, Var(c))])]
         return body
     if isinstance(ins, IIfKairos):
+        body = _affine_chain(ins)
+        if body is not None:
+            return _seq(f, body, fns)
         return [IIfKairos(f.sub(ins.lhs), ins.op, f.sub(ins.rhs),
                           _seq(f, ins.then_instrs, fns),
                           _seq(f, ins.else_instrs, fns) if ins.else_instrs is not None else None)]
