@@ -15,7 +15,6 @@ from mnemo.c_lower import (
 )
 from mnemo.inline_user import maybe_inline_user_functions
 from mnemo.layout_collect import compute_program_mem_layout
-from mnemo.par_shared_mutex_check import check_par_shared_mutex_discipline
 from mnemo.c_parse import parse_c
 from mnemo.emit_kairos import emit_program
 from mnemo.errors import MnemoCompileError
@@ -30,14 +29,12 @@ from mnemo.ir import (
     Instr,
     ITry,
     IUncall,
-    IVmDump,
     Program,
 )
 from mnemo.prelude import (
     lib_procedure_index,
     load_prelude_kairos,
     parse_mnemo_main_argc,
-    parse_mnemo_skip_par_shared_mutex_check,
 )
 from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 import sys
@@ -1823,43 +1820,6 @@ def _program_uses_ptr_pool(prog: Program) -> bool:
     return False
 
 
-def _instr_list_uses_floor_snap_instr(instrs: list[Instr]) -> bool:
-    stack: list[list[Instr]] = [instrs]
-    while stack:
-        cur = stack.pop()
-        for ins in cur:
-            if isinstance(ins, ICall) and ins.proc == "__mn_hist_floor_snap":
-                return True
-            if isinstance(ins, IIfKairos):
-                stack.append(ins.then_instrs or [])
-                if ins.else_instrs:
-                    stack.append(ins.else_instrs)
-            elif isinstance(ins, IFromUntilKairos):
-                stack.append(ins.body_instrs or [])
-                stack.append(ins.body2_instrs or [])
-            elif isinstance(ins, ILocalBlock):
-                stack.append(ins.body_instrs or [])
-            elif isinstance(ins, ITry):
-                stack.append(ins.body_instrs or [])
-                stack.append(ins.rollback_instrs or [])
-            elif isinstance(ins, IPar):
-                for br in ins.branches or []:
-                    stack.append(br)
-    return False
-
-
-def _program_uses_hist_floor_snap(prog: Program) -> bool:
-    """IR con `call __mn_hist_floor_snap` (--opt-uncall-user-calls) → prelude `mn_hist_floor_snap.kairos`."""
-    return any(
-        _instr_list_uses_floor_snap_instr(b.instrs)
-        for fn in prog.functions
-        for b in fn.blocks
-    )
-
-
-# Prima riga del .kairos: il frontend Kairos la rimuove e disattiva il check
-# «race su int nel PAR» (serve per variabili file-scope condivise + mutex Mnemo).
-KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA = "// KAIROS_ALLOW_PAR_SHARED_INT\n"
 
 
 def _wrap_main_in_invertibility_check(prog: Program) -> None:
@@ -1881,12 +1841,10 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
         for (t, n) in old_main.locals
         if not (t == "stack" and n in ("__mn_hist", "__mn_scratch"))
     ]
-    # Dump dello stato forward PRIMA dell'uncall: blocco trailing con `dump()`.
-    # emit_kairos lo emette dopo il corpo, prima dei delocal auto → tutte le
-    # celle __mn_mem* sono ancora vive. Così il dump esce sempre, anche se
-    # l'uncall fallisce (ssend/channel) o reverte la memoria.
+    # L'output del forward (show) esce prima dell'uncall, che gira con gli show
+    # soppressi; il dump finale della VM mostra solo hist/scratch, vuoti se
+    # l'inverso ha riportato tutto allo stato iniziale.
     inner_blocks = list(old_main.blocks)
-    inner_blocks.append(Block(bid="__mn_inv_dump", instrs=[IVmDump()]))
     inner = Function(
         name="__main__",
         params=[("stack", "__mn_hist"), ("stack", "__mn_scratch")],
@@ -1943,55 +1901,33 @@ def _infer_arr_max(ast: c.FileAST) -> int:
     return max_total
 
 
-def auto_select_optimizations(path: str) -> tuple[bool, bool, str]:
-    """Analizza il `.c` e sceglie automaticamente (native_arith, opt_uncall).
+def auto_select_optimizations(path: str) -> tuple[bool, str]:
+    """Analizza il `.c` e sceglie automaticamente opt_uncall.
 
-    Euristica trasparente (override coi flag espliciti):
-    - **native_arith** se il programma ha aritmetica/bitwise non banale
-      (mul/div/mod + &|^<<>>) o letture array a indice (tabelle): nativo evita i
-      loop bitwise interpretati (31 iter/op) e il dispatch pool_load a 917 param.
-      Nessun lato negativo (sempre corretto), quindi soglia bassa.
+    Euristica trasparente (override col flag esplicito):
     - **opt_uncall** se la memoria nominata è grande (molte celle: array grandi)
       MA il programma NON è bitwise-heavy. L'opt-uncall scambia spazio per tempo
       (riduce il picco di celle ripetendo l'inverse del corpo); conviene quando le
       celle sono tante e il corpo è economico. Su codice bitwise-heavy (es. DES)
       è una perdita netta in tempo → non si attiva.
 
-    Ritorna (native_arith, opt_uncall, motivazione_stampabile).
+    Ritorna (opt_uncall, motivazione_stampabile).
     """
     ast = parse_c(path)
-    n_arith = n_bitwise = n_ptr = n_arrayref = 0
-    _ARITH = {"*", "/", "%"}
+    n_bitwise = 0
     _BIT = {"&", "|", "^", "<<", ">>"}
-    _CARITH = {"*=", "/=", "%="}
     _CBIT = {"&=", "|=", "^=", "<<=", ">>="}
     for node in _iter_c_nodes(ast):
-        if isinstance(node, c.BinaryOp):
-            if node.op in _ARITH:
-                n_arith += 1
-            elif node.op in _BIT:
-                n_bitwise += 1
-        elif isinstance(node, c.Assignment):
-            if node.op in _CARITH:
-                n_arith += 1
-            elif node.op in _CBIT:
-                n_bitwise += 1
-        elif isinstance(node, c.UnaryOp) and node.op == "*":
-            n_ptr += 1
-        elif isinstance(node, c.ArrayRef):
-            n_arrayref += 1
+        if isinstance(node, c.BinaryOp) and node.op in _BIT:
+            n_bitwise += 1
+        elif isinstance(node, c.Assignment) and node.op in _CBIT:
+            n_bitwise += 1
     named_cells = _infer_arr_max_total(ast)
-    native_arith = (n_arith + n_bitwise) >= 4 or n_arrayref >= 8
     opt_uncall = named_cells >= 256 and n_bitwise <= 24
 
     def _on(b: bool) -> str:
         return "ON " if b else "off"
 
-    na_why = (
-        f"arith+bitwise={n_arith + n_bitwise}, array-read={n_arrayref}"
-        if native_arith
-        else f"arith+bitwise={n_arith + n_bitwise}, array-read={n_arrayref} — sotto soglia"
-    )
     if opt_uncall:
         ou_why = f"celle≈{named_cells}, bitwise={n_bitwise} — memoria alta, corpo leggero"
     elif named_cells < 256:
@@ -2001,10 +1937,9 @@ def auto_select_optimizations(path: str) -> tuple[bool, bool, str]:
 
     reason = (
         "auto-opt:\n"
-        f"  native-arith : {_on(native_arith)}  ({na_why})\n"
         f"  opt-uncall   : {_on(opt_uncall)}  ({ou_why})"
     )
-    return native_arith, opt_uncall, reason
+    return opt_uncall, reason
 
 
 def _infer_arr_max_total(ast: c.FileAST) -> int:
@@ -2327,31 +2262,6 @@ def compile_c_to_kairos(
             f"celle memoria (layout) {layout.total_cells} superano il limite pool "
             f"{PTR_POOL_MAX} (prova a ridurre --ptr-pool-size o le variabili C)"
         )
-    if (
-        mem_units == 2
-        and layout.parallel_file_shared_slots
-        and not parse_mnemo_skip_par_shared_mutex_check(src)
-    ):
-        check_par_shared_mutex_discipline(ast, layout)
-    # opt-uncall su fn con u64+shift: escluso via seed. Storia:
-    #  - Bug #1 (POP stack vuoto): il native hist undo
-    #    `mn_floor_div2_signed_hist_undo` decideva il ramo >=0/<0 dal `ts` POPPATO
-    #    invece che dal valore LIVE → su int64 negativi divergeva dal replay →
-    #    push/pop count mismatch → `[VM] POP: stack vuoto!` nel successivo
-    #    __mn_shr_into. RISOLTO in kairos `mn_native_arith.h` (undo live-value-driven,
-    #    verificato su rotate/u64shift: opt+native byte-1:1, encrypt non regredito).
-    #  - Bug #2 (ancora aperto): opt-uncall di una fn con un LOOP interno che
-    #    accumula+ritorna un valore → `[VM] DELOCAL: __mn_lc1 atteso=0 trovato=1`
-    #    (inverse del from-loop non riporta il loop-counter a 0). NON è u64-specifico
-    #    (repro int `/tmp/loopopt.c`): è un limite pre-esistente di opt-uncall sui
-    #    loop, solo non colpito dal corpus. Finché Bug #2 è aperto teniamo il seed
-    #    (des resta byte-identico a prima). Vedi TODO.
-    # Seed vuoto: entrambi i bug che bloccavano opt-uncall su fn u64-shift sono
-    # risolti lato Kairos VM — Bug #1 (POP stack vuoto: native floor_div2 hist
-    # undo live-value-driven) e Bug #2 (DELOCAL loop-counter: la forward op_jmpf
-    # non pusha più su branch_trace gli IF dentro un from-loop, così la window
-    # LIFO degli IF top-level resta allineata in uncall). Ora opt si applica anche
-    # alle fn u64-shift con loop (des: permute/feistel/key_schedule).
     uncall_extra_seeds: frozenset[str] = frozenset()
     prog = lower_file_to_program(
         ast,
@@ -2381,8 +2291,6 @@ def compile_c_to_kairos(
             lib_names = _merge_lib_lists(
                 lib_names, ["helpers.kairos", "mul.kairos", "divmod.kairos"]
             )
-    if _program_uses_hist_floor_snap(prog):
-        lib_names = _merge_lib_lists(["mn_hist_floor_snap.kairos"], lib_names)
     try:
         prelude = load_prelude_kairos(
             lib_names,
@@ -2397,11 +2305,6 @@ def compile_c_to_kairos(
         raise MnemoCompileError(str(e)) from e
     body = emit_program(prog)
     out = (prelude + body) if prelude else body
-    if (
-        mem_units == 2
-        and layout.parallel_file_shared_slots
-    ):
-        out = KAIROS_ALLOW_PAR_SHARED_INT_PRAGMA + out
     return out
 
 

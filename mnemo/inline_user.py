@@ -86,8 +86,6 @@ def _keep_name_atom(n: str) -> bool:
         return True
     if n in ("__mn_hist", "__mn_scratch", "__mn_exit"):
         return True
-    if n.startswith("__mn_mtx_"):
-        return True
     return False
 
 
@@ -323,58 +321,36 @@ def _expand_user_calls(
         i = 0
         while i < len(lst):
             ins = lst[i]
-            # Strip opt-uncall wrapping around un'ICall che stiamo per inlinare:
-            #   ICall("__mn_hist_floor_snap") + ICall(proc) + [IXorEq...] +
-            #   IUncall(proc) + [IXorEq triple per ogni snap pair]
-            # Inline diretto = no opt-uncall (semantic-equiv: l'inline preserva il
-            # comportamento forward, lo snap orfano causa VM panic).
-            if (
-                isinstance(ins, ICall)
-                and ins.proc == "__mn_hist_floor_snap"
-                and i + 1 < len(lst)
-                and isinstance(lst[i + 1], ICall)
-                and lst[i + 1].proc in defined
-            ):
-                inline_proc = lst[i + 1].proc
-                # Trova l'IUncall(inline_proc) successivo (con XorEq fra mezzo).
-                j = i + 2
-                while j < len(lst) and isinstance(lst[j], IXorEq):
-                    j += 1
-                if (
-                    j < len(lst)
-                    and isinstance(lst[j], IUncall)
-                    and lst[j].proc == inline_proc
-                ):
-                    # Conta gli XorEq pre-uncall (snap_pairs N) → 3*N post-uncall.
-                    n_snaps = j - (i + 2)
-                    end = j + 1 + 3 * n_snaps
-                    # Inline solo la forward call; salta snap+xor+uncall+xor.
-                    callee = fn_by_name.get(inline_proc)
-                    if callee is None:
-                        raise MnemoCompileError(
-                            f"inline: funzione {inline_proc!r} non trovata nell'IR"
-                        )
-                    sid = counter[0]
-                    counter[0] += 1
-                    ren = lambda n, s=sid: _rename_atom(n, s)  # noqa: E731
-                    body = callee.blocks[0].instrs
-                    cloned = _rename_instrs(body, ren)
-                    res.extend(expand_one(cloned))
-                    i = end
-                    continue
             if isinstance(ins, ICall) and ins.proc in defined:
                 callee = fn_by_name.get(ins.proc)
                 if callee is None:
                     raise MnemoCompileError(
                         f"inline: funzione {ins.proc!r} non trovata nell'IR"
                     )
+                # Opt-uncall attorno alla call che stiamo per inlinare:
+                #   ICall(proc) + [IXorEq snap]*N + IUncall(proc) +
+                #   N × (IXorEq, IXorEq, IXorEq, IHistPush scratch)
+                # Inline diretto = no opt-uncall (semantic-equiv: l'inline
+                # preserva il comportamento forward): si salta tutto il wrapping.
+                end = i + 1
+                j = i + 1
+                while j < len(lst) and isinstance(lst[j], IXorEq):
+                    j += 1
+                if j < len(lst) and isinstance(lst[j], IUncall) and lst[j].proc == ins.proc:
+                    k = j + 1
+                    for _ in range(j - (i + 1)):
+                        if all(isinstance(x, IXorEq) for x in lst[k:k + 3]):
+                            k += 3
+                            if k < len(lst) and isinstance(lst[k], IHistPush):
+                                k += 1
+                    end = k
                 sid = counter[0]
                 counter[0] += 1
                 ren = lambda n, s=sid: _rename_atom(n, s)  # noqa: E731
                 body = callee.blocks[0].instrs
                 cloned = _rename_instrs(body, ren)
                 res.extend(expand_one(cloned))
-                i += 1
+                i = end
                 continue
             if isinstance(ins, IIfKairos):
                 res.append(

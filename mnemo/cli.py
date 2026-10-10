@@ -234,11 +234,6 @@ def main(argv: list[str] | None = None) -> None:
         help="stampa anche il blocco dump della VM (dopo «=== VM dump ===»); default: no",
     )
     p_r.add_argument(
-        "--native-arith",
-        action="store_true",
-        help="abilita KAIROS_NATIVE_ARITH=1 nella VM (mul/div/bitwise O(1) in C, uncall preservato)",
-    )
-    p_r.add_argument(
         "--vm-stats",
         action="store_true",
         help="dopo il dump VM stampa mean_abs e max_abs dei cell int rimasti (stats post-execution)",
@@ -246,9 +241,8 @@ def main(argv: list[str] | None = None) -> None:
     p_r.add_argument(
         "--auto",
         action="store_true",
-        help="sceglie automaticamente le ottimizzazioni (--native-arith / "
-        "--opt-uncall-user-calls) dal contenuto del .c (n. arith/bitwise/array, "
-        "celle). Stampa la decisione su stderr. I flag espliciti vincono.",
+        help="sceglie automaticamente --opt-uncall-user-calls dal contenuto del .c "
+        "(celle, bitwise). Stampa la decisione su stderr. Il flag esplicito vince.",
     )
     p_r.set_defaults(handler=_cmd_run)
 
@@ -404,17 +398,14 @@ def _cmd_run(args: argparse.Namespace) -> None:
     if getattr(args, "auto", False):
         from mnemo.compile import auto_select_optimizations
         try:
-            na, ou, reason = auto_select_optimizations(args.input)
+            ou, reason = auto_select_optimizations(args.input)
         except MnemoCompileError as e:
             print(f"mnemo: {e}", file=sys.stderr)
             sys.exit(1)
         print(f"mnemo: {reason}", file=sys.stderr)
-        # I flag espliciti dell'utente vincono: --auto abilita solo ciò che non
-        # è già stato chiesto.
+        # Il flag esplicito dell'utente vince: --auto abilita solo se non chiesto.
         if not args.opt_uncall_user_calls:
             args.opt_uncall_user_calls = ou
-        if not getattr(args, "native_arith", False):
-            args.native_arith = na
     try:
         out = compile_c_to_kairos(
             args.input,
@@ -459,8 +450,6 @@ def _cmd_run(args: argparse.Namespace) -> None:
             cmd = [exe, out_abs]
 
     run_env = os.environ.copy()
-    if getattr(args, "native_arith", False):
-        run_env["KAIROS_NATIVE_ARITH"] = "1"
     if getattr(args, "vm_stats", False):
         run_env["KAIROS_VM_STATS"] = "1"
         # Propaga il flag al wrapper kairos (parse di sys.argv per --vm-stats).

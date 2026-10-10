@@ -956,7 +956,7 @@ class _Ctx:
     param_storage_order: tuple[str, ...] = ()
     channel_kairos: dict[str, str] = field(default_factory=dict)
     channel_decl_order: list[str] = field(default_factory=list)
-    # Ordine dei canali file-scope passati in coda alle procedure: mutex `__mn_mtx_*` e π `__mn_kch_*`.
+    # Ordine dei canali file-scope passati in coda alle procedure: mutex e π, tutti `__mn_kch_*`.
     file_scope_channel_order: tuple[str, ...] = ()
     """Dopo `mnemo_pthread_parallel2` in main: letture campi worker-1 usano la 2ª partizione."""
     after_par_join: bool = False
@@ -2180,70 +2180,6 @@ def _file_scope_channel_actuals(ctx: _Ctx) -> list[str]:
     return [ctx.channel_kairos[m] for m in ctx.file_scope_channel_order]
 
 
-def pthread_mutex_channel_key_for_par_check(
-    arg: c.Node,
-    fdef: c.FuncDef,
-    td: dict[str, c.Node],
-    struct_specs: dict[str, list[tuple[str, c.Node]]],
-) -> str | None:
-    """
-    Ricava la stessa chiave canale usata dal lowering per `pthread_mutex_*(&…)`.
-    Per `par_shared_mutex_check` (senza _Ctx pieno).
-    """
-    if not isinstance(arg, c.UnaryOp) or arg.op != "&":
-        return None
-    inner = arg.expr
-    if isinstance(inner, c.ID):
-        return inner.name
-    if isinstance(inner, c.StructRef) and inner.type == "->":
-        base, path = _structref_base_and_path(inner)
-        mangled = "__".join(path)
-        fd = fdef.decl.type
-        if not isinstance(fd, c.FuncDecl) or fd.args is None:
-            return None
-        mini = _Ctx(typedef_map=dict(td), struct_specs=dict(struct_specs))
-        for p in fd.args.params:
-            if not isinstance(p, c.Decl):
-                continue
-            pname = p.name or _decl_basename_from_innermost(p.type)
-            if pname != base:
-                continue
-            tag = _pointee_struct_tag(p.type, mini)
-            fields = struct_specs.get(tag, [])
-            if any(
-                fn == mangled and _type_node_is_pthread_mutex(fty, td)
-                for fn, fty in fields
-            ):
-                return f"{base}__{tag}__{mangled}"
-            return None
-        return None
-    if isinstance(inner, c.StructRef) and inner.type == ".":
-        base, path = _structref_base_and_path(inner)
-        mangled = "__".join(path)
-        fd = fdef.decl.type
-        if not isinstance(fd, c.FuncDecl) or fd.args is None:
-            return None
-        mini = _Ctx(typedef_map=dict(td), struct_specs=dict(struct_specs))
-        for p in fd.args.params:
-            if not isinstance(p, c.Decl):
-                continue
-            pname = p.name or _decl_basename_from_innermost(p.type)
-            if pname != base:
-                continue
-            tag = _struct_tag_for_decl_type(p.type, mini)
-            if tag is None:
-                return None
-            fields = struct_specs.get(tag, [])
-            if any(
-                fn == mangled and _type_node_is_pthread_mutex(fty, td)
-                for fn, fty in fields
-            ):
-                return f"{base}__{tag}__{mangled}"
-            return None
-        return None
-    return None
-
-
 def _pthread_mutex_channel_key(arg: c.Node, ctx: _Ctx) -> str:
     if not isinstance(arg, c.UnaryOp) or arg.op != "&":
         raise MnemoCompileError(
@@ -2992,53 +2928,19 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             return pre + body + post
         return pre + [par] + post
 
-    if nm == "pthread_mutex_init":
-        if len(exprs) != 2:
-            raise MnemoCompileError("pthread_mutex_init: attesi 2 argomenti")
-        vn = _pthread_mutex_channel_key(exprs[0], ctx)
-        ch = ctx.channel_kairos[vn]
-        tok = ctx.fresh_temp()
-        ctx.use_hist = True
-        return [
-            IComment("pthread_mutex_init → token su canale (mutex libero)"),
-            IConst(tok, 1),
-            ISsend(ch, [tok]),
-        ]
-
-    if nm == "pthread_mutex_lock":
-        if len(exprs) != 1:
-            raise MnemoCompileError("pthread_mutex_lock: atteso 1 argomento")
-        vn = _pthread_mutex_channel_key(exprs[0], ctx)
-        ch = ctx.channel_kairos[vn]
-        t = ctx.fresh_temp()
-        ctx.use_hist = True
-        return [
-            IComment("pthread_mutex_lock → srecv token (π-style)"),
-            ISrecv([t], ch),
-            ISubEq(t, Imm(1)),
-        ]
-
-    if nm == "pthread_mutex_unlock":
-        if len(exprs) != 1:
-            raise MnemoCompileError("pthread_mutex_unlock: atteso 1 argomento")
-        vn = _pthread_mutex_channel_key(exprs[0], ctx)
-        ch = ctx.channel_kairos[vn]
-        tok = ctx.fresh_temp()
-        ctx.use_hist = True
-        return [IConst(tok, 1), ISsend(ch, [tok])]
-
-    if nm == "pthread_mutex_destroy":
-        if len(exprs) != 1:
-            raise MnemoCompileError("pthread_mutex_destroy: atteso 1 argomento")
-        vn = _pthread_mutex_channel_key(exprs[0], ctx)
-        ch = ctx.channel_kairos[vn]
-        t = ctx.fresh_temp()
-        ctx.use_hist = True
-        return [
-            IComment("pthread_mutex_destroy: svuota token residuo sul canale (prima del delocal)"),
-            ISrecv([t], ch),
-            ISubEq(t, Imm(1)),
-        ]
+    # pthread_mutex_*: nel Kairos puro i rami di un `par` non condividono
+    # memoria (il frontend rifiuta le race sugli int) e un canale rendez-vous
+    # non può fare da mutex simmetrico (chi fa lock per primo non ha un partner
+    # che gli ceda il token). Non c'è quindi stato condiviso da proteggere:
+    # lock/unlock/init/destroy sono no-op. I canali veri (mps_t.lane, π) sono
+    # lowered altrove come ssend/srecv.
+    if nm in ("pthread_mutex_init", "pthread_mutex_lock",
+              "pthread_mutex_unlock", "pthread_mutex_destroy"):
+        want = 2 if nm == "pthread_mutex_init" else 1
+        if len(exprs) != want:
+            raise MnemoCompileError(f"{nm}: attesi {want} argomenti")
+        _pthread_mutex_channel_key(exprs[0], ctx)
+        return [IComment(f"{nm}: no-op (nessuna memoria condivisa fra rami par)")]
 
     return None
 
@@ -8452,7 +8354,7 @@ def _mps_channel_ptr_id(ch: c.Node) -> c.ID:
 
 
 def _mps_lane_channel_name(cid: c.ID, ctx: _Ctx) -> str:
-    """Risolve il canale Kairos del campo `lane` di mps_t (`__mn_mtx_<base>__<tag>__lane`)."""
+    """Risolve il canale Kairos del campo `lane` di mps_t (`__mn_kch_<base>__<tag>__lane`)."""
     coord = getattr(cid, "coord", None)
     lane_ref = c.UnaryOp(
         "&",
@@ -9790,10 +9692,7 @@ def _lower_funccall_with_ret(
                         ri = layout.slot_of[(name, rn)]
                         src_id = f"__mn_mem{ri}"
                         post_uc.extend(_lower_assign(dst, c.ID(src_id, coord), ctx))
-            call_uc: list[Instr] = []
-            if apply_opt:
-                call_uc.append(ICall("__mn_hist_floor_snap", [ctx.hist]))
-            call_uc.append(ICall(name, mem_args + pi_suffix + chx + stk))
+            call_uc: list[Instr] = [ICall(name, mem_args + pi_suffix + chx + stk)]
             if apply_opt:
                 call_uc.extend(uncall_with_restore)
             # Self-rec: ripristina gli slot-arg del chiamante DOPO l'estrazione del
@@ -11942,152 +11841,9 @@ def _lower_stmt(node: c.Node, ctx: _Ctx) -> list[Instr]:
                 raise MnemoCompileError("pthread_mutex_t: nome variabile mancante")
             name = str(node.type.declname)
             logical = _scope_declare(ctx, name)
-            # Prefisso `__mn_mtx` (NON `__mn_kch_`): la VM (vm_ops.h, op_ssend)
-            # riconosce questo prefisso e attiva semantica "mailbox" (SSEND non
-            # bloccante: deposita nel buffer del canale anche senza un ricevitore
-            # già in attesa). Estensione VM fuori dal sottoinsieme puro Kairos
-            # (kairos_sos.tex prevede solo ssend/srecv sincroni, rendez-vous puro).
-            #
-            # TENTATIVO REALE di eliminarla (migrazione verso il sottoinsieme
-            # puro): verificato con un test minimo single-thread (init; lock;
-            # unlock; destroy, NESSUNA concorrenza) che sostituendo il prefisso
-            # con un canale normale (`__mn_kch_`, rendez-vous puro) la VM va in
-            # DEADLOCK — l'op_ssend di pthread_mutex_init blocca il thread in
-            # attesa di un ricevitore, ma il corrispondente pthread_mutex_lock
-            # (srecv) è sequenziale DOPO, nello stesso thread: nessuno può mai
-            # ricevere mentre il sender è bloccato in attesa di essere ricevuto
-            # (autodeadlock strutturale). Vedi vm_channel.h:op_wait — per canali
-            # non-mailbox un SSEND senza ricevitore già in coda si accoda e
-            # blocca (`while (!self->ready) pthread_cond_wait(...)`), non
-            # ritorna mai finché qualcuno non fa srecv — ma qui quel qualcuno è
-            # lo stesso thread, più avanti nel proprio flusso sequenziale.
-            # Nessuna topologia di canali puri (token-ring incluso) risolve
-            # questo caso: serve un deposito asincrono (mailbox) OPPURE
-            # riscrivere pthread_mutex_* per non passare da un canale (es. stato
-            # come intero reversibile con guardie if, non più ssend/srecv) — un
-            # refactor molto più ampio, fuori scope qui. Lasciato invariato:
-            # NON RIMUOVERE il prefisso `__mn_mtx_`.
-            #
-            # SECONDO TENTATIVO REALE (design "buffer relay via par", non il
-            # semplice swap sopra): un terzo ramo `par` che fa `srecv` su un
-            # canale sincrono puro `raw` (dove init/unlock depositano) e
-            # immediatamente `ssend` su un secondo canale `buffered` (da cui
-            # lock legge), per disaccoppiare temporalmente sender e receiver
-            # con SOLO rendez-vous puri + un `par` in più. Verificato con un
-            # .kairos minimo scritto a mano (init→par{ssend raw}+{relay:
-            # srecv raw, ssend buffered}, poi FUORI dal par un srecv su
-            # buffered che simula lock sequenziale successivo): la VM Kairos
-            # RIFIUTA STATICAMENTE il programma, non va nemmeno in deadlock
-            # runtime — "[STATIC] channel 'buffered' usato da un solo thread
-            # nel blocco PAR (deve essere una sessione binaria, esattamente 2
-            # endpoint); manca il thread partner". Motivo strutturale: ogni
-            # `par` Kairos richiede che ENTRAMBI gli endpoint di ogni canale
-            # usato al suo interno siano risolti nello STESSO blocco `par`
-            # (sessione binaria statica) — non è ammesso un canale con un solo
-            # endpoint dentro il `par` e il partner risolto più tardi da
-            # codice sequenziale FUORI da quel `par` (confermato aggiungendo
-            # il consumer `buffered` come TERZO ramo dello STESSO par: in quel
-            # caso funziona, cf. scratchpad relay_test2.kairos). Per un mutex
-            # reale, però, `lock`/`unlock` successivi sono chiamate arbitrarie
-            # e sequenziali — possibilmente in loop, in funzioni diverse,
-            # condizionali — che NON possono essere note staticamente al
-            # momento di `init` per essere infilate nello stesso `par`. L'unica
-            # via sarebbe avvolgere l'INTERO corpo funzione (dal punto di
-            # deposito fino all'ultimo lock/unlock) in un `par` con il relay
-            # come ramo persistente: non un fix incrementale ("aggiungi un
-            # ramo buffer"), ma una ristrutturazione whole-function per OGNI
-            # funzione che usa un mutex, che non compone con mutex multipli
-            # (ognuno servirebbe il proprio relay annidato) né con loop/
-            # ricorsione/altri `par` che attraversano la vita del mutex — un
-            # refactor categoricamente diverso e più grande, fuori scope qui,
-            # con alto rischio di regressioni sui test mutex/producer-consumer
-            # già passanti (ex30_pthread_pi.c, mps.h). Onere architetturale
-            # residuo: mailbox asincrona genuina da canali sincroni + `par`
-            # fork-join richiederebbe un processo "server" persistente/
-            # ripetibile (tipo `!` del π-calcolo) che il sottoinsieme Kairos
-            # corrente (sessioni binarie statiche, `par` a rami fissi e
-            # joining) non esprime. NON RIMUOVERE il prefisso `__mn_mtx_`.
-            #
-            # TERZO TENTATIVO REALE (ramo kairos-pure-mutex-redesign): prima di
-            # ripetere gli swap già falliti sopra, analizzati TUTTI gli usi
-            # reali di pthread_mutex_t nel repo per capire se rientrano in un
-            # pattern più ristretto rimovibile con token-passing su canale
-            # sincrono puro CONFINATO in un unico `par` a rami fissi:
-            #   - ex30_pthread_pi.c / ex34_...sketch.c: mutex generato come
-            #     `local channel __mn_mtx_m` DENTRO ciascun worker (verificato
-            #     nel .kairos emesso) — MAI condiviso tra i due rami del par.
-            #     Zero contesa reale: non è un test rappresentativo di un
-            #     mutex, è un test sintattico (nessun canale da rimuovere).
-            #   - `mps_t.lane` (mps.h, usato da PC.c/kernel.c via i wrapper
-            #     ssend/srecv): già NON passa dalla mailbox oggi — vedi sotto
-            #     `file_scope_channel_kairos` (~riga 14563) e
-            #     `_lower_mps_ssend_inline`/`_lower_mps_srecv_inline` (~riga
-            #     8466+): chiave che termina in `__lane` → prefisso puro
-            #     `__mn_kch_`. Funziona perché è un handoff produttore→
-            #     consumatore ASIMMETRICO e a ordine fisso noto staticamente
-            #     (producer manda sempre N volte, consumer riceve sempre N
-            #     volte, mai il contrario): non è un mutex reale, è un canale
-            #     travestito da mutex. `init_mutexes`/`destroy_mutexes` per
-            #     questo caso sono no-op apposta (vedi ~riga 8439) proprio
-            #     perché non serve alcun token/deposito iniziale.
-            #   - `mnemo_sync_print_mutex` (mnemo_sync_print.h, righe 39/46/
-            #     55/57, usato da PC.c e kernel.c per serializzare printf/
-            #     sys_write tra i DUE rami del par): pthread_mutex_t GENERICO,
-            #     non wrappato da mps_t/ssend/srecv, quindi passa dal ramo
-            #     mailbox generico qui sopra. Lock/unlock chiamati da
-            #     ENTRAMBI i rami, in più punti sparsi (ogni printf), con
-            #     ordine di arrivo non noto staticamente (dipende dallo
-            #     scheduling reale dei thread VM — vedi vm_par.h/vm_channel.h,
-            #     pthread veri, non un interprete a turni fissi). QUESTO è il
-            #     caso che rompe l'ipotesi del pattern ristretto: è un mutex
-            #     simmetrico vero, non un canale travestito.
-            #
-            # Verificato empiricamente (non solo a occhio) con due repro
-            # nuovi, DIVERSI dal test single-thread già usato nel primo
-            # tentativo sopra, salvati nello scratchpad della sessione
-            # (mutex_shared_repro.c/.kairos, mutex_shared_repro_confined.kairos):
-            #  (1) mutex FILE-SCOPE condiviso da due rami reali di un par
-            #      (worker_a/worker_b, ciascuno lock;write;unlock sul proprio
-            #      contatore), init prima del par, destroy dopo — esattamente
-            #      la forma di mnemo_sync_print_mutex. Con la mailbox
-            #      (attuale): `__mn_exit: 2` corretto. Con SOLO il prefisso
-            #      sostituito `__mn_mtx_` → `__mn_kch_` (canale puro,
-            #      nessun'altra modifica): timeout/deadlock (exit 124).
-            #  (2) Variante "confinata": rimossi a mano `ssend` di init e
-            #      `srecv` di destroy dal .kairos, lasciando SOLO lock/unlock
-            #      dei due rami dentro il par (per testare l'ipotesi del
-            #      pattern ristretto richiesta da questo tentativo: canale
-            #      interamente dentro un unico par a rami fissi, non a
-            #      cavallo del bordo par come nel tentativo 1). Deadlock
-            #      comunque (exit 124): con un mutex reale entrambi i rami
-            #      fanno SEMPRE lock (srecv) come primissima operazione sul
-            #      canale — mai un unlock (ssend) senza un lock precedente,
-            #      per costruzione (non si rilascia ciò che non si è preso).
-            #      Quindi nessuno dei due può mai essere il primo "sender":
-            #      entrambi si accodano in recv_q (vm_channel.h:op_wait,
-            #      ramo `else`/is_send=0, righe 103-124) e nessuno sblocca
-            #      l'altro. Un mutex simmetrico richiede una risorsa
-            #      "disponibile fin da subito, senza un partner che la
-            #      richieda" — esattamente la semantica a buffer (mailbox,
-            #      `allow_mailbox_idle`, vm_channel.h riga 87-92) che un
-            #      canale sincrono puro non ha per definizione, indipendente-
-            #      mente da come si posiziona il codice rispetto ai confini
-            #      del `par` (non è quindi (solo) un problema di "dove sta il
-            #      par", come nei tentativi 1-2, ma una impossibilità più
-            #      di fondo: rendezvous puro non può rappresentare "primo
-            #      arrivato, servito subito" quando ENTRAMBE le parti possono
-            #      essere la prima a voler ricevere).
-            #
-            # Conclusione: NON tutti gli usi reali rientrano in un pattern
-            # ristretto rimovibile. `mnemo_sync_print_mutex` (mutex simmetrico
-            # reale, contesa non nota staticamente, usato da due file di test
-            # reali: PC.c e kernel.c) è un controesempio concreto che rompe
-            # l'ipotesi. Il mailbox (`__mn_mtx_*`) resta un'estensione VM
-            # NECESSARIA per questo sottoinsieme di programmi, non rimovibile
-            # restando nel sottoinsieme puro Kairos (solo rendez-vous binario
-            # a sessione statica, nessuna memoria condivisa tra rami `par`).
-            # NON RIMUOVERE il prefisso `__mn_mtx_`.
-            kai = f"__mn_mtx_{logical}"
+            # Canale puro come per i canali π: lock/unlock sono no-op (vedi
+            # _lower_pthread_builtin), il nome serve solo a risolvere `&mutex`.
+            kai = f"__mn_kch_{logical}"
             ctx.channel_kairos[logical] = kai
             ctx.channel_decl_order.append(logical)
             ctx.var_types[logical] = node.type
@@ -14658,20 +14414,7 @@ def lower_file_to_program(
     fs_pi = collect_file_scope_kairos_pi_channels(ast)
     fs_pi_set = frozenset(fs_pi)
     fs_ch_order = file_scope_channel_order(mutex_keys, fs_pi)
-    # `*__lane` (campo `lane` di mps_t single-channel): prefisso `__mn_kch_` per evitare
-    # le semantiche mailbox `__mn_mtx_*` della VM (la mailbox sovrascrive — qui serve FIFO).
-    # Il ramo `else` (mutex file-scope veri) resta `__mn_mtx_*` apposta: vedi il
-    # commento esteso sul caso locale `pthread_mutex_t` sopra (~riga 11898) —
-    # verificato empiricamente che togliere il prefisso mailbox causa deadlock
-    # anche nel caso più semplice (mutex single-thread, zero concorrenza).
-    file_scope_channel_kairos = {
-        k: (
-            f"__mn_kch_{k}"
-            if (k in fs_pi_set or k.endswith("__lane"))
-            else f"__mn_mtx_{k}"
-        )
-        for k in fs_ch_order
-    }
+    file_scope_channel_kairos = {k: f"__mn_kch_{k}" for k in fs_ch_order}
 
     if layout is None:
         layout = compute_program_mem_layout(ast, ptr_pool_size)

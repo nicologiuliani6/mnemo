@@ -319,6 +319,9 @@ def parse_c(path: str) -> c_ast.FileAST:
         cpp_args.append(f"-I{fake}")
     try:
         text = preprocess_file(path, cpp_path="gcc", cpp_args=cpp_args)
+        # `typedef _Bool bool;` (C99 senza stdbool) diventa `typedef _Bool _Bool;`
+        # per via dello stdbool.h auto-incluso: è già il tipo giusto, si toglie.
+        text = re.sub(r"\btypedef\s+_Bool\s+_Bool\s*;", "", text)
         # `offsetof` (stddef.h di gcc) → `__builtin_offsetof(T, M)`. Pycparser
         # non lo parsa, quindi convertiamo in `__mn_offsetof_str("T","M")`,
         # gestito poi in c_lower.py come costante compile-time.

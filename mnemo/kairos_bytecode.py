@@ -11,31 +11,22 @@ from pathlib import Path
 
 from mnemo.errors import MnemoCompileError
 
-# Eseguito nel venv Kairos: stdin = sorgente Kairos completo (eventuale pragma Mnemo in testa).
+# Eseguito nel venv Kairos: stdin = sorgente Kairos completo.
 _COMPILE_TO_BYTECODE_PY = r"""
 import sys
 sys.path.insert(0, sys.argv[1])
 from src.frontend.lexer import lexer
-from src.frontend.parser import parser, run_static_checks
+from src.frontend.parser import parser, run_static_checks, desugar_try
 from src.frontend.bytecode import ByteCode_Compiler
 from src.frontend.errors import KairosCompileError
 
-_K = "// KAIROS_ALLOW_PAR_SHARED_INT"
-
-def _strip(source):
-    lines = source.splitlines()
-    if lines and lines[0].strip() == _K:
-        body = lines[1:]
-        return ("\n".join(body) + ("\n" if body else ""), True)
-    return source, False
-
 source = sys.stdin.read()
-source, skip = _strip(source)
 try:
     ast = parser.parse(source, lexer=lexer)
     if ast is None:
         raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
-    run_static_checks(ast, check_par_int_race=not skip)
+    ast = desugar_try(ast)
+    run_static_checks(ast)
     c = ByteCode_Compiler()
     c.process(ast)
 except KairosCompileError as exc:

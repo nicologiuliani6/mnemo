@@ -30,6 +30,7 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
         delocal int m2 = 0
         i += 1
     loop until i == 32
+    local int lo = 0
     local int neg = 0
     if xorig < 0 then
         neg += 1
@@ -43,7 +44,6 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
     local int q = 0
     local int r = 0
     call __mn_divmod_nonneg_fast(ab, mod32, q, r, __mn_hist, __mn_scratch)
-    local int lo = 0
     if neg == 1 then
         local int rz = 0
         if r == 0 then
@@ -77,9 +77,9 @@ procedure __mn_mask_u32(int x, stack __mn_hist, stack __mn_scratch)
     x += lo
     push(lo, __mn_hist)
     delocal int lo = 0
-    push(xorig, __mn_hist)
-    delocal int xorig = 0
-    push(mod32, __mn_hist)
-    delocal int mod32 = 0
     push(i, __mn_hist)
     delocal int i = 0
+    push(mod32, __mn_hist)
+    delocal int mod32 = 0
+    push(xorig, __mn_hist)
+    delocal int xorig = 0

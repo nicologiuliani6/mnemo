@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch 5: parsing, stringhe, ricorsione, bit-manip, edge-case (con --native-arith dove serve)."""
+"""Batch 5: parsing, stringhe, ricorsione, bit-manip, edge-case."""
 import os
 OUT=os.path.join(os.path.dirname(__file__),"cases");os.makedirs(OUT,exist_ok=True)
 n=0

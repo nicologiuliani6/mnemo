@@ -1,61 +1,49 @@
-"""Test del controllo statico memoria condivisa + mutex per PAR a due regioni."""
+"""PAR a due regioni: memoria file-scope scritta da entrambi i rami.
+
+Nel Kairos puro i rami di un `par` non condividono memoria scrivibile: il
+controllo statico del frontend Kairos rifiuta la race (non serve più un check
+Mnemo né il pragma che lo disattivava, e i mutex sono no-op).
+"""
 
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 
-from mnemo.compile import compile_c_to_kairos
-from mnemo.errors import MnemoCompileError
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
-class TestParSharedMutex(unittest.TestCase):
-    def test_rejects_same_slot_without_file_mutex(self) -> None:
-        src = """
-typedef int pthread_mutex_t;
-void mnemo_pthread_parallel2(void (*a)(void), void (*b)(void));
-int x;
-void f(void) { x = 1; }
-void g(void) { x = 2; }
-int main(void) { mnemo_pthread_parallel2(f, g); return 0; }
-"""
-        path = self._write_temp_c(src)
-        try:
-            with self.assertRaises(MnemoCompileError) as ctx:
-                compile_c_to_kairos(path)
-            self.assertIn("pthread_mutex_t", str(ctx.exception))
-            self.assertIn("livello file", str(ctx.exception))
-        finally:
-            os.unlink(path)
-
-    def test_rejects_unlocked_access_with_file_mutex_present(self) -> None:
-        src = """
+_SRC = """
 typedef int pthread_mutex_t;
 int pthread_mutex_lock(pthread_mutex_t *m);
 int pthread_mutex_unlock(pthread_mutex_t *m);
 void mnemo_pthread_parallel2(void (*a)(void), void (*b)(void));
 pthread_mutex_t gmu;
 int x;
-void f(void) { x = 1; }
-void g(void) { x = 2; }
+void f(void) { pthread_mutex_lock(&gmu); x = 1; pthread_mutex_unlock(&gmu); }
+void g(void) { pthread_mutex_lock(&gmu); x = 2; pthread_mutex_unlock(&gmu); }
 int main(void) { mnemo_pthread_parallel2(f, g); return 0; }
 """
-        path = self._write_temp_c(src)
+
+
+class TestParSharedMutex(unittest.TestCase):
+    def test_shared_write_rejected_by_kairos_race_check(self) -> None:
+        with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
+            f.write(_SRC)
+            path = f.name
         try:
-            with self.assertRaises(MnemoCompileError) as ctx:
-                compile_c_to_kairos(path)
-            self.assertIn("pthread_mutex_lock", str(ctx.exception))
+            res = subprocess.run(
+                [".venv/bin/mnemo", "run", path],
+                capture_output=True, text=True, cwd=ROOT, timeout=120,
+            )
         finally:
             os.unlink(path)
-
-    @staticmethod
-    def _write_temp_c(src: str) -> str:
-        fd, path = tempfile.mkstemp(suffix=".c")
-        os.close(fd)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(src)
-        return path
+            k = path[:-2] + ".kairos"
+            if os.path.exists(k):
+                os.unlink(k)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("race su int nel PAR", res.stdout + res.stderr)
 
 
 if __name__ == "__main__":
