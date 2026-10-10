@@ -65,16 +65,16 @@ def parse_mnemo_main_argc(source: str) -> int:
     return 0
 
 
-def load_prelude_kairos(lib_filenames: list[str]) -> str:
+def load_prelude_kairos(lib_filenames: list[str], *, mem_cap: int = 1) -> str:
     """Concatena le librerie Kairos richieste; `ptr_pool.kairos` è generato
-    (`emit_ptr_pool_kairos`)."""
+    (`emit_ptr_pool_kairos`) con `mem_cap` = celle dell'array `__mn_mem`."""
     if not lib_filenames:
         return ""
     root = lib_dir()
     chunks: list[str] = []
     for lf in lib_filenames:
         if lf == _VPTR_LIB:
-            chunks.append(emit_ptr_pool_kairos().rstrip())
+            chunks.append(emit_ptr_pool_kairos(mem_cap).rstrip())
             continue
         path = root / lf
         if not path.is_file():

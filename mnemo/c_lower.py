@@ -349,11 +349,16 @@ def _func_reads_partition1_file_vars(
 
 # Contatore pool; le celle sono `__mn_mem0` … `__mn_mem{N-1}` con N = `ctx.ptr_pool_size`.
 _PTR_POOL_CTR = "__mn_pool_ctr"
-# Heap dinamico puro (sostituisce vm->mn_pool nativo, vedi ptr_pool_kairos.py
-# `_emit_dynamic_pool_procs`): stack di record (indirizzo,valore) + contatore,
-# threaded by-ref esattamente come `_PTR_POOL_CTR` ma verso `pool_using_targets`
-# (ogni funzione che fa un deref, non solo malloc/free) invece di
-# `pool_ctr_targets` (solo alloc/free).
+# Nastro dell'heap oltre l'array (ptr_pool_kairos.py): due stack e cursore/lunghezza,
+# threaded by-ref verso `pool_using_targets` (ogni funzione che fa un deref).
+_TAPE: tuple[tuple[str, str], ...] = (
+    ("stack", "__mn_tl"), ("stack", "__mn_tr"), ("int", "__mn_tc"), ("int", "__mn_tn"),
+)
+
+
+def _tape_actuals(prefix: str = "") -> list[str]:
+    """Nomi del nastro; con `prefix` (ramo par) un nastro distinto."""
+    return [f"{prefix}{n}" for _t, n in _TAPE]
 
 MN_RET = "__mn_ret"
 
@@ -1057,6 +1062,29 @@ def _fresh_par_branch_stack_pair(ctx: _Ctx) -> tuple[str, str]:
     return h, s
 
 
+def _par_branch_tape(ctx: _Ctx, fname: str, *, right: bool) -> list[str]:
+    """Argomenti nastro per il worker di un ramo `par`: il sinistro usa il nastro
+    del chiamante, il destro uno nuovo (due rami non condividono uno stack)."""
+    if fname in ctx.pool_ctr_targets:
+        raise MnemoCompileError(
+            f"{fname}: malloc/free dentro un ramo par non è supportato "
+            "(l'heap appartiene al chiamante)"
+        )
+    if fname not in ctx.pool_using_targets:
+        return []
+    if not right:
+        return _tape_actuals()
+    pre = f"__mn_pb{ctx.par_branch_stack_uid}_"
+    ctx.par_branch_stack_uid += 1
+    names = _tape_actuals(pre)
+    ctx.par_branch_stack_names.extend(names[:2])
+    for n in names[2:]:
+        if n not in ctx.int_locals:
+            ctx.int_locals.add(n)
+            ctx.decl_order.append(n)
+    return names
+
+
 def _scope_ensure(ctx: _Ctx) -> None:
     if not ctx.scope_stack:
         ctx.scope_stack = [{}]
@@ -1312,6 +1340,7 @@ def _ir_pool_store_static(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]
             "__mn_pool_store",
             [slot_var, val_var]
             + list(_ptr_pool_mem_names(ctx))
+            + _tape_actuals()
             + _kairos_stack_actuals(ctx),
         )
     ]
@@ -1324,6 +1353,7 @@ def _ir_pool_load_static(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
             [slot_var]
             + list(_ptr_pool_mem_names(ctx))
             + [out_var]
+            + _tape_actuals()
             + _kairos_stack_actuals(ctx),
         )
     ]
@@ -2584,13 +2614,15 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
                     [
                         ICall(
                             f_work,
-                            _parallel_branch_mem_actuals(ctx, left=False, callee_name=f_work) + chx + [wh, ws],
+                            _parallel_branch_mem_actuals(ctx, left=False, callee_name=f_work) + chx
+                            + _par_branch_tape(ctx, f_work, right=True) + [wh, ws],
                         )
                     ],
                     [
                         ICall(
                             f_cont,
-                            _parallel_branch_mem_actuals(ctx, left=True, callee_name=f_cont) + chx + [ch_h, ch_s],
+                            _parallel_branch_mem_actuals(ctx, left=True, callee_name=f_cont) + chx
+                            + _par_branch_tape(ctx, f_cont, right=False) + [ch_h, ch_s],
                         )
                     ],
                 ]
@@ -2633,13 +2665,15 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
                     [
                         ICall(
                             f_work,
-                            _parallel_branch_mem_actuals(ctx, left=False, callee_name=f_work) + chx + [wh, ws],
+                            _parallel_branch_mem_actuals(ctx, left=False, callee_name=f_work) + chx
+                            + _par_branch_tape(ctx, f_work, right=True) + [wh, ws],
                         )
                     ],
                     [
                         ICall(
                             f_cont,
-                            _parallel_branch_mem_actuals(ctx, left=True, callee_name=f_cont) + chx + [ch_h, ch_s],
+                            _parallel_branch_mem_actuals(ctx, left=True, callee_name=f_cont) + chx
+                            + _par_branch_tape(ctx, f_cont, right=False) + [ch_h, ch_s],
                         )
                     ],
                 ]
@@ -2767,8 +2801,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         right_mem_actuals = _parallel_branch_mem_actuals(ctx, left=False, callee_name=f1)
         lh, ls = _fresh_par_branch_stack_pair(ctx)
         rh, rs = _fresh_par_branch_stack_pair(ctx)
-        left_args = left_mem_actuals + pi0 + chx + [lh, ls]
-        right_args = right_mem_actuals + pi1 + chx + [rh, rs]
+        left_args = left_mem_actuals + pi0 + chx + _par_branch_tape(ctx, f0, right=False) + [lh, ls]
+        right_args = right_mem_actuals + pi1 + chx + _par_branch_tape(ctx, f1, right=True) + [rh, rs]
         left_call = ICall(f0, left_args)
         right_call = ICall(f1, right_args)
         post: list[Instr] = []
@@ -9364,7 +9398,8 @@ def _lower_funccall_with_ret(
             pool_actual = (
                 [_PTR_POOL_CTR] if name in ctx.pool_ctr_targets else []
             )
-            stk = pool_actual + _kairos_stack_actuals(ctx)
+            tape_actual = _tape_actuals() if name in ctx.pool_using_targets else []
+            stk = pool_actual + tape_actual + _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
             # show-using fn (printf transitivo): storicamente escluse da
@@ -13446,6 +13481,9 @@ def _locals_list(ctx: _Ctx, *, for_main: bool = True) -> list[tuple[str, str]]:
         # (la VM segnala `__mn_scratch` non def se solo la procedura callee usa scratch).
         locals_list.append(("stack", ctx.hist))
         locals_list.append(("stack", ctx.scratch))
+        if ctx.mem_layout is not None:
+            # nastro dell'heap oltre l'array: main lo possiede
+            locals_list.extend(_TAPE)
     return locals_list
 
 
@@ -13636,6 +13674,7 @@ def _lower_user_function(
     pool_formal: list[tuple[str, str]] = (
         [("int", _PTR_POOL_CTR)] if pool_thread else []
     )
+    tape_formal = list(_TAPE) if name in ctx.pool_using_targets else []
     locals_list = _locals_list(ctx, for_main=False)
     if pool_thread:
         locals_list = [lv for lv in locals_list if lv[1] != _PTR_POOL_CTR]
@@ -13645,6 +13684,7 @@ def _lower_user_function(
         + ch_pi_formals
         + ch_formals
         + pool_formal
+        + tape_formal
         + stack_formals,
         locals=locals_list,
         blocks=[Block("entry", [IComment(f"funzione C {name}")] + instrs)],

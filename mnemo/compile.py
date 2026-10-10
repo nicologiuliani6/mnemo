@@ -2257,7 +2257,7 @@ def compile_c_to_kairos(
     if _program_uses_ptr_pool(prog):
         lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])
     try:
-        prelude = load_prelude_kairos(lib_names)
+        prelude = load_prelude_kairos(lib_names, mem_cap=layout.total_cells)
     except FileNotFoundError as e:
         raise MnemoCompileError(str(e)) from e
     arrayize_program(
