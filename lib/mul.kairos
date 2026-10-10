@@ -1,39 +1,7 @@
-// Prodotto: dst += a * b usando solo somme ripetute (Kairos non ha *).
-// b deve essere >= 0; a e b non vengono distrutti. (b == 0 → nessuna iterazione.)
-// `from i == 0` (non `< b`): FROM vero solo allo stato pre-loop (i=0),
-// falso agli stati intermedi (i=1..b-1) — necessario per l'inversione Kairos.
+// Prodotto: dst += a * b (`*` nativo nelle espressioni Kairos). a e b inalterati.
 procedure __mn_mul_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
-    local int i = 0
-    if b != 0 then
-        from i == 0 do
-            i += 1
-            dst += a
-        loop until i == b
-    fi b != 0
-    delocal int i = b
+    dst += (a * b)
 
-// Prodotto signed: dst += a * b dove b può essere negativo.
-// Reversibile: guard `b < z` non si modifica nel body (b e z immutabili).
+// Come __mn_mul_into, b di segno qualsiasi.
 procedure __mn_mul_signed_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
-    local int z = 0
-    local int abs_b = 0
-    if b < z then
-        abs_b -= b
-    else
-        abs_b += b
-    fi b < z
-    call __mn_mul_into(dst, a, abs_b, __mn_hist, __mn_scratch)
-    if b < z then
-        local int t = 0
-        t -= dst
-        dst += t
-        dst <=> t
-        delocal int t = 0
-    fi b < z
-    if b < z then
-        abs_b += b
-    else
-        abs_b -= b
-    fi b < z
-    delocal int abs_b = 0
-    delocal int z = 0
+    dst += (a * b)

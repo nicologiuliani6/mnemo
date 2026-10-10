@@ -30,9 +30,7 @@ from typing import Any
 import pycparser.c_ast as c
 
 from mnemo.errors import MnemoCompileError
-from mnemo.kairos_limits import MONOLITHIC_POOL_MEM_MAX, POOL_BANK_SIZE
 from mnemo.layout_collect import ProgramMemLayout, compute_program_mem_layout
-from mnemo.ptr_pool_kairos import PTR_POOL_MAX
 from mnemo.ir import (
     Block,
     CmpOp,
@@ -356,8 +354,6 @@ _PTR_POOL_CTR = "__mn_pool_ctr"
 # threaded by-ref esattamente come `_PTR_POOL_CTR` ma verso `pool_using_targets`
 # (ogni funzione che fa un deref, non solo malloc/free) invece di
 # `pool_ctr_targets` (solo alloc/free).
-_PTR_POOL_HEAP = "__mn_pool_heap"
-_PTR_POOL_HEAP_N = "__mn_pool_heap_n"
 
 MN_RET = "__mn_ret"
 
@@ -1106,13 +1102,11 @@ def _scope_declare(ctx: _Ctx, source: str) -> str:
 
 
 def _pool_static_n(ctx: _Ctx) -> int:
-    """Numero di celle "nominate" (memoria statica del programma: array stack,
-    globali, struct) su cui il pool fa dispatch `if slot==k` → celle
-    `__mn_mem0..n-1`. Gli slot >= heap_base (heap da malloc, senza alias
-    nominato) NON sono qui: vanno alle procedure `__mn_pool_*_dyn` (heap VM
-    dinamico). Senza layout (path legacy) fallback a ptr_pool_size."""
+    """Celle `__mn_mem0..n-1` raggiungibili da un puntatore: tutta la finestra
+    di memoria (nominate + heap di malloc), che `arrayize` rende l'array
+    `__mn_mem`. Senza layout (path legacy) fallback a ptr_pool_size."""
     if ctx.mem_layout is not None:
-        return ctx.heap_base
+        return ctx.mem_layout.total_cells
     return ctx.ptr_pool_size
 
 
@@ -1236,6 +1230,29 @@ def _malloc_nblk_ir(call: c.FuncCall, ctx: "_Ctx"):
     return ins, Var(nm), tm
 
 
+def _check_par_shared_writes(ctx: _Ctx, f_a: str, f_b: str) -> None:
+    """I rami di un `par` Kairos non condividono memoria scrivibile: il ramo
+    destro lavora su una copia (`__mn_memR`) delle globali condivise. Una
+    globale scritta da un ramo e usata dall'altro è quindi un errore."""
+    lay = ctx.mem_layout
+    if lay is None or not lay.parallel_file_shared_slots:
+        return
+    w_a, w_b = ctx.callee_mem_writes.get(f_a), ctx.callee_mem_writes.get(f_b)
+    t_a, t_b = ctx.callee_mem_touches.get(f_a), ctx.callee_mem_touches.get(f_b)
+    if None in (w_a, w_b, t_a, t_b):
+        return
+    bad = ((w_a & t_b) | (w_b & t_a)) & lay.parallel_file_shared_slots
+    if bad:
+        names = sorted(
+            lg for (fn, lg), i in lay.slot_of.items() if fn == "__file__" and i in bad
+        )
+        raise MnemoCompileError(
+            f"par {f_a}/{f_b}: variabile globale {', '.join(names) or sorted(bad)} "
+            "scritta da un ramo e usata dall'altro; i rami di un par non condividono "
+            "memoria (usa un canale)"
+        )
+
+
 def _parallel_branch_mem_actuals(
     ctx: _Ctx, *, left: bool, callee_name: str | None = None
 ) -> list[str]:
@@ -1289,141 +1306,35 @@ def _pool_call_slot_arg(
     )
 
 
-def _pool_uses_banking(ctx: _Ctx) -> bool:
-    if ctx.mem_layout is None:
-        return False
-    return _pool_static_n(ctx) > MONOLITHIC_POOL_MEM_MAX
-
-
-def _n_pool_banks(ctx: _Ctx) -> int:
-    return math.ceil(_pool_static_n(ctx) / POOL_BANK_SIZE)
-
-
-def _ir_pool_divmod_slot(
-    ctx: _Ctx, slot_var: str
-) -> tuple[list[Instr], str, str, str]:
-    t_b = ctx.fresh_temp()
-    t_q = ctx.fresh_temp()
-    t_r = ctx.fresh_temp()
-    ctx.use_hist = True
-    pre: list[Instr] = [
-        IConst(t_b, POOL_BANK_SIZE),
-        ICall(
-            "__mn_divmod_nonneg",
-            [slot_var, t_b, t_q, t_r] + _kairos_stack_actuals(ctx),
-        ),
-    ]
-    return pre, t_b, t_q, t_r
-
-
-def _bank_chain_pool_calls(
-    ctx: _Ctx,
-    t_q: str,
-    proc_base: str,
-    build_args: Callable[[int], list[str]],
-) -> list[Instr]:
-    """Albero di confronti su `t_q` (indice banca): meno `if` sequenziali che una catena lineare."""
-    nb = _n_pool_banks(ctx)
-    stk = _kairos_stack_actuals(ctx)
-    if nb == 1:
-        return [ICall(f"{proc_base}_b0", build_args(0) + stk)]
-
-    def tree(lo: int, hi: int) -> list[Instr]:
-        if hi - lo == 1:
-            k = lo
-            return [ICall(f"{proc_base}_b{k}", build_args(k) + stk)]
-        mid = (lo + hi) // 2
-        left = tree(lo, mid)
-        right = tree(mid, hi)
-        return [IIfKairos(t_q, "<", str(mid), left, right)]
-
-    return tree(0, nb)
-
-
-def _pool_dyn_active(ctx: _Ctx) -> bool:
-    """True se l'heap dinamico (vm->mn_pool) è in uso: gli slot >= heap_base
-    vanno alle procedure `__mn_pool_*_dyn`. Disattivo solo nel path legacy
-    senza layout (ctx.mem_layout None)."""
-    return ctx.mem_layout is not None
-
-
 def _ir_pool_store_static(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
-    if not _pool_uses_banking(ctx):
-        return [
-            ICall(
-                "__mn_pool_store",
-                [slot_var, val_var]
-                + list(_ptr_pool_mem_names(ctx))
-                + _kairos_stack_actuals(ctx),
-            )
-        ]
-    pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
-
-    def args_for(bi: int) -> list[str]:
-        s0 = bi * POOL_BANK_SIZE
-        s1 = min(_pool_static_n(ctx), s0 + POOL_BANK_SIZE)
-        return [t_r, val_var] + [f"__mn_mem{i}" for i in range(s0, s1)]
-
-    return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_store", args_for)
+    return [
+        ICall(
+            "__mn_pool_store",
+            [slot_var, val_var]
+            + list(_ptr_pool_mem_names(ctx))
+            + _kairos_stack_actuals(ctx),
+        )
+    ]
 
 
 def _ir_pool_load_static(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
-    if not _pool_uses_banking(ctx):
-        return [
-            ICall(
-                "__mn_pool_load",
-                [slot_var]
-                + list(_ptr_pool_mem_names(ctx))
-                + [out_var]
-                + _kairos_stack_actuals(ctx),
-            )
-        ]
-    pre, _tb, t_q, t_r = _ir_pool_divmod_slot(ctx, slot_var)
-
-    def args_for(bi: int) -> list[str]:
-        s0 = bi * POOL_BANK_SIZE
-        s1 = min(_pool_static_n(ctx), s0 + POOL_BANK_SIZE)
-        return [t_r] + [f"__mn_mem{i}" for i in range(s0, s1)] + [out_var]
-
-    return pre + _bank_chain_pool_calls(ctx, t_q, "__mn_pool_load", args_for)
+    return [
+        ICall(
+            "__mn_pool_load",
+            [slot_var]
+            + list(_ptr_pool_mem_names(ctx))
+            + [out_var]
+            + _kairos_stack_actuals(ctx),
+        )
+    ]
 
 
 def _ir_pool_store_call(ctx: _Ctx, slot_var: str, val_var: str) -> list[Instr]:
-    """Routing slot → memoria: slot < heap_base = cella nominata `__mn_mem*`
-    (dispatch statico), slot >= heap_base = heap VM dinamico (cresce on-demand,
-    proc `_dyn`). Guardia runtime `if slot < heap_base` perché lo slot è il
-    valore di un puntatore (noto solo a runtime)."""
-    dyn = [
-        ICall(
-            "__mn_pool_store_dyn",
-            [slot_var, val_var, _PTR_POOL_HEAP, _PTR_POOL_HEAP_N]
-            + _kairos_stack_actuals(ctx),
-        )
-    ]
-    if not _pool_dyn_active(ctx):
-        return _ir_pool_store_static(ctx, slot_var, val_var)
-    sn = _pool_static_n(ctx)
-    if sn <= 0:
-        return dyn  # nessuna memoria nominata: tutto heap dinamico
-    return [IIfKairos(slot_var, "<", str(sn),
-                      _ir_pool_store_static(ctx, slot_var, val_var), dyn)]
+    return _ir_pool_store_static(ctx, slot_var, val_var)
 
 
 def _ir_pool_load_call(ctx: _Ctx, slot_var: str, out_var: str) -> list[Instr]:
-    dyn = [
-        ICall(
-            "__mn_pool_load_dyn",
-            [slot_var, out_var, _PTR_POOL_HEAP, _PTR_POOL_HEAP_N]
-            + _kairos_stack_actuals(ctx),
-        )
-    ]
-    if not _pool_dyn_active(ctx):
-        return _ir_pool_load_static(ctx, slot_var, out_var)
-    sn = _pool_static_n(ctx)
-    if sn <= 0:
-        return dyn
-    return [IIfKairos(slot_var, "<", str(sn),
-                      _ir_pool_load_static(ctx, slot_var, out_var), dyn)]
+    return _ir_pool_load_static(ctx, slot_var, out_var)
 
 
 def _ir_pool_free_call(ctx: _Ctx, slot_var: str) -> list[Instr]:
@@ -2663,6 +2574,7 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             raise MnemoCompileError(
                 "mnemo_pthread_parallel_with: la continuazione deve essere `void g(void)`"
             )
+        _check_par_shared_writes(ctx, f_work, f_cont)
         chx = _file_scope_channel_actuals(ctx)
         wh, ws = _fresh_par_branch_stack_pair(ctx)
         ch_h, ch_s = _fresh_par_branch_stack_pair(ctx)
@@ -2711,6 +2623,7 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             f_work, a1, ctx, mem_partition_index=1
         )
         ctx.use_hist = True
+        _check_par_shared_writes(ctx, f_work, f_cont)
         chx = _file_scope_channel_actuals(ctx)
         wh, ws = _fresh_par_branch_stack_pair(ctx)
         ch_h, ch_s = _fresh_par_branch_stack_pair(ctx)
@@ -2849,6 +2762,7 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
         chx = _file_scope_channel_actuals(ctx)
         pi0 = _call_pi_channel_kairos_names(fd0, raw0, ctx)
         pi1 = _call_pi_channel_kairos_names(fd1, raw1, ctx)
+        _check_par_shared_writes(ctx, f0, f1)
         left_mem_actuals = _parallel_branch_mem_actuals(ctx, left=True, callee_name=f0)
         right_mem_actuals = _parallel_branch_mem_actuals(ctx, left=False, callee_name=f1)
         lh, ls = _fresh_par_branch_stack_pair(ctx)
@@ -3569,12 +3483,12 @@ def _file_ast_needs_ptr_pool(ast: c.FileAST) -> bool:
 
 def _register_ptr_pool_locals(ctx: _Ctx) -> None:
     if ctx.mem_layout is not None:
-        for pn in (_PTR_POOL_CTR, _PTR_POOL_HEAP_N):
+        for pn in (_PTR_POOL_CTR,):
             if pn not in ctx.int_locals:
                 ctx.int_locals.add(pn)
                 ctx.decl_order.append(pn)
         return
-    for n in _ptr_pool_mem_names(ctx) + (_PTR_POOL_CTR, _PTR_POOL_HEAP_N):
+    for n in _ptr_pool_mem_names(ctx) + (_PTR_POOL_CTR,):
         if n not in ctx.int_locals:
             ctx.int_locals.add(n)
             ctx.decl_order.append(n)
@@ -7701,133 +7615,31 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
             else:
                 ins = i1 + i2 + [IAddEq(t, o1), ISubEq(t, o2)]
             return ins, Var(t), tm1 + tm2 + [t]
-        if expr.op == "*":
-            # `__mn_mul_into` cicla `b` volte; per `b<0` cicla all'infinito.
-            # Se `b` è costante negativa, riscrivi come `-(a * abs(b))`.
-            # Se `b` è runtime di segno ignoto, usa `__mn_mul_signed_into`
-            # che gestisce internamente il segno con guard reversibile.
-            rhs_const = _int_constant_value(expr.right)
-            if rhs_const is not None and rhs_const < 0:
-                pos_const = c.Constant("int", str(-rhs_const), expr.coord)
-                synth_mul = c.BinaryOp("*", expr.left, pos_const, expr.coord)
-                synth_neg = c.UnaryOp("-", synth_mul, expr.coord)
-                return _eval_expr(synth_neg, ctx)
-            pa, a_name, ca = _eval_to_arg_var(expr.left, ctx)
-            pb, b_name, cb = _eval_to_arg_var(expr.right, ctx)
+        if expr.op in ("*", "/", "%"):
+            # Kairos ha `* / %` nelle espressioni, con la semantica del C
+            # (divisione troncata verso zero, resto col segno del dividendo):
+            # `t += (a op b)`. Gli operandi cella passano per un temporaneo, così
+            # l'espressione nomina solo variabili scalari (le analisi IR sulle
+            # celle guardano nomi esatti).
+            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
+            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
+            pre = pa + pb
+            names: list[str] = []
+            extra: list[str] = []
+            for nm_ in (va, vb):
+                if _mem_idx_or_none(nm_) is not None:
+                    tc = ctx.fresh_temp()
+                    ctx.use_hist = True
+                    pre += [IHistPush(ctx.hist, tc), IAddEq(tc, Var(nm_))]
+                    extra.append(tc)
+                    nm_ = tc
+                names.append(nm_)
             t = ctx.fresh_temp()
-            # Fast path: rhs const non negativa → __mn_mul_into diretto.
-            callee = (
-                "__mn_mul_into" if rhs_const is not None and rhs_const >= 0
-                else "__mn_mul_signed_into"
-            )
-            pre = pa + pb + [
-                ICall(
-                    callee,
-                    [t, a_name, b_name] + _kairos_stack_actuals(ctx),
-                )
-            ]
-            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
-            if ca or cb:
+            pre.append(IAddEq(t, Var(f"({names[0]} {expr.op} {names[1]})")))
+            cl = ca + cb + extra
+            if cl:
                 ctx.use_scratch = True
-            return pre + post, Var(t), [t]
-        if expr.op == "/":
-            # `__mn_divmod_nonneg` assume divisor >= 0; con costante negativa
-            # nota a compile-time riscrivo `a / -k` come `-(a / k)`.
-            # Per dividendo o divisore runtime di segno ignoto uso
-            # `__mn_divmod_signed` (C99 trunc-toward-zero).
-            rhs_const = _int_constant_value(expr.right)
-            if rhs_const is not None and rhs_const < 0:
-                pos_const = c.Constant("int", str(-rhs_const), expr.coord)
-                synth_div = c.BinaryOp("/", expr.left, pos_const, expr.coord)
-                synth_neg = c.UnaryOp("-", synth_div, expr.coord)
-                return _eval_expr(synth_neg, ctx)
-            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
-            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
-            lhs_const = _int_constant_value(expr.left)
-            use_signed = (
-                (lhs_const is None or lhs_const < 0)
-                or (rhs_const is None and lhs_const is not None and lhs_const >= 0)
-            )
-            t_q = ctx.fresh_temp()
-            t_r = ctx.fresh_temp()
-            if use_signed:
-                pre = (
-                    pa
-                    + pb
-                    + [
-                        ICall(
-                            "__mn_divmod_signed",
-                            [va, vb, t_q, t_r] + _kairos_stack_actuals(ctx),
-                        )
-                    ]
-                )
-                post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_r])]
-                ctx.use_hist = True
-                ctx.use_scratch = True
-                return pre + post, Var(t_q), [t_q]
-            t_a = ctx.fresh_temp()
-            pre = (
-                pa
-                + pb
-                + [IHistPush(ctx.hist, t_a), IAddEq(t_a, Var(va))]
-                + [
-                    ICall(
-                        "__mn_divmod_nonneg",
-                        [t_a, vb, t_q, t_r] + _kairos_stack_actuals(ctx),
-                    )
-                ]
-            )
-            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_r, t_a])]
-            ctx.use_hist = True
-            ctx.use_scratch = True
-            return pre + post, Var(t_q), [t_q]
-        if expr.op == "%":
-            # `__mn_mod_nonneg` assume divisor >= 0; in C99 il segno del
-            # risultato segue il dividendo, quindi `a % -k == a % k`.
-            # Per dividendo runtime negativo serve `__mn_mod_signed`.
-            rhs_const = _int_constant_value(expr.right)
-            if rhs_const is not None and rhs_const < 0:
-                pos_const = c.Constant("int", str(-rhs_const), expr.coord)
-                synth_mod = c.BinaryOp("%", expr.left, pos_const, expr.coord)
-                return _eval_expr(synth_mod, ctx)
-            pa, va, ca = _eval_to_arg_var(expr.left, ctx)
-            pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
-            lhs_const = _int_constant_value(expr.left)
-            use_signed = lhs_const is None or lhs_const < 0
-            t_r = ctx.fresh_temp()
-            if use_signed:
-                # Usa divmod_signed: produciamo anche t_q come scratch.
-                t_q = ctx.fresh_temp()
-                pre = (
-                    pa
-                    + pb
-                    + [
-                        ICall(
-                            "__mn_divmod_signed",
-                            [va, vb, t_q, t_r] + _kairos_stack_actuals(ctx),
-                        )
-                    ]
-                )
-                post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_q])]
-                ctx.use_hist = True
-                ctx.use_scratch = True
-                return pre + post, Var(t_r), [t_r]
-            t_a = ctx.fresh_temp()
-            pre = (
-                pa
-                + pb
-                + [IHistPush(ctx.hist, t_a), IAddEq(t_a, Var(va))]
-                + [
-                    ICall(
-                        "__mn_mod_nonneg",
-                        [t_a, vb, t_r] + _kairos_stack_actuals(ctx),
-                    )
-                ]
-            )
-            post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb + [t_a])]
-            ctx.use_hist = True
-            ctx.use_scratch = True
-            return pre + post, Var(t_r), [t_r]
+            return pre + [IHistPush(ctx.scratch, x) for x in reversed(cl)], Var(t), [t]
         if expr.op == "&":
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
@@ -9552,15 +9364,7 @@ def _lower_funccall_with_ret(
             pool_actual = (
                 [_PTR_POOL_CTR] if name in ctx.pool_ctr_targets else []
             )
-            # `__mn_pool_heap`/`__mn_pool_heap_n`: stesso meccanismo di
-            # `pool_actual` ma verso `pool_using_targets` (vedi costruzione
-            # Function e ptr_pool_kairos.py `_emit_dynamic_pool_procs`).
-            heap_actual = (
-                [_PTR_POOL_HEAP, _PTR_POOL_HEAP_N]
-                if name in ctx.pool_using_targets
-                else []
-            )
-            stk = pool_actual + heap_actual + _kairos_stack_actuals(ctx)
+            stk = pool_actual + _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
             # show-using fn (printf transitivo): storicamente escluse da
@@ -13642,12 +13446,6 @@ def _locals_list(ctx: _Ctx, *, for_main: bool = True) -> list[tuple[str, str]]:
         # (la VM segnala `__mn_scratch` non def se solo la procedura callee usa scratch).
         locals_list.append(("stack", ctx.hist))
         locals_list.append(("stack", ctx.scratch))
-        # `__mn_pool_heap` (stack): main possiede il record dell'heap dinamico
-        # puro come local (le altre pool_using_targets lo ricevono come
-        # param — vedi `_lower_user_function`). `__mn_pool_heap_n` è già
-        # incluso sopra via `ctx.decl_order` (_register_ptr_pool_locals).
-        if _PTR_POOL_HEAP_N in ctx.int_locals:
-            locals_list.append(("stack", _PTR_POOL_HEAP))
     return locals_list
 
 
@@ -13838,28 +13636,15 @@ def _lower_user_function(
     pool_formal: list[tuple[str, str]] = (
         [("int", _PTR_POOL_CTR)] if pool_thread else []
     )
-    # `__mn_pool_heap`/`__mn_pool_heap_n` (heap dinamico puro, vedi
-    # ptr_pool_kairos.py): threaded by-ref verso OGNI funzione che fa un
-    # deref via pool (pool_using_targets, superset di pool_ctr_targets — un
-    # semplice `*p` senza malloc/free non tocca `__mn_pool_ctr` ma può
-    # comunque colpire lo heap dinamico). `main` li possiede come local
-    # (vedi `_locals_list`), le altre li ricevono come param.
-    heap_thread = name in ctx.pool_using_targets
-    heap_formal: list[tuple[str, str]] = (
-        [("stack", _PTR_POOL_HEAP), ("int", _PTR_POOL_HEAP_N)] if heap_thread else []
-    )
     locals_list = _locals_list(ctx, for_main=False)
     if pool_thread:
         locals_list = [lv for lv in locals_list if lv[1] != _PTR_POOL_CTR]
-    if heap_thread:
-        locals_list = [lv for lv in locals_list if lv[1] != _PTR_POOL_HEAP_N]
     return Function(
         name=name,
         params=[("int", p) for p in param_order]
         + ch_pi_formals
         + ch_formals
         + pool_formal
-        + heap_formal
         + stack_formals,
         locals=locals_list,
         blocks=[Block("entry", [IComment(f"funzione C {name}")] + instrs)],
@@ -14379,10 +14164,8 @@ def lower_file_to_program(
     opt_uncall_user_calls: bool = False,
     uncall_extra_seeds: frozenset[str] = frozenset(),
 ) -> Program:
-    if not (1 <= ptr_pool_size <= PTR_POOL_MAX):
-        raise MnemoCompileError(
-            f"ptr_pool_size deve essere tra 1 e {PTR_POOL_MAX}, non {ptr_pool_size}"
-        )
+    if ptr_pool_size < 1:
+        raise MnemoCompileError(f"ptr_pool_size deve essere >= 1, non {ptr_pool_size}")
     # Note: `_hoist_compound_literals_in_ast(ast)` deve essere chiamato DAL caller
     # (compile.py) PRIMA di `compute_program_mem_layout`, altrimenti i Decl sintetici
     # non sono nel layout.

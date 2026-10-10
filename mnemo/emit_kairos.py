@@ -217,6 +217,33 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     raise TypeError(ins)
 
 
+def _dim(t: str) -> str:
+    """`int[N]` → `[N]`, `int` → ``."""
+    return t[3:] if t.startswith("int[") else ""
+
+
+def _zero_and_delocal(t: str, name: str, hist: str) -> list[str]:
+    """Epilogo di un local: `push` lo azzera, poi `delocal … = 0`. Per un array
+    un ciclo che sposta ogni cella su `hist`."""
+    if not t.startswith("int["):
+        return [f"    push({name}, {hist})", f"    delocal int {name} = 0"]
+    n = t[4:-1]
+    k, c = f"{name}__k", f"{name}__c"
+    return [
+        f"    local int {k} = 0",
+        f"    from {k} == 0 do",
+        f"        local int {c} = 0",
+        f"        {c} += {name}[{k}]",
+        f"        {name}[{k}] -= {c}",
+        f"        push({c}, {hist})",
+        f"        delocal int {c} = 0",
+        f"        {k} += 1",
+        f"    loop until {k} == {n}",
+        f"    delocal int {k} = {n}",
+        f"    delocal int {name}[{n}] = 0",
+    ]
+
+
 def _stack_names_from_fn(fn: Function) -> set[str]:
     return {n for t, n in fn.locals if t == "stack"} | {
         n for t, n in fn.params if t == "stack"
@@ -233,7 +260,7 @@ def _emit_main(fn: Function) -> str:
     stacks = [(t, n) for t, n in fn.locals if t == "stack"]
     stack_names = _stack_names_from_fn(fn)
     channels = [(t, n) for t, n in fn.locals if t == "channel"]
-    ints = [(t, n) for t, n in fn.locals if t == "int"]
+    ints = [(t, n) for t, n in fn.locals if t == "int" or t.startswith("int[")]
     hist = "__mn_hist"
 
     need_stack_line = (len(ints) > 0 or len(channels) > 0) and hist not in stack_names
@@ -245,8 +272,8 @@ def _emit_main(fn: Function) -> str:
     if len(ints) > 0 or len(channels) > 0:
         for _t, name in channels:
             lines.append(f"    local channel {name} = empty")
-        for _t, name in ints:
-            lines.append(f"    local int {name} = 0")
+        for t, name in ints:
+            lines.append(f"    local int {name}{_dim(t)} = 0")
         body_indent = "        "
     else:
         body_indent = "    "
@@ -254,9 +281,8 @@ def _emit_main(fn: Function) -> str:
     for b in fn.blocks:
         _emit_instr_seq(lines, b.instrs, body_indent)
 
-    for _t, name in reversed(ints):
-        lines.append(f"    push({name}, {hist})")
-        lines.append(f"    delocal int {name} = 0")
+    for t, name in reversed(ints):
+        lines.extend(_zero_and_delocal(t, name, hist))
     for _t, name in reversed(channels):
         lines.append(f"    delocal channel {name} = empty")
 
@@ -280,6 +306,8 @@ def _emit_procedure(fn: Function) -> str:
             param_parts.append(f"channel {name}")
         elif typ == "stack":
             param_parts.append(f"stack {name}")
+        elif typ == "int[]":
+            param_parts.append(f"int {name}[]")
         else:
             param_parts.append(f"int {name}")
     params = ", ".join(param_parts)
@@ -288,7 +316,7 @@ def _emit_procedure(fn: Function) -> str:
     stacks = [(t, n) for t, n in fn.locals if t == "stack"]
     stack_names = _stack_names_from_fn(fn)
     channels = [(t, n) for t, n in fn.locals if t == "channel"]
-    ints = [(t, n) for t, n in fn.locals if t == "int"]
+    ints = [(t, n) for t, n in fn.locals if t == "int" or t.startswith("int[")]
     hist = "__mn_hist"
 
     need_stack_line = (len(ints) > 0 or len(channels) > 0) and hist not in stack_names
@@ -300,8 +328,8 @@ def _emit_procedure(fn: Function) -> str:
     if len(ints) > 0 or len(channels) > 0:
         for _t, name in channels:
             lines.append(f"    local channel {name} = empty")
-        for _t, name in ints:
-            lines.append(f"    local int {name} = 0")
+        for t, name in ints:
+            lines.append(f"    local int {name}{_dim(t)} = 0")
         body_indent = "        "
     else:
         body_indent = "    "
@@ -309,9 +337,8 @@ def _emit_procedure(fn: Function) -> str:
     for b in fn.blocks:
         _emit_instr_seq(lines, b.instrs, body_indent)
 
-    for _t, name in reversed(ints):
-        lines.append(f"    push({name}, {hist})")
-        lines.append(f"    delocal int {name} = 0")
+    for t, name in reversed(ints):
+        lines.extend(_zero_and_delocal(t, name, hist))
     for _t, name in reversed(channels):
         lines.append(f"    delocal channel {name} = empty")
 

@@ -1,9 +1,7 @@
-"""Regression: malloc col modello header sul pool BANCATO (> ~998 celle).
+"""Regression: malloc col modello header su un pool grande (--ptr-pool-size 1500).
 
-Il pool bancato dispatcha slot→(banca,offset) con __mn_divmod_nonneg. Due bug
-risolti: (1) divmod non auto-incluso se il C non usa `/` → SEGV in get_findex;
-(2) l'header store passava `__mn_pool_ctr` diretto al divmod che ne consuma il
-dividendo → ctr azzerato → slot drift. Forza la banca con --ptr-pool-size 1500.
+Storicamente forzava il pool bancato; ora la memoria è un array Kairos e il test
+verifica che blocchi multi-cella concorrenti in un heap grande restino corretti.
 """
 
 from __future__ import annotations

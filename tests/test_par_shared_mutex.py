@@ -1,8 +1,8 @@
 """PAR a due regioni: memoria file-scope scritta da entrambi i rami.
 
-Nel Kairos puro i rami di un `par` non condividono memoria scrivibile: il
-controllo statico del frontend Kairos rifiuta la race (non serve più un check
-Mnemo né il pragma che lo disattivava, e i mutex sono no-op).
+Nel Kairos puro i rami di un `par` non condividono memoria scrivibile (il ramo
+destro lavora su una copia delle globali): Mnemo rifiuta una globale scritta da
+un ramo e usata dall'altro. I mutex sono no-op.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ int main(void) { mnemo_pthread_parallel2(f, g); return 0; }
 
 
 class TestParSharedMutex(unittest.TestCase):
-    def test_shared_write_rejected_by_kairos_race_check(self) -> None:
+    def test_shared_write_rejected(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
             f.write(_SRC)
             path = f.name
@@ -43,7 +43,7 @@ class TestParSharedMutex(unittest.TestCase):
             if os.path.exists(k):
                 os.unlink(k)
         self.assertNotEqual(res.returncode, 0)
-        self.assertIn("race su int nel PAR", res.stdout + res.stderr)
+        self.assertIn("non condividono", res.stdout + res.stderr)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,6 @@ from mnemo.c_lower import (
     infer_lib_files_from_calls,
     lower_file_to_program,
 )
-from mnemo.inline_user import maybe_inline_user_functions
 from mnemo.layout_collect import compute_program_mem_layout
 from mnemo.c_parse import parse_c
 from mnemo.emit_kairos import emit_program
@@ -36,7 +35,7 @@ from mnemo.prelude import (
     load_prelude_kairos,
     parse_mnemo_main_argc,
 )
-from mnemo.ptr_pool_kairos import PTR_POOL_MAX
+from mnemo.arrayize import arrayize_program
 import sys
 import pycparser.c_ast as c
 
@@ -2236,32 +2235,17 @@ def compile_c_to_kairos(
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
         raise MnemoCompileError("main_argc deve essere >= 0")
-    # Auto-sizing del pool puntatori: conta call site di malloc/calloc nel
-    # programma (upper bound conservativo: assume tutte vivanti simultanee +
-    # nessuna free intermedia). Default `--ptr-pool-size 0` = auto puro;
-    # flag user > 0 funziona come MIN (override solo verso l'alto se serve
-    # più capacità di quella inferita, es. malloc in loop runtime).
-    # Pool puntatori su heap VM dinamico (vm->mn_pool): cresce on-demand, quindi
-    # la dimensione NON va inferita a compile-time. `_infer_ptr_pool_size` resta
-    # solo come hint storico/diagnostico ma non vincola più nulla: anche
-    # malloc-in-loop a bound runtime senza free funziona (il pool cresce).
+    # Heap di malloc = coda dell'array `__mn_mem` (dimensione fissa: Kairos non
+    # ha array che crescono). Dimensione inferita dalle malloc a size/trip-count
+    # costante; con malloc presenti almeno DEFAULT_HEAP_CELLS (malloc in loop a
+    # bound runtime). `--ptr-pool-size N` alza il minimo. Sforare = Idx-Err.
     inferred_pool = _infer_ptr_pool_size(ast)
-    if inferred_pool > ptr_pool_size:
-        ptr_pool_size = inferred_pool
-    # Fallback: ogni programma deve avere almeno 1 cella pool per `int *p =
-    # NULL` (slot 0 = sentinel). Auto-infer ritorna 0 se non c'è nessun
-    # malloc/calloc; serve almeno 1 perché `compute_program_mem_layout`
-    # alloca cells = heap_base + ptr_pool_size con heap_base>=1.
-    if ptr_pool_size < 1:
-        ptr_pool_size = 1
+    if inferred_pool > 0:
+        inferred_pool = max(inferred_pool, DEFAULT_HEAP_CELLS)
+    ptr_pool_size = max(ptr_pool_size, inferred_pool, 1)  # slot 0 = NULL
     layout = compute_program_mem_layout(ast, ptr_pool_size)
     mem_units = 2 if _ast_needs_two_mem_partitions(ast) else 1
     physical_mem_cells = layout.total_cells * mem_units
-    if layout.total_cells > PTR_POOL_MAX:
-        raise MnemoCompileError(
-            f"celle memoria (layout) {layout.total_cells} superano il limite pool "
-            f"{PTR_POOL_MAX} (prova a ridurre --ptr-pool-size o le variabili C)"
-        )
     uncall_extra_seeds: frozenset[str] = frozenset()
     prog = lower_file_to_program(
         ast,
@@ -2272,40 +2256,23 @@ def compile_c_to_kairos(
         opt_uncall_user_calls=opt_uncall_user_calls,
         uncall_extra_seeds=uncall_extra_seeds,
     )
-    prog = maybe_inline_user_functions(
-        ast, prog, total_mem_cells=layout.total_cells
-    )
     if check_invertibility:
         _wrap_main_in_invertibility_check(prog)
     if _program_uses_ptr_pool(prog):
         lib_names = _merge_lib_lists(lib_names, ["ptr_pool.kairos"])
-        # Pool bancato (> MONOLITHIC_POOL_MEM_MAX celle): il dispatch per banca
-        # usa __mn_divmod_nonneg per (slot → banca, offset). Va incluso anche se
-        # il C non usa `/`/`%` (altrimenti la proc è chiamata ma non definita →
-        # SEGV in get_findex).
-        from mnemo.kairos_limits import MONOLITHIC_POOL_MEM_MAX
-
-        # Banking del dispatch statico è keyed su heap_base (celle nominate),
-        # non su total_cells: l'heap eccedente è ora dinamico (vm->mn_pool).
-        if layout.heap_base > MONOLITHIC_POOL_MEM_MAX:
-            lib_names = _merge_lib_lists(
-                lib_names, ["helpers.kairos", "mul.kairos", "divmod.kairos"]
-            )
     try:
-        prelude = load_prelude_kairos(
-            lib_names,
-            ptr_pool_size=ptr_pool_size,
-            # Pool: una finestra di S celle per call; il PAR usa due finestre disgiunte in main.
-            total_mem_cells=layout.total_cells,
-            # Dispatch statico su [0, heap_base); slot >= heap_base = heap VM
-            # dinamico (vm->mn_pool, cresce on-demand).
-            heap_base=layout.heap_base,
-        )
+        prelude = load_prelude_kairos(lib_names)
     except FileNotFoundError as e:
         raise MnemoCompileError(str(e)) from e
+    arrayize_program(
+        prog, window=layout.total_cells, physical=physical_mem_cells
+    )
     body = emit_program(prog)
     out = (prelude + body) if prelude else body
     return out
+
+
+DEFAULT_HEAP_CELLS = 1024
 
 
 def write_kairos_next_to_c(c_path: str, content: str) -> str:
