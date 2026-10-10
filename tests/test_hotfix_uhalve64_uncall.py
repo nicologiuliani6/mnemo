@@ -1,44 +1,13 @@
-"""Regression: hotfix-divmod-nonneg-fast-bug.
+"""Regression: `__mn_uhalve64` uncall-ata dall'esterno (pattern try/rollback).
 
-`__mn_uhalve64` (lib/bits.kairos) computes an unsigned 64-bit halving and, in
-its "x != INT64_MIN" branch, used to do:
-
-    call __mn_divmod_nonneg_fast(ab, two, qab, rab, ...)
-    ... accumulate qab/rab into q/r ...
-    uncall __mn_divmod_nonneg_fast(ab, two, qab, rab, ...)
-
-with that whole call+uncall pair nested inside an if/else (the
-`is_min == 1` branch selector). That is fine as long as __mn_uhalve64 is only
-ever CALLED forward — but __mn_shr_into (used for unsigned `>>` on values
-with the high bit set) invokes __mn_uhalve64 from inside a loop, and if the
-ENTIRE caller ends up being uncalled from an even more external context (a
-`try/rollback` that rolls back — e.g. tests/c/examples_advanced/
-maze_backtrack.c doing `grid[ny][nx]` via bitwise pool-dispatch inside a
-try/rollback), the VM has to invert that nested call+uncall pair a second
-time. That corrupts the __mn_divmod_nonneg_fast frame's local state:
-
-    [VM] DELOCAL: valore finale errato! (frame=__mn_divmod_nonneg_fast
-         var=doable, atteso=0, trovato=1152921504606846976, c_val=0)
-
-(1152921504606846976 == 2**60, a leftover MSB-first loop weight) or, for
-other inputs, "[VM] POP: stack vuoto!". This was never exercised by the
-existing suite because no other example calls __mn_divmod_nonneg_fast (or
-anything built on it) from inside a try/rollback body that actually rolls
-back.
-
-Fix: extracted the "x != INT64_MIN" branch content into its own procedure
-(`__mn_uhalve64_general`), called with a single `call` (no matching
-`uncall`) from __mn_uhalve64's if/else — same "flatten nested if into a
-procedure boundary" workaround already used by `__mn_and_into`/`__mn_or_into`
-in lib/bits.kairos for the analogous "nested if" VM uncall bug.
-
-This test builds a minimal standalone .kairos program straight from the
-CURRENT lib/helpers.kairos, lib/divmod.kairos and lib/bits.kairos sources
-(so it tracks future edits instead of a frozen copy), and does exactly the
-`call __mn_uhalve64(...); uncall __mn_uhalve64(...)` pattern that a rolled
-back try/rollback performs automatically. Before the fix this reproduces the
-DELOCAL error above; after the fix it must complete cleanly with q=2 r=1
-(5 >> 1 == 2 remainder 1).
+Storicamente il dimezzamento unsigned conteneva una coppia call+uncall di
+`__mn_divmod_nonneg_fast` annidata in un if, che si corrompeva quando l'intera
+chiamata veniva invertita da un contesto esterno (try/rollback che fa
+rollback, es. maze_backtrack.c). Ora `__mn_uhalve64` è scritta con operazioni
+native e non chiama nulla; il test resta come guardia: costruisce un .kairos
+minimo dal sorgente CORRENTE di lib/bits.kairos e fa
+`call __mn_uhalve64(...); uncall __mn_uhalve64(...)` dall'esterno, che deve
+completare pulito con q=2 r=1 (5 >> 1).
 """
 
 from __future__ import annotations
@@ -112,16 +81,7 @@ class TestHotfixUhalve64Uncall(unittest.TestCase):
         cls.kairos_python = _resolve_kairos_python(cls.kairos_root)
 
     def _build_fixture(self) -> str:
-        helpers = _extract_procs(
-            os.path.join(ROOT, "lib/helpers.kairos"), {"__mn_move_int"}
-        )
-        divmod_ = _extract_procs(
-            os.path.join(ROOT, "lib/divmod.kairos"), {"__mn_divmod_nonneg_fast"}
-        )
-        bits = _extract_procs(
-            os.path.join(ROOT, "lib/bits.kairos"),
-            {"__mn_uhalve64_general", "__mn_uhalve64"},
-        )
+        bits = _extract_procs(os.path.join(ROOT, "lib/bits.kairos"), {"__mn_uhalve64"})
         main = """
 procedure main()
     local int x = 0
@@ -141,7 +101,7 @@ procedure main()
     x -= 5
     delocal int x = 0
 """
-        return helpers + "\n\n" + divmod_ + "\n\n" + bits + "\n" + main
+        return bits + "\n" + main
 
     def test_uhalve64_survives_being_uncalled_from_outside(self) -> None:
         src = self._build_fixture()
