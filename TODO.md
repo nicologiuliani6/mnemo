@@ -22,9 +22,9 @@ disgiunte. Gate: `make test-gcc-compat` 189/189, `make test` 36/36,
   condivisa fra rami; un canale rendez-vous non fa da mutex simmetrico), quindi
   le stampe dei due rami possono mescolarsi carattere per carattere
   (`tests/c/examples_advanced/PC.c`). Servirebbe una stampa atomica di riga.
-- **Heap a dimensione fissa**: gli array Kairos non crescono; l'heap di `malloc`
-  è la coda di `__mn_mem` (inferito, ≥1024 celle se c'è una malloc,
-  `--ptr-pool-size` per alzarlo). Sforare = `Idx-Err` della VM.
+- **Heap oltre l'array**: oltre `__mn_mem` l'heap sta su un nastro di stack
+  (illimitato, accesso O(distanza)); una malloc dentro un ramo `par` non è
+  supportata (errore esplicito: l'heap appartiene al chiamante).
 - **union type-punning int↔byte** (`union{int i;unsigned char b[4];}; u.i=…;
   u.b[k]`): il word-model (1 cella = 1 word a 4 byte) non aliasa i sotto-byte;
   scrivere `u.i` non popola `u.b[]`. Union "tagged" (un membro alla volta dello

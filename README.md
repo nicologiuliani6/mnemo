@@ -68,7 +68,7 @@ mnemo compile prog.c [-o exe] [--keep-kairos]   # eseguibile nativo: bytecode + 
 | Opzione | Effetto |
 |---|---|
 | `--main-argc N` | valore di `argc` (altrimenti la direttiva `// mnemo-main-argc: N`, altrimenti 0) |
-| `--ptr-pool-size N` | celle di heap per `malloc` (vedi [Memoria](#memoria)) |
+| `--ptr-pool-size N` | celle di heap ad accesso diretto, prima del nastro (vedi [Memoria](#memoria)) |
 | `--arr-max N` | limite di elementi per array (di default dedotto dal sorgente, minimo 1024) |
 | `--opt-uncall-user-calls` | dopo ogni chiamata idonea ne libera la storia (vedi sotto) |
 | `--check-invertibility` | esegue `main` e poi lo inverte: la VM segnala ogni passo non invertibile |
@@ -96,9 +96,9 @@ C distrugge informazione (`x = 5` perde il vecchio `x`); Kairos no. Mnemo scrive
 
 ### Memoria
 
-Tutto lo stato con nome del programma (scalari, array, struct, globali) e l'heap di `malloc` stanno in un unico array Kairos `int __mn_mem[N]`; un puntatore è un indice. Le procedure ricevono l'array per riferimento, `*p` e `a[i]` con indice calcolato a runtime diventano un accesso diretto `__mn_mem[(base + i)]`.
+Tutto lo stato con nome del programma (scalari, array, struct, globali) e la prima parte dell'heap di `malloc` stanno in un unico array Kairos `int __mn_mem[N]`; un puntatore è un indice. Le procedure ricevono l'array per riferimento; `a[i]` con indice calcolato a runtime diventa un accesso diretto `__mn_mem[(base + i)]`, `*p` un accesso diretto all'array o al nastro.
 
-L'heap occupa la coda dell'array e ha dimensione fissa (gli array Kairos non crescono): Mnemo la deduce dalle `malloc` del sorgente, con almeno 1024 celle se il programma ne usa; `--ptr-pool-size N` alza il minimo. Uscire dall'array è un errore della VM (`Idx-Err`). `free` riusa solo l'ultimo blocco allocato.
+L'heap non ha limite. La sua prima parte sta in coda all'array (dimensione dedotta dalle `malloc` del sorgente, almeno 1024 celle se il programma ne usa; `--ptr-pool-size N` la alza). Gli array Kairos non crescono, quindi oltre la fine dell'array l'heap prosegue su un **nastro** di due stack Kairos con un cursore in mezzo: lì un accesso costa la distanza dall'accesso precedente (scorrere un blocco è O(1) per cella, i salti lunghi costano di più) e il nastro si allunga da solo. `free` riusa solo l'ultimo blocco allocato.
 
 ### `--opt-uncall-user-calls`
 
