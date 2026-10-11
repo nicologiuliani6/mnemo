@@ -2827,6 +2827,8 @@ def _lower_pthread_mnemo_call(node: c.FuncCall, ctx: _Ctx) -> list[Instr] | None
             and f1 not in ctx.uncall_excluded_via_vm_targets
             and f0 not in ctx.pool_using_targets
             and f1 not in ctx.pool_using_targets
+            and f0 not in ctx.show_using_targets   # l'uncall ristamperebbe
+            and f1 not in ctx.show_using_targets
             and not _func_is_recursive_user(ctx.file_ast, f0)
             and not _func_is_recursive_user(ctx.file_ast, f1)
         )
@@ -4292,10 +4294,8 @@ def _lower_putchar(expr: c.Node, ctx: _Ctx) -> list[Instr]:
 
 
 def _io_opt_uncall_wrap(ctx: "_Ctx", call_ins: "ICall") -> list[Instr]:
-    """Pass-through: __mn_putd/__mn_putx hanno body con call ricorsive (__mn_putd_uint).
-    `uncall` su questi triggera bug VM nel pass inverse profondo (SIGSEGV).
-    Manteniamo solo la call forward; show è no-op in inverse, side effect rimane.
-    """
+    """Pass-through: la stampa resta una sola call in avanti (un uncall la
+    ristamperebbe: in Kairos Inv(show) = show)."""
     return [call_ins]
 
 
@@ -8367,10 +8367,15 @@ def _instr_list_uses_pool_ops(instrs: list[Instr]) -> bool:
     return rec(instrs)
 
 
+# Procedure di stampa della libreria (mnemo/lib/put*.kairos): contengono show.
+_PRINT_LIB_PREFIXES = ("__mn_put", "__mn_emit_")
+
+
 def _instr_list_uses_show(instrs: list[Instr]) -> bool:
-    """True se il callee (o nested) contiene `IShow` (printf/putchar).
-    VM `op_uncall` su void proc con `show` → SIGSEGV. Solo per single-call
-    opt-uncall; par-uncall NON usa questo (par/rap inverse è simmetrico)."""
+    """True se il callee (o nested) stampa: `IShow` diretto o una procedura di
+    stampa della libreria. In Kairos Inv(show) = show, quindi l'uncall di
+    --opt-uncall-user-calls ristamperebbe l'output: queste chiamate restano
+    fuori. Solo per single-call opt-uncall."""
 
     def rec(seq: list[Instr]) -> bool:
         for ins in seq:
@@ -8396,6 +8401,8 @@ def _instr_list_uses_show(instrs: list[Instr]) -> bool:
                 if ins.rollback_instrs is not None and rec(ins.rollback_instrs):
                     return True
             elif isinstance(ins, IShow):
+                return True
+            elif isinstance(ins, ICall) and ins.proc.startswith(_PRINT_LIB_PREFIXES):
                 return True
         return False
 
@@ -8931,8 +8938,8 @@ def _malloc_using_transitive_closure(
 
 def _show_using_transitive_closure(probe_map: dict[str, Function]) -> frozenset[str]:
     """Chiusura transitiva delle funzioni che usano `show` (printf/putchar) —
-    direttamente o tramite call. Solo per escludere single-call opt-uncall;
-    par-uncall NON usa questa lista."""
+    direttamente o tramite call. Escluse da opt-uncall (singola e par):
+    l'uncall le ristamperebbe."""
     blocked: set[str] = {
         n for n, f in probe_map.items() if _user_procedure_uses_show(f)
     }
@@ -9408,14 +9415,9 @@ def _lower_funccall_with_ret(
             stk = pool_actual + tape_actual + _kairos_stack_actuals(ctx)
             ir_blk = name in ctx.uncall_excluded_via_vm_targets
             ch_blk = name in ctx.channel_using_targets
-            # show-using fn (printf transitivo): storicamente escluse da
-            # opt-uncall dentro loop perché l'uncall inverso faceva crescere
-            # `recursion_depth` di `__mn_putd_uint@N` (auto-ricorsivo) senza
-            # bound → hang cross-iterazione. RISOLTO dal put-skip VM (inverse di
-            # `call __mn_put*` = no-op, vm_invert.h): niente più replay
-            # ricorsivo del printer. Esclusione rimossa 2026-05-31 (verificato:
-            # printer-in-loop 50 iter opt-uncall = base; sweep 163/163 generic).
-            show_blk = False
+            # Funzioni che stampano (anche indirettamente): in Kairos Inv(show)
+            # = show, quindi l'uncall dell'ottimizzazione ristamperebbe.
+            show_blk = name in ctx.show_using_targets
             # ptr-param-writer (`*out=…`): ora opt'd DENTRO un loop (dove il
             # freeing dell'hist per-iter ripaga). Due bug risolti per renderlo
             # corretto: (1) lato-VM branch_trace consumata FIFO invece di LIFO →

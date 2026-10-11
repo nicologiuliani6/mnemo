@@ -21,11 +21,13 @@ from mnemo.ir import (
     Block,
     Function,
     ICall,
+    IConst,
     IIfKairos,
     IFromUntilKairos,
     ILocalBlock,
     IPar,
     Instr,
+    IShow,
     ITry,
     IUncall,
     Program,
@@ -1821,6 +1823,9 @@ def _program_uses_ptr_pool(prog: Program) -> bool:
 
 
 
+INVERTIBILITY_MARK = "__mn_inv_mark"
+
+
 def _wrap_main_in_invertibility_check(prog: Program) -> None:
     """Sposta corpo `main` in nuova proc `__main__(stack hist, stack scratch)` e
     sostituisce `main` con un wrapper che fa `call __main__ ; uncall __main__`.
@@ -1840,9 +1845,10 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
         for (t, n) in old_main.locals
         if not (t == "stack" and n in ("__mn_hist", "__mn_scratch"))
     ]
-    # L'output del forward (show) esce prima dell'uncall, che gira con gli show
-    # soppressi; il dump finale della VM mostra solo hist/scratch, vuoti se
-    # l'inverso ha riportato tutto allo stato iniziale.
+    # In Kairos Inv(show) = show: l'uncall ristampa l'output in ordine
+    # rovesciato. Il wrapper stampa un marcatore fra call e uncall e `mnemo run`
+    # mostra solo cio' che lo precede. Il dump finale mostra hist/scratch, vuoti
+    # se l'inverso ha riportato tutto allo stato iniziale.
     inner_blocks = list(old_main.blocks)
     inner = Function(
         name="__main__",
@@ -1852,12 +1858,15 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
     )
     wrapper_body = [
         ICall("__main__", ["__mn_hist", "__mn_scratch"]),
+        IConst(INVERTIBILITY_MARK, 1),
+        IShow(INVERTIBILITY_MARK),
+        IConst(INVERTIBILITY_MARK, -1),
         IUncall("__main__", ["__mn_hist", "__mn_scratch"]),
     ]
     wrapper = Function(
         name="main",
         params=[],
-        locals=[("stack", "__mn_hist"), ("stack", "__mn_scratch")],
+        locals=[("stack", "__mn_hist"), ("stack", "__mn_scratch"), ("int", INVERTIBILITY_MARK)],
         blocks=[Block(bid="entry", instrs=wrapper_body)],
     )
     prog.functions[main_idx] = inner

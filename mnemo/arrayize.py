@@ -253,6 +253,83 @@ def _seq(f: _Fn, instrs: list, fns: dict[str, Function]) -> list:
     out: list = []
     for ins in instrs:
         out.extend(_one(f, ins, fns))
+    return _fix_indices(f, out)
+
+
+_ARR_REF = re.compile(rf"(?:{MEM_R}|{MEM})\[")
+
+
+def _split_ref(ref: str) -> tuple[str, str] | None:
+    """`arr[idx]` -> (arr, idx), con idx fra le parentesi quadre esterne."""
+    m = _ARR_REF.match(ref)
+    if not m or not ref.endswith("]"):
+        return None
+    return ref[: m.end() - 1], ref[m.end():-1]
+
+
+def _inner_refs(idx: str) -> list[str]:
+    """Riferimenti a cella (anche annidati) che compaiono nell'indice."""
+    out, i = [], 0
+    while True:
+        m = _ARR_REF.search(idx, i)
+        if not m:
+            return out
+        depth, j = 0, m.end() - 1
+        while j < len(idx):
+            depth += idx[j] == "["
+            depth -= idx[j] == "]"
+            if depth == 0:
+                break
+            j += 1
+        out.append(idx[m.start(): j + 1])
+        i = j + 1
+
+
+def _hoist_dst(f: _Fn, dst: str, make) -> list:
+    """Kairos vieta che l'indice della cella scritta legga lo stesso array
+    (`m[(4 + m[407])] -= t`): le celle dell'indice passano per temporanei,
+    letti prima e azzerati dopo. Se l'indice nomina la cella scritta stessa
+    l'azzeramento fallisce: e' davvero un'operazione non reversibile."""
+    sp = _split_ref(dst)
+    if sp is None:
+        return [make(dst)]
+    arr, idx = sp
+    inner = [r for r in _inner_refs(idx)]
+    if not inner:
+        return [make(dst)]
+    temps = []
+    for r in inner:
+        t = f.tmp()
+        idx = idx.replace(r, t)
+        temps.append((t, r))
+    body = [make(f"{arr}[{idx}]")]
+    for t, r in reversed(temps):
+        body = [ILocalBlock(t, [IAddEq(t, Var(r))] + body + [ISubEq(t, Var(r))])]
+    return body
+
+
+def _fix_indices(f: _Fn, instrs: list) -> list:
+    out: list = []
+    for ins in instrs:
+        if isinstance(ins, ILocalBlock):
+            out.append(ILocalBlock(ins.var, _fix_indices(f, ins.body_instrs)))
+        elif isinstance(ins, (IAddEq, ISubEq, IXorEq)):
+            cls = type(ins)
+            out.extend(_hoist_dst(f, ins.dst, lambda d, c=cls, r=ins.rhs: c(d, r)))
+        elif isinstance(ins, IConst):
+            out.extend(_hoist_dst(f, ins.dst, lambda d, v=ins.value: IConst(d, v)))
+        elif isinstance(ins, ISwap):
+            a = _hoist_dst(f, ins.a, lambda d: d)
+            if len(a) == 1 and isinstance(a[0], str):
+                out.extend(_hoist_dst(f, ins.b, lambda d, x=ins.a: ISwap(x, d)))
+            else:
+                t = f.tmp()  # scambio con indici calcolati: passa per un temporaneo
+                out.extend(_fix_indices(f, [ILocalBlock(t, [
+                    IAddEq(t, Var(ins.a)), ISubEq(ins.a, Var(t)),
+                    IAddEq(ins.a, Var(ins.b)), ISubEq(ins.b, Var(ins.a)),
+                    IAddEq(ins.b, Var(t)), ISubEq(t, Var(ins.b))])]))
+        else:
+            out.append(ins)
     return out
 
 

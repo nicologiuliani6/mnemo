@@ -23,7 +23,7 @@ from mnemo.ir import (
 from mnemo.errors import MnemoCompileError
 from mnemo.ir_dump import dump_program
 from mnemo.emit_kairos import emit_program
-from mnemo.compile import compile_c_to_kairos, write_kairos_next_to_c
+from mnemo.compile import INVERTIBILITY_MARK, compile_c_to_kairos, write_kairos_next_to_c
 from mnemo.kairos_bytecode import build_native_standalone, resolve_kairos_root
 
 
@@ -495,6 +495,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     exit_out: int | None = None
     in_dump = False
+    after_mark = False
     dump_tail: list[str] = []
     pending_blanks: list[str] = []   # trailing newline holdback (rstrip pre-dump)
     assert proc.stdout is not None
@@ -502,8 +503,14 @@ def _cmd_run(args: argparse.Namespace) -> None:
         if args.vm_dump:
             sys.stdout.write(line)
             continue
-        if in_dump:
+        if in_dump or after_mark:
             dump_tail.append(line)
+            if "=== VM dump ===" in line:
+                in_dump = True
+            continue
+        if line.startswith(INVERTIBILITY_MARK + ":"):
+            # --check-invertibility: da qui l'uncall ristampa l'output al contrario.
+            after_mark = True
             continue
         if "=== VM dump ===" in line:
             in_dump = True
