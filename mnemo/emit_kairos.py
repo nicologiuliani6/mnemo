@@ -189,7 +189,8 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
         if ins.rollback_instrs is not None:
             lines.append(f"{indent}rollback")
             _emit_instr_seq(lines, ins.rollback_instrs, ind2)
-        lines.append(f"{indent}yrt {cond}")
+        exit_cond = " ".join(ins.yrt) if ins.yrt else cond
+        lines.append(f"{indent}yrt {exit_cond}")
         return
     if isinstance(ins, ILocalBlock):
         lines.append(f"{indent}local int {ins.var} = 0")

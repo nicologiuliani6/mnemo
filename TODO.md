@@ -4,7 +4,7 @@
 
 Mnemo genera solo Kairos puro (nessuna estensione VM): memoria come array
 Kairos `__mn_mem`, `* / %` nativi, mutex no-op, `par` su finestre di memoria
-disgiunte. Gate: `make test-gcc-compat` 189/189, `make test` 36/36,
+disgiunte. Gate: `make test-gcc-compat` 190/190, `make test` 36/36,
 `make test-unit` verde, corpus `tests/c/probe` (vedi il conteggio in `run.sh`).
 
 ## Limiti noti (trovati a corpus, fix non banale)

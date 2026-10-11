@@ -205,7 +205,7 @@ procedure __mn_putd_width_left(int n, int width, stack __mn_hist, stack __mn_scr
     total -= sign_extra
     total -= d
     delocal int total = 0
-    push(d, __mn_hist)
+    uncall __mn_dcount_unsigned(abs_n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
     if n < z then
         abs_n += n
@@ -260,7 +260,7 @@ procedure __mn_putd_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     total -= sign_extra
     total -= d
     delocal int total = 0
-    push(d, __mn_hist)
+    uncall __mn_dcount_unsigned(abs_n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
     if n < z then
         abs_n += n
@@ -290,7 +290,7 @@ procedure __mn_putd_uint_width(int n, int width, stack __mn_hist, stack __mn_scr
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_dcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 procedure __mn_putd_uint_width_left(int n, int width, stack __mn_hist, stack __mn_scratch)
@@ -308,7 +308,7 @@ procedure __mn_putd_uint_width_left(int n, int width, stack __mn_hist, stack __m
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_dcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 procedure __mn_putd_uint_width_zero(int n, int width, stack __mn_hist, stack __mn_scratch)
@@ -326,7 +326,7 @@ procedure __mn_putd_uint_width_zero(int n, int width, stack __mn_hist, stack __m
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_dcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 // `%Nd` runtime: emette `(N - digits_of(n)) - (1 se n<0)` spazi a sinistra,
@@ -363,7 +363,7 @@ procedure __mn_putd_width(int n, int width, stack __mn_hist, stack __mn_scratch)
     total -= sign_extra
     total -= d
     delocal int total = 0
-    push(d, __mn_hist)
+    uncall __mn_dcount_unsigned(abs_n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
     if n < z then
         abs_n += n

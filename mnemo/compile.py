@@ -1,4 +1,4 @@
-"""C → .kairos: parse, lower, emit, prelude lib/."""
+"""C → .kairos: parse, lower, emit, prelude mnemo/lib/."""
 
 from __future__ import annotations
 

@@ -26,13 +26,13 @@ _PROC_HEAD = re.compile(
 
 
 def lib_dir() -> Path:
-    """Directory `mnemo/lib` (accanto al pacchetto Python `mnemo/`)."""
-    return Path(__file__).resolve().parent.parent / "lib"
+    """Directory `mnemo/lib`, dentro il pacchetto (finisce anche nella wheel)."""
+    return Path(__file__).resolve().parent / "lib"
 
 
 def lib_procedure_index() -> dict[str, str]:
     """
-    Mappa nome procedura Kairos → file `.kairos` in `lib/` che la definisce.
+    Mappa nome procedura Kairos → file `.kairos` in `mnemo/lib/` che la definisce.
     Usato per includere automaticamente le lib necessarie alle chiamate nel C.
     """
     root = lib_dir()

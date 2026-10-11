@@ -19,7 +19,7 @@ class TestEncryptPerf(unittest.TestCase):
     MAX_RATIO = 3.0  # opt deve essere <3x baseline. Stato attuale ~1.0x.
 
     # Timeout bump (era 120s): migrazione Kairos puro (rimozione mnhalve/
-    # mnsplit32 nativi, vedi lib/bits.kairos e lib/divmod.kairos) rende
+    # mnsplit32 nativi, vedi mnemo/lib/bits.kairos e mnemo/lib/divmod.kairos) rende
     # and_into/or_into/shr_into O(k^2 log a)/O(n log a) invece di O(k^2)/O(n)
     # con halving nativo O(1) — costo intrinseco, non un regressione VM.
     # encrypt.c (DES-like, molte and/or/shr per round) passa da ~4s a ~190s

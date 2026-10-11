@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "lib/**"
+      - "mnemo/lib/**"
       - "mnemo/**"
       - "tests/**"
       - "Makefile"
       - ".github/workflows/mnemo-vs-gcc.yml"
   pull_request:
     paths:
-      - "lib/**"
+      - "mnemo/lib/**"
       - "mnemo/**"
       - "tests/**"
       - "Makefile"

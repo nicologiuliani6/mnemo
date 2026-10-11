@@ -67,6 +67,8 @@ BUILTIN_KAIROS_PROCS = frozenset(
         "__mn_mod_nonneg",
         "__mn_and_into",
         "__mn_or_into",
+        "__mn_and64_into",
+        "__mn_or64_into",
         "__mn_shl_into",
         "__mn_shr_into",
         "__mn_pool_alloc",
@@ -7675,22 +7677,26 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
                 ctx.use_scratch = True
             return pre + [IHistPush(ctx.scratch, x) for x in reversed(cl)], Var(t), [t]
         if expr.op == "&":
+            # int: 32 bit con segno (come gcc); long long / uint64_t: 64 bit.
+            callee = "__mn_and64_into" if _expr_is_64bit(expr, ctx) else "__mn_and_into"
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
             pre = pa + pb + [
-                ICall("__mn_and_into", [t, va, vb] + _kairos_stack_actuals(ctx))
+                ICall(callee, [t, va, vb] + _kairos_stack_actuals(ctx))
             ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
                 ctx.use_scratch = True
             return pre + post, Var(t), [t]
         if expr.op == "|":
+            # int: 32 bit con segno (come gcc); long long / uint64_t: 64 bit.
+            callee = "__mn_or64_into" if _expr_is_64bit(expr, ctx) else "__mn_or_into"
             pa, va, ca = _eval_to_arg_var(expr.left, ctx)
             pb, vb, cb = _eval_to_arg_var(expr.right, ctx)
             t = ctx.fresh_temp()
             pre = pa + pb + [
-                ICall("__mn_or_into", [t, va, vb] + _kairos_stack_actuals(ctx))
+                ICall(callee, [t, va, vb] + _kairos_stack_actuals(ctx))
             ]
             post = [IHistPush(ctx.scratch, x) for x in reversed(ca + cb)]
             if ca or cb:
@@ -7916,7 +7922,7 @@ def _eval_expr(expr: c.Node, ctx: _Ctx) -> tuple[list[Instr], Var | Imm, list[st
         # 2^32) come ogni valore unsigned, ALTRIMENTI il raw 64-bit non mascherato
         # leakava in `f() % k`, `int x = f()` ecc. (es. `next_rand() % W` dava un
         # dividendo enorme → modulo sbagliato).
-        if _fn_returns_unsigned(name, ctx):
+        if _fn_returns_unsigned(name, ctx) and not _fn_returns_64bit(name, ctx):
             ctx.use_hist = True
             ins = ins + [ICall("__mn_mask_u32", [t] + _kairos_stack_actuals(ctx))]
         return ins, Var(t), [t]
@@ -10071,6 +10077,55 @@ def _emit_char_trunc(lhs: str, signed: bool, ctx: _Ctx) -> list[Instr]:
     return out
 
 
+def _names_are_64bit(names: list[str], ctx: _Ctx) -> bool:
+    """`long long` (anche via typedef: int64_t/uint64_t/…): 64 bit in C."""
+    try:
+        ex = _expand_typedef_names(list(names), ctx.typedef_map)
+    except MnemoCompileError:
+        ex = list(names)
+    return list(ex).count("long") >= 2
+
+
+def _tnode_is_64bit(tn: c.Node | None, ctx: _Ctx) -> bool:
+    cur = tn
+    while cur is not None and not isinstance(cur, c.IdentifierType):
+        if isinstance(cur, (c.PtrDecl, c.ArrayDecl)):
+            return False
+        cur = getattr(cur, "type", None)
+    return isinstance(cur, c.IdentifierType) and _names_are_64bit(cur.names, ctx)
+
+
+def _fn_returns_64bit(name: str, ctx: _Ctx) -> bool:
+    if ctx.file_ast is None:
+        return False
+    fd = _get_funcdef(ctx.file_ast, name)
+    if fd is None or not isinstance(fd.decl.type, c.FuncDecl):
+        return False
+    return _tnode_is_64bit(fd.decl.type.type, ctx)
+
+
+def _expr_is_64bit(expr: c.Node, ctx: _Ctx) -> bool:
+    """L'espressione ha un tipo a 64 bit in C (`long long`, `[u]int64_t`)?
+    Decide se `&`/`|` lavorano su 64 bit o, come per `int`, su 32."""
+    if isinstance(expr, c.Constant):
+        return "LL" in expr.value.upper()
+    if isinstance(expr, c.ID):
+        return _tnode_is_64bit(ctx.var_types.get(_scope_resolve(ctx, expr.name)), ctx)
+    if isinstance(expr, c.Cast):
+        return _tnode_is_64bit(getattr(expr.to_type, "type", None), ctx)
+    if isinstance(expr, c.FuncCall) and isinstance(expr.name, c.ID):
+        return _fn_returns_64bit(expr.name.name, ctx)
+    if isinstance(expr, c.UnaryOp) and expr.op in ("+", "-", "~"):
+        return _expr_is_64bit(expr.expr, ctx)
+    if isinstance(expr, c.BinaryOp) and expr.op in ("<<", ">>"):
+        return _expr_is_64bit(expr.left, ctx)
+    if isinstance(expr, c.BinaryOp) and expr.op in ("+", "-", "*", "/", "%", "&", "|", "^"):
+        return _expr_is_64bit(expr.left, ctx) or _expr_is_64bit(expr.right, ctx)
+    if isinstance(expr, c.TernaryOp):
+        return _expr_is_64bit(expr.iftrue, ctx) or _expr_is_64bit(expr.iffalse, ctx)
+    return False
+
+
 def _fn_returns_unsigned(name: str, ctx: _Ctx) -> bool:
     """True se la funzione user `name` ha tipo di ritorno `unsigned` (typedef
     espansi: uint32_t/size_t/…)."""
@@ -11013,7 +11068,13 @@ def _lower_try(cond: c.Node, body: c.Compound, rb: c.Compound | None,
         _scope_enter(ctx)
         rb_instrs = _lower_compound_block_items(list(rb.block_items or []), ctx)
         _scope_exit(ctx)
-    return [ITry(lh, op, rh, body_instrs, rb_instrs)]
+    # Asserzione d'uscita: un flag che il body porta a 1. Dopo il commit vale 1,
+    # dopo il rollback il body è stato disfatto e vale 0. Poi va sulla storia.
+    flag = ctx.fresh_loop_ct()
+    ctx.use_hist = True
+    body_instrs = body_instrs + [IAddEq(flag, Imm(1))]
+    try_ins = ITry(lh, op, rh, body_instrs, rb_instrs, (flag, "==", "1"))
+    return [ILocalBlock(flag, [try_ins, IHistPush(ctx.hist, flag)])]
 
 
 def _lower_if(node: c.If, ctx: _Ctx) -> list[Instr]:
@@ -13353,7 +13414,7 @@ def infer_lib_files_from_calls(
     ast: c.FileAST, proc_to_file: dict[str, str]
 ) -> list[str]:
     """
-    Include i file `lib/*.kairos` che definiscono procedure invocate dal C
+    Include i file `mnemo/lib/*.kairos` che definiscono procedure invocate dal C
     (chiamate a nomi non definiti nel .c e non built-in Mnemo).
     """
     defined: set[str] = set()

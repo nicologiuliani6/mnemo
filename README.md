@@ -1,8 +1,8 @@
 # Mnemo
 
-Mnemo compila un **sottoinsieme di C** in [Kairos](https://github.com/nicologiuliani6/kairos), un linguaggio reversibile e concorrente. Il programma C diventa un programma Kairos che si può eseguire in avanti e **all'indietro**: ogni assegnamento distruttivo salva il valore perso su uno stack di storia, così l'intera esecuzione resta invertibile.
+Mnemo compiles a **subset of C** to [Kairos](https://github.com/nicologiuliani6/kairos), a reversible concurrent language. The C program becomes a Kairos program that can run forwards and **backwards**: every destructive assignment saves the lost value on a history stack, so the whole run stays invertible.
 
-Mnemo genera solo Kairos puro (nessuna estensione della VM) e mira a produrre lo stesso output e lo stesso exit code di `gcc` sui programmi del sottoinsieme.
+Mnemo emits pure Kairos only (no VM extensions) and aims to produce the same output and the same exit code as `gcc` on programs in the subset.
 
 ```c
 #include <stdio.h>
@@ -17,27 +17,27 @@ int main(void) {
 ```
 
 ```bash
-mnemo run esempio.c          # 30
+mnemo run example.c          # 30
 ```
 
 ---
 
-## Indice
+## Contents
 
-1. [Installazione](#installazione)
-2. [Uso](#uso)
-3. [Come funziona](#come-funziona)
-4. [Il sottoinsieme di C](#il-sottoinsieme-di-c)
-5. [Parallelismo e canali](#parallelismo-e-canali)
+1. [Installation](#installation)
+2. [Usage](#usage)
+3. [How it works](#how-it-works)
+4. [The C subset](#the-c-subset)
+5. [Parallelism and channels](#parallelism-and-channels)
 6. [try / rollback](#try--rollback)
-7. [Verifica e test](#verifica-e-test)
-8. [Differenze note rispetto a gcc](#differenze-note-rispetto-a-gcc)
+7. [Testing](#testing)
+8. [Known differences from gcc](#known-differences-from-gcc)
 
 ---
 
-## Installazione
+## Installation
 
-Mnemo non include Kairos: il repository Kairos va clonato accanto (default `../kairos`, oppure `KAIROS_ROOT=/percorso`) e compilato.
+Mnemo does not bundle Kairos. Either install the KairosApp package from the [Kairos releases](https://github.com/nicologiuliani6/kairos/releases) (`.deb`, `.rpm`, Arch), or clone the Kairos repository next to Mnemo (default `../kairos`, or `KAIROS_ROOT=/path`) and build it:
 
 ```bash
 git clone https://github.com/nicologiuliani6/kairos.git
@@ -46,151 +46,153 @@ git clone https://github.com/nicologiuliani6/mnemo.git
 cd mnemo && make venv          # .venv + pip install -e .
 ```
 
-Requisiti: Python ≥ 3.10, `gcc` (anche come preprocessore), `make`.
+Each [Mnemo release](https://github.com/nicologiuliani6/mnemo/releases) also ships a wheel: `pip install mnemo-<version>-py3-none-any.whl`.
 
-| Variabile | Default | Effetto |
+Requirements: Python ≥ 3.10, `gcc` (also used as the preprocessor), `make`.
+
+| Variable | Default | Effect |
 |---|---|---|
-| `KAIROS_ROOT` / `MNEMO_KAIROS_ROOT` | `../kairos` | repository Kairos usato per eseguire |
-| `MNEMO_KAIROSAPP` | `kairosapp` | eseguibile alternativo per `mnemo run` |
+| `KAIROS_ROOT` / `MNEMO_KAIROS_ROOT` | `../kairos` | Kairos repository used to run programs |
+| `MNEMO_KAIROSAPP` | `kairosapp` | alternative runner for `mnemo run` |
 
 ---
 
-## Uso
+## Usage
 
 ```bash
-mnemo run prog.c [opzioni]                     # compila in .kairos ed esegue
+mnemo run prog.c [options]                     # compile to .kairos and run
 mnemo dump-kairos prog.c [-o out.kairos] [--stdout]
-mnemo compile prog.c [-o exe] [--keep-kairos]   # eseguibile nativo: bytecode + libvm.so, senza Python
+mnemo compile prog.c [-o exe] [--keep-kairos]   # native executable: bytecode + libvm.so, no Python
 ```
 
-`mnemo run` stampa l'output del programma ed esce con il valore restituito da `main`.
+`mnemo run` prints the program's output and exits with the value returned by `main`.
 
-| Opzione | Effetto |
+| Option | Effect |
 |---|---|
-| `--main-argc N` | valore di `argc` (altrimenti la direttiva `// mnemo-main-argc: N`, altrimenti 0) |
-| `--ptr-pool-size N` | celle di heap ad accesso diretto, prima del nastro (vedi [Memoria](#memoria)) |
-| `--arr-max N` | limite di elementi per array (di default dedotto dal sorgente, minimo 1024) |
-| `--opt-uncall-user-calls` | dopo ogni chiamata idonea ne libera la storia (vedi sotto) |
-| `--check-invertibility` | esegue `main` e poi lo inverte: la VM segnala ogni passo non invertibile |
-| `--auto` (solo `run`) | decide da solo se attivare `--opt-uncall-user-calls` |
-| `--vm-dump`, `--vm-stats` (solo `run`) | stampa il dump finale della VM / quante celle restano vive |
-| `-v` | comandi e codici di uscita su stderr |
+| `--main-argc N` | value of `argc` (otherwise the `// mnemo-main-argc: N` directive, otherwise 0) |
+| `--ptr-pool-size N` | directly addressed heap cells, before the tape (see [Memory](#memory)) |
+| `--arr-max N` | element limit per array (inferred from the source by default, at least 1024) |
+| `--opt-uncall-user-calls` | after each eligible call, frees its history (see below) |
+| `--check-invertibility` | runs `main` and then inverts it: the VM reports every non-invertible step |
+| `--auto` (`run` only) | decides by itself whether to enable `--opt-uncall-user-calls` |
+| `--vm-dump`, `--vm-stats` (`run` only) | print the final VM dump / how many cells are still alive |
+| `-v` | commands and exit codes on stderr |
 
 ---
 
-## Come funziona
+## How it works
 
 ```
 prog.c ─ gcc -E -DMNEMO ─ pycparser ─▶ AST
-      ─ trasformazioni (return anticipati, switch, static, stdlib…)
-      ─ layout_collect.py   una cella di memoria per ogni variabile, array, campo
-      ─ c_lower.py          AST → IR (assegnamenti reversibili, storia, if/from)
-      ─ arrayize.py         celle → array Kairos __mn_mem
-      ─ prelude.py + lib/   procedure di libreria (stampa, bit, divisione…)
-      ─ emit_kairos.py      IR → testo .kairos ─▶ VM Kairos
+      ─ rewrites (early returns, switch, static, stdlib…)
+      ─ layout_collect.py   one memory cell per variable, array, field
+      ─ c_lower.py          AST → IR (reversible assignments, history, if/from)
+      ─ arrayize.py         cells → Kairos array __mn_mem
+      ─ prelude.py + mnemo/lib/   library procedures (printing, bits, division…)
+      ─ emit_kairos.py      IR → .kairos text ─▶ Kairos VM
 ```
 
-### Reversibilità
+### Reversibility
 
-C distrugge informazione (`x = 5` perde il vecchio `x`); Kairos no. Mnemo scrive ogni assegnamento come `push(x, __mn_hist); x += 5`: il vecchio valore va sullo stack di storia `__mn_hist`, i temporanei su `__mn_scratch`. L'esecuzione all'indietro li ripesca. Le strutture di controllo diventano `if … fi` e `from … until` di Kairos con le guardie d'uscita necessarie all'inversione.
+C destroys information (`x = 5` loses the old `x`); Kairos does not. Mnemo writes every assignment as `push(x, __mn_hist); x += 5`: the old value goes to the history stack `__mn_hist`, temporaries to `__mn_scratch`. Running backwards pops them again. Control flow becomes Kairos `if … fi` and `from … until` with the exit assertions the inverse needs, and every `local` is closed by a `delocal` in the same block, as Kairos (like Janus) requires.
 
-### Memoria
+### Memory
 
-Tutto lo stato con nome del programma (scalari, array, struct, globali) e la prima parte dell'heap di `malloc` stanno in un unico array Kairos `int __mn_mem[N]`; un puntatore è un indice. Le procedure ricevono l'array per riferimento; `a[i]` con indice calcolato a runtime diventa un accesso diretto `__mn_mem[(base + i)]`, `*p` un accesso diretto all'array o al nastro.
+All the program's named state (scalars, arrays, structs, globals) and the first part of the `malloc` heap live in a single Kairos array `int __mn_mem[N]`; a pointer is an index. Procedures receive the array by reference; `a[i]` with a run-time index becomes a direct access `__mn_mem[(base + i)]`, `*p` a direct access to the array or to the tape.
 
-L'heap non ha limite. La sua prima parte sta in coda all'array (dimensione dedotta dalle `malloc` del sorgente, almeno 1024 celle se il programma ne usa; `--ptr-pool-size N` la alza). Gli array Kairos non crescono, quindi oltre la fine dell'array l'heap prosegue su un **nastro** di due stack Kairos con un cursore in mezzo: lì un accesso costa la distanza dall'accesso precedente (scorrere un blocco è O(1) per cella, i salti lunghi costano di più) e il nastro si allunga da solo. `free` riusa solo l'ultimo blocco allocato.
+The heap is unbounded. Its first part sits at the end of the array (size inferred from the source's `malloc`s, at least 1024 cells if the program uses any; `--ptr-pool-size N` raises it). Kairos arrays cannot grow, so past the end of the array the heap continues on a **tape** made of two Kairos stacks with a cursor between them: there an access costs the distance from the previous access (walking a block is O(1) per cell, long jumps cost more) and the tape grows by itself. `free` only reuses the most recently allocated block.
 
 ### `--opt-uncall-user-calls`
 
-La storia cresce a ogni assegnamento. Con questa opzione, dopo `call f(…)` Mnemo salva le celle scritte da `f`, fa `uncall f` (che svuota la storia prodotta da `f`) e rimette i risultati con uno scambio XOR: stesso risultato, molta meno memoria su programmi lunghi. Restano escluse la ricorsione diretta, le funzioni con canali o `par`, e le funzioni che scrivono attraverso parametri puntatore fuori dai cicli.
+The history grows with every assignment. With this option, after `call f(…)` Mnemo saves the cells written by `f`, runs `uncall f` (which empties the history produced by `f`) and puts the results back with an XOR swap: same result, much less memory on long programs. Excluded: direct recursion, functions with channels or `par`, and functions that write through pointer parameters outside loops.
 
-### Librerie Kairos (`lib/`)
+### Kairos libraries (`mnemo/lib/`)
 
-Incluse automaticamente quando servono: `putd`/`putx`/`puto` (stampa di interi in base 10/16/8, con larghezza e padding), `bits` (`&`, `|`, `<<`, `>>`), `divmod`, `mul`, `mod`, `helpers` (maschera a 32 bit degli `unsigned`). `* / %` sono operatori nativi di Kairos.
+Included automatically when needed: `putd`/`putx`/`puto` (printing integers in base 10/16/8, with width and padding), `bits` (`&`, `|`, `<<`, `>>`), `divmod`, `mul`, `mod`, `helpers` (32-bit mask for `unsigned`). `* / %` are native Kairos operators.
 
 ---
 
-## Il sottoinsieme di C
+## The C subset
 
-**Tipi.** `int`, `unsigned`, `char` (anche aritmetica a 8 bit), `bool`/`_Bool`, `short`/`long`/`long long` (come `int`), `size_t`, `int*_t`/`uint*_t`, `enum`, `struct`, `union` (anche annidate), `typedef`. Niente floating point.
+**Types.** `int`, `unsigned`, `char` (including 8-bit arithmetic), `bool`/`_Bool`, `short`/`long`/`long long` (as `int`), `size_t`, `int*_t`/`uint*_t`, `enum`, `struct`, `union` (nested too), `typedef`. No floating point.
 
-**Puntatori.** `void *`, puntatori multipli (`int **`), aritmetica (`p + i`, `p++`, `q - p`), `&x`, `&s.campo`, `&a[i]`, puntatori a struct e a righe di matrici (`int (*r)[N]`), `malloc`/`calloc`/`free`.
+**Pointers.** `void *`, multi-level pointers (`int **`), arithmetic (`p + i`, `p++`, `q - p`), `&x`, `&s.field`, `&a[i]`, pointers to structs and to matrix rows (`int (*r)[N]`), `malloc`/`calloc`/`free`.
 
-**Array.** Multidimensionali, inizializzatori (anche designati), indice calcolato a runtime, passaggio a funzione come puntatore. Niente VLA.
+**Arrays.** Multidimensional, initialisers (designated too), run-time indices, passing to functions as pointers. No VLAs.
 
-**Controllo.** `if`, `switch` (corpo tra `{}`), `while`, `do`, `for`, `break`, `continue`, `return` ovunque, operatore ternario, `&&`/`||` con cortocircuito, `_Generic`. Niente `goto`, `setjmp`, `_Atomic`, asm, bit-field.
+**Control flow.** `if`, `switch` (body inside `{}`), `while`, `do`, `for`, `break`, `continue`, `return` anywhere, ternary operator, short-circuit `&&`/`||`, `_Generic`. No `goto`, `setjmp`, `_Atomic`, asm, bit-fields.
 
-**Funzioni.** Ricorsione anche mutua, `struct` per valore e come ritorno, puntatori a funzione (assegnati, in array a indice runtime, come parametro, come campo di struct, restituiti da funzione). `main` è `void`, `int argc` o `int argc, char **argv` (`argv` è solo sintattico). Niente funzioni variadiche definite dall'utente.
+**Functions.** Recursion (mutual too), `struct` by value and as return value, function pointers (assigned, in arrays with run-time index, as parameters, as struct fields, returned by functions). `main` is `void`, `int argc` or `int argc, char **argv` (`argv` is syntactic only). No user-defined variadic functions.
 
-**Stringhe.** `char *` da letterali (anche riassegnati e restituiti), `char s[] = "…"`, `printf("%s", …)`.
+**Strings.** `char *` from literals (reassigned and returned too), `char s[] = "…"`, `printf("%s", …)`.
 
-**Libreria standard** (molte funzioni sono valutate in compilazione su argomenti costanti):
+**Standard library** (many functions are evaluated at compile time on constant arguments):
 
-| Header | Supporto |
+| Header | Support |
 |---|---|
-| `stdio.h` | `printf` (`%d %i %u %x %X %o %c %s %p %%`, larghezza, `-`, `0`, `l`/`ll`), `putchar`, `puts`, `sprintf`/`snprintf` su argomenti costanti; `fprintf`/`fputs`/`fputc` su `stdout` (su `stderr` sono muti); `fflush` & co. valgono 0 |
-| `stdlib.h` | `malloc`, `calloc`, `free`, `abs`/`labs`/`llabs`, `div`/`ldiv`, `atoi`/`strtol`/`strtoul` su letterali, `exit`/`abort` solo in `main`, `getenv` → `NULL` |
+| `stdio.h` | `printf` (`%d %i %u %x %X %o %c %s %p %%`, width, `-`, `0`, `l`/`ll`), `putchar`, `puts`, `sprintf`/`snprintf` on constant arguments; `fprintf`/`fputs`/`fputc` on `stdout` (silent on `stderr`); `fflush` & co. return 0 |
+| `stdlib.h` | `malloc`, `calloc`, `free`, `abs`/`labs`/`llabs`, `div`/`ldiv`, `atoi`/`strtol`/`strtoul` on literals, `exit`/`abort` only in `main`, `getenv` → `NULL` |
 | `string.h` | `strlen`, `strcmp`, `strncmp`, `strchr`, `strrchr`, `strstr`, `strspn`, `memcmp`, `memchr`, `strcpy`, `strcat`, `memcpy`, `memset`, `memmove`, `strdup`, `strerror` |
 | `strings.h` | `bzero`, `bcopy`, `index`, `rindex`, `strcasecmp` |
 | `stdarg.h` | `va_list`, `va_start`, `va_arg`, `va_end` |
 | `time.h`, `locale.h` | `time`/`clock` → 0, `setlocale` → `NULL` |
 
-Direttive nel sorgente: `// mnemo-main-argc: N`.
+Source directive: `// mnemo-main-argc: N`.
 
 ---
 
-## Parallelismo e canali
+## Parallelism and channels
 
 ```c
 void mnemo_pthread_parallel2(void (*a)(void), void (*b)(void));
 ```
 
-Con due funzioni distinte diventa un `par … and … rap` di Kairos: due thread reali. In Kairos i rami di un `par` non condividono memoria scrivibile, quindi il ramo destro lavora su una propria finestra di memoria (`__mn_memR`, con una copia delle globali che legge). Una variabile globale **scritta** da un ramo e usata dall'altro è un errore di compilazione: i rami comunicano solo con i canali. `parallel2(f, f)` con la stessa funzione è eseguito in sequenza. Varianti: `mnemo_pthread_parallel_with(worker, cont)` e `mnemo_pthread_parallel_with1(worker, arg, cont)`.
+With two distinct functions this becomes a Kairos `par … and … rap`: two real threads. In Kairos the branches of a `par` share no writable memory, so the right branch works on its own memory window (`__mn_memR`, with a copy of the globals it reads). A global **written** by one branch and used by the other is a compile error: branches communicate only through channels. `parallel2(f, f)` with the same function runs sequentially. Variants: `mnemo_pthread_parallel_with(worker, cont)` and `mnemo_pthread_parallel_with1(worker, arg, cont)`.
 
-I canali sono quelli sincroni di Kairos:
+Channels are Kairos's synchronous channels:
 
-- `mnemo_kairos_channel_t` con `ssend`/`srecv`, anche con passaggio di canali (vedi `tests/c/examples_advanced/pi_calculus.c` e `mnemo_kairos_pi.h`);
-- il modello produttore/consumatore di `tests/c/examples_advanced/mps.h`, dove un campo `pthread_mutex_t lane` funge da canale.
+- `mnemo_kairos_channel_t` with `ssend`/`srecv`, including channel passing (see `tests/c/examples_advanced/pi_calculus.c` and `mnemo_kairos_pi.h`);
+- the producer/consumer model of `tests/c/examples_advanced/mps.h`, where a `pthread_mutex_t lane` field acts as a channel.
 
-`pthread_mutex_lock`/`unlock` su un mutex vero sono **no-op**: non essendoci memoria condivisa fra i rami non c'è nulla da proteggere, e un canale rendez-vous non può fare da mutex simmetrico. Conseguenza: le `printf` di due rami paralleli possono mescolarsi carattere per carattere.
+`pthread_mutex_lock`/`unlock` on an actual mutex are **no-ops**: with no shared memory between branches there is nothing to protect, and a rendez-vous channel cannot act as a symmetric mutex. As a consequence, `printf`s from two parallel branches may interleave character by character.
 
 ---
 
 ## try / rollback
 
-Estensione di Mnemo che si appoggia al `try` di Kairos:
+A Mnemo extension built on Kairos's `try`:
 
 ```c
 try (x < 10) {
-    x += passo;          /* eseguito in avanti */
+    x += step;           /* run forwards */
 } rollback {
-    tentativi++;         /* se la condizione è falsa: corpo annullato, poi questo */
+    attempts++;          /* if the condition is false: body undone, then this */
 }
 ```
 
-La condizione, valutata dopo il corpo, è un confronto semplice; niente `par` o canali nel corpo. Esempi: `tests/c/repro/try_*.c`, `tests/c/examples_advanced/maze_backtrack.c`.
+The condition, evaluated after the body, is a simple comparison; no `par` or channels in the body. Mnemo adds the `yrt` exit assertion itself (a flag the body sets, so it is true after a commit and false after a rollback) and then moves the flag to the history. Examples: `tests/c/repro/try_*.c`, `tests/c/examples_advanced/maze_backtrack.c`.
 
 ---
 
-## Verifica e test
+## Testing
 
-| Comando | Cosa fa |
+| Command | What it does |
 |---|---|
-| `make test-unit` | test Python (`tests/test_*.py`) |
-| `make test` | compila ed esegue `tests/c/examples/*.c` |
-| `make test-gcc-compat` | 189 programmi: stdout ed exit code devono coincidere con `gcc` (`COMPAT_ARGS='--category control'` per filtrare, `…-stop` per fermarsi al primo errore) |
-| `bash tests/c/probe/run.sh` | corpus più ampio di confronto 1:1 con `gcc` |
-| `make run FILE=prog.c` | un singolo file |
-| `make clean-kairos` | rimuove i `.kairos` generati |
+| `make test-unit` | Python tests (`tests/test_*.py`) |
+| `make test` | compiles and runs `tests/c/examples/*.c` |
+| `make test-gcc-compat` | 190 programs: stdout and exit code must match `gcc` (`COMPAT_ARGS='--category control'` to filter, `…-stop` to stop at the first failure) |
+| `bash tests/c/probe/run.sh` | larger 1:1 comparison corpus against `gcc` |
+| `make run FILE=prog.c` | a single file |
+| `make clean-kairos` | removes the generated `.kairos` files |
 
-`tests/c/repro/` raccoglie i casi di regressione e alcuni progetti più grandi (`encrypt.c`, `des.c`, `projects/`), `tests/c/examples_advanced/` gli esempi concorrenti.
+`tests/c/repro/` holds the regression cases and a few larger projects (`encrypt.c`, `des.c`, `projects/`); `tests/c/examples_advanced/` the concurrent examples.
 
 ---
 
-## Differenze note rispetto a gcc
+## Known differences from gcc
 
-- `int` è a 64 bit: l'overflow con segno (comportamento indefinito in C) non avvolge a 32 bit; `unsigned` invece avvolge correttamente modulo 2³².
-- `sizeof` di un puntatore vale 4 (una cella).
-- Gli argomenti di una chiamata sono valutati da sinistra a destra.
-- Niente I/O reale (file, input), niente segnali né `errno`.
-- Le `printf` di due rami `par` possono mescolarsi (vedi sopra).
+- `int` is 64-bit: signed overflow (undefined behaviour in C) does not wrap at 32 bits; `unsigned` does wrap correctly modulo 2³².
+- `sizeof` a pointer is 4 (one cell).
+- Call arguments are evaluated left to right.
+- No real I/O (files, input), no signals, no `errno`.
+- `printf`s from two `par` branches may interleave (see above).

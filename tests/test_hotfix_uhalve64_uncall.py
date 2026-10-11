@@ -5,7 +5,7 @@ Storicamente il dimezzamento unsigned conteneva una coppia call+uncall di
 chiamata veniva invertita da un contesto esterno (try/rollback che fa
 rollback, es. maze_backtrack.c). Ora `__mn_uhalve64` è scritta con operazioni
 native e non chiama nulla; il test resta come guardia: costruisce un .kairos
-minimo dal sorgente CORRENTE di lib/bits.kairos e fa
+minimo dal sorgente CORRENTE di mnemo/lib/bits.kairos e fa
 `call __mn_uhalve64(...); uncall __mn_uhalve64(...)` dall'esterno, che deve
 completare pulito con q=2 r=1 (5 >> 1).
 """
@@ -81,7 +81,7 @@ class TestHotfixUhalve64Uncall(unittest.TestCase):
         cls.kairos_python = _resolve_kairos_python(cls.kairos_root)
 
     def _build_fixture(self) -> str:
-        bits = _extract_procs(os.path.join(ROOT, "lib/bits.kairos"), {"__mn_uhalve64"})
+        bits = _extract_procs(os.path.join(ROOT, "mnemo/lib/bits.kairos"), {"__mn_uhalve64"})
         main = """
 procedure main()
     local int x = 0

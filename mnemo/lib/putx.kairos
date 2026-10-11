@@ -95,7 +95,7 @@ procedure __mn_putx_width(int n, int width, stack __mn_hist, stack __mn_scratch)
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 // `%-Nx` runtime: __mn_putx poi (N - hex_digits) spazi a destra.
@@ -114,7 +114,7 @@ procedure __mn_putx_width_left(int n, int width, stack __mn_hist, stack __mn_scr
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 // `%0Nx` runtime: emette (N - hex_digits) zeri ASCII, poi __mn_putx.
@@ -133,7 +133,7 @@ procedure __mn_putx_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 // Split u64 hi/lo (bit 32-63 / 0-31) di un cell a 64 bit, puro (nessun
@@ -258,12 +258,12 @@ procedure __mn_u64_split32(int src, int hi, int lo, stack __mn_hist, stack __mn_
     delocal int j = 0
     push(min64, __mn_hist)
     delocal int min64 = 0
-    push(xorig, __mn_hist)
-    delocal int xorig = 0
-    push(mod32, __mn_hist)
-    delocal int mod32 = 0
     push(i, __mn_hist)
     delocal int i = 0
+    push(mod32, __mn_hist)
+    delocal int mod32 = 0
+    push(xorig, __mn_hist)
+    delocal int xorig = 0
 
 // Stampa intero u64 in esadecimale lowercase, no leading zeros.
 // Per cell >= 2^32 oppure cell < 0 (high bit set in signed int64), serve
@@ -364,7 +364,7 @@ procedure __mn_putX_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 // `%NX` uppercase: (N - hex_digits) spazi poi __mn_putX.
@@ -383,7 +383,7 @@ procedure __mn_putX_width(int n, int width, stack __mn_hist, stack __mn_scratch)
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_hcount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 // u64 uppercase no leading zeros.

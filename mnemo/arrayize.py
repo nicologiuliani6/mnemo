@@ -346,7 +346,8 @@ def _one(f: _Fn, ins, fns: dict[str, Function]) -> list:
     if isinstance(ins, ITry):
         return [ITry(f.sub(ins.lhs), ins.op, f.sub(ins.rhs),
                      _seq(f, ins.body_instrs, fns),
-                     _seq(f, ins.rollback_instrs, fns) if ins.rollback_instrs is not None else None)]
+                     _seq(f, ins.rollback_instrs, fns) if ins.rollback_instrs is not None else None,
+                     (f.sub(ins.yrt[0]), ins.yrt[1], f.sub(ins.yrt[2])) if ins.yrt else None)]
     if isinstance(ins, IPar):
         branches = []
         saved = (f.right, f.par_pre, f.par_post)

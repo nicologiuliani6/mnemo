@@ -97,6 +97,63 @@ procedure __mn_or_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratc
     delocal int pow = 0
     delocal int k = 31
 
+// dst += (a & b) su 64 bit (long long / uint64_t): bit 0..62 col loro peso,
+// bit 63 (il segno) con peso -2^63, sommato come due volte -2^62.
+procedure __mn_and64_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    local int k = 0
+    local int pow = 1
+    from k == 0 do
+        dst += ((((((a / pow) - ((a % pow) < 0)) % 2) + 2) % 2) * (((((b / pow) - ((b % pow) < 0)) % 2) + 2) % 2) * pow)
+        local int np = 0
+        np += (pow * 2)
+        pow <=> np
+        push(np, __mn_hist)
+        delocal int np = 0
+        k += 1
+    loop until k == 62
+    dst += ((((((a / pow) - ((a % pow) < 0)) % 2) + 2) % 2) * (((((b / pow) - ((b % pow) < 0)) % 2) + 2) % 2) * pow)
+    dst -= ((a < 0) * (b < 0) * pow)
+    dst -= ((a < 0) * (b < 0) * pow)
+    push(pow, __mn_hist)
+    delocal int pow = 0
+    delocal int k = 62
+
+// dst += (a | b) su 64 bit, stessa convenzione di __mn_and64_into.
+procedure __mn_or64_into(int dst, int a, int b, stack __mn_hist, stack __mn_scratch)
+    local int k = 0
+    local int pow = 1
+    local int ba = 0
+    local int bb = 0
+    from k == 0 do
+        ba += (((((a / pow) - ((a % pow) < 0)) % 2) + 2) % 2)
+        bb += (((((b / pow) - ((b % pow) < 0)) % 2) + 2) % 2)
+        dst += (((ba + bb) - (ba * bb)) * pow)
+        push(bb, __mn_hist)
+        push(ba, __mn_hist)
+        local int np = 0
+        np += (pow * 2)
+        pow <=> np
+        push(np, __mn_hist)
+        delocal int np = 0
+        k += 1
+    loop until k == 62
+    ba += (((((a / pow) - ((a % pow) < 0)) % 2) + 2) % 2)
+    bb += (((((b / pow) - ((b % pow) < 0)) % 2) + 2) % 2)
+    dst += (((ba + bb) - (ba * bb)) * pow)
+    push(bb, __mn_hist)
+    push(ba, __mn_hist)
+    ba += (a < 0)
+    bb += (b < 0)
+    dst -= (((ba + bb) - (ba * bb)) * pow)
+    dst -= (((ba + bb) - (ba * bb)) * pow)
+    push(bb, __mn_hist)
+    push(ba, __mn_hist)
+    delocal int bb = 0
+    delocal int ba = 0
+    push(pow, __mn_hist)
+    delocal int pow = 0
+    delocal int k = 62
+
 // dst += (x << n), n >= 0.
 procedure __mn_shl_into(int dst, int x, int n, stack __mn_hist, stack __mn_scratch)
     local int p = 0

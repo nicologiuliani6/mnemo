@@ -218,7 +218,9 @@ class ITry:
 
     Esegue body in avanti; se la condizione (rivalutata dopo il body) è vera il
     body resta, altrimenti viene invertito ed esegue rollback. La condizione è
-    un atomo Kairos (lhs op rhs), usata sia per `try` che per `yrt`.
+    un atomo Kairos (lhs op rhs). `yrt` è l'asserzione d'uscita: come il `fi`
+    di Janus dev'essere vera dopo il commit e falsa dopo il rollback; se manca
+    si usa la condizione del `try`.
     """
 
     lhs: str
@@ -226,6 +228,7 @@ class ITry:
     rhs: str
     body_instrs: list[Any]
     rollback_instrs: list[Any] | None = None
+    yrt: tuple[str, str, str] | None = None
 
 
 Instr = Union[

@@ -69,7 +69,7 @@ procedure __mn_puto_width(int n, int width, stack __mn_hist, stack __mn_scratch)
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_ocount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 procedure __mn_puto_width_left(int n, int width, stack __mn_hist, stack __mn_scratch)
@@ -87,7 +87,7 @@ procedure __mn_puto_width_left(int n, int width, stack __mn_hist, stack __mn_scr
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_ocount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0
 
 procedure __mn_puto_width_zero(int n, int width, stack __mn_hist, stack __mn_scratch)
@@ -105,5 +105,5 @@ procedure __mn_puto_width_zero(int n, int width, stack __mn_hist, stack __mn_scr
     pad += d
     pad -= width
     delocal int pad = 0
-    push(d, __mn_hist)
+    uncall __mn_ocount_unsigned(n, d, __mn_hist, __mn_scratch)
     delocal int d = 0

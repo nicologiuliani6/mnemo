@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemo"
-version = "0.1.0"
-description = "Mnemo: IR e toolchain verso Kairos (C-like → .kairos)"
+version = "1.0.0"
+description = "Mnemo: a compiler from a reversible C subset to Kairos"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,4 +20,4 @@ where = ["."]
 include = ["mnemo*"]
 
 [tool.setuptools.package-data]
-mnemo = ["*.c"]
+mnemo = ["*.c", "lib/*.kairos", "fake_include/*.h"]
