@@ -173,7 +173,7 @@ def _assign(f: _Fn, cls, dst: str, rhs) -> list:
     return [cls(d, r)]
 
 
-def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[str], list[tuple[str, str]]]:
+def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[str], list[tuple]]:
     """Collassa gli argomenti cella nel nome dell'array; ritorna anche le celle
     passate per valore a formali int (da spostare in temporanei)."""
     if callee is None and f"{MEM}0" in args:
@@ -194,7 +194,10 @@ def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[s
     )
     if not formal_mem:
         # callee senza parametri cella (libreria): ogni cella è un int per riferimento
-        moved: list[tuple[str, str]] = []
+        # Gli argomenti di una call Kairos devono essere distinti: una cella
+        # ripetuta (x & x) arriva alla seconda posizione come copia della prima
+        # (sola lettura), segnata con c = None.
+        moved: list[tuple[str | None, str]] = []
         seen: dict[str, str] = {}
         out = []
         for a in args:
@@ -202,9 +205,13 @@ def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[s
             if c is None:
                 out.append(a)
                 continue
-            if a not in seen:
-                seen[a] = f.tmp()
-                moved.append((c, seen[a]))
+            if a in seen:
+                t = f.tmp()
+                moved.append((None, t, seen[a]))
+                out.append(t)
+                continue
+            seen[a] = f.tmp()
+            moved.append((c, seen[a], None))
             out.append(seen[a])
         if len(moved) > 8:
             # guardia: decine di celle passate una a una a una procedura di
@@ -402,7 +409,10 @@ def _one(f: _Fn, ins, fns: dict[str, Function]) -> list:
             f.par_post += post
             pre, post = [], []
         body = pre + [type(ins)(ins.proc, args)] + post
-        for c, t in reversed(moved):
+        for c, t, first in reversed(moved):
+            if c is None:
+                body = [ILocalBlock(t, [IAddEq(t, Var(first))] + body + [ISubEq(t, Var(first))])]
+                continue
             body = [ILocalBlock(t, [IAddEq(t, Var(c)), ISubEq(c, Var(t))] + body
                                 + [IAddEq(c, Var(t)), ISubEq(t, Var(c))])]
         return body

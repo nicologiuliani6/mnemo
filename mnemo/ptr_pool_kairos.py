@@ -110,7 +110,13 @@ def emit_ptr_pool_kairos(cap: int) -> str:
         "    local int e = 0",
         "    e += (((r + 1) - __mn_tn) * (((r + 1) - __mn_tn) > 0))",
         "    if e != 0 then",
-        f"        call __mn_tape_move(__mn_tn, {TAPE_ARGS}, {hs})",
+        # Gli argomenti di una call devono essere distinti: la fine del nastro
+        # passa a __mn_tape_move tramite una copia.
+        "        local int n = 0",
+        "        n += __mn_tn",
+        f"        call __mn_tape_move(n, {TAPE_ARGS}, {hs})",
+        "        n -= __mn_tn",
+        "        delocal int n = 0",
         "        local int k = 0",
         "        from k == 0 do",
         "            local int z = 0",
