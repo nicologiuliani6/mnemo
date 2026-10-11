@@ -1839,12 +1839,14 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
     if main_idx < 0:
         return
     old_main = prog.functions[main_idx]
-    # hist+scratch diventano parametri di __main__: rimuovili dai `local stack` del main.
-    inner_locals = [
-        (t, n)
-        for (t, n) in old_main.locals
-        if not (t == "stack" and n in ("__mn_hist", "__mn_scratch"))
+    # Gli stack del main (hist, scratch, nastro dell'heap…) diventano parametri
+    # di __main__: Kairos ammette dichiarazioni senza `local` solo in main, e
+    # uno stack non vuoto a fine corpo non si potrebbe chiudere con delocal.
+    stacks = ["__mn_hist", "__mn_scratch"] + [
+        n for (t, n) in old_main.locals
+        if t == "stack" and n not in ("__mn_hist", "__mn_scratch")
     ]
+    inner_locals = [(t, n) for (t, n) in old_main.locals if t != "stack"]
     # In Kairos Inv(show) = show: l'uncall ristampa l'output in ordine
     # rovesciato. Il wrapper stampa un marcatore fra call e uncall e `mnemo run`
     # mostra solo cio' che lo precede. Il dump finale mostra hist/scratch, vuoti
@@ -1852,21 +1854,21 @@ def _wrap_main_in_invertibility_check(prog: Program) -> None:
     inner_blocks = list(old_main.blocks)
     inner = Function(
         name="__main__",
-        params=[("stack", "__mn_hist"), ("stack", "__mn_scratch")],
+        params=[("stack", n) for n in stacks],
         locals=inner_locals,
         blocks=inner_blocks,
     )
     wrapper_body = [
-        ICall("__main__", ["__mn_hist", "__mn_scratch"]),
+        ICall("__main__", list(stacks)),
         IConst(INVERTIBILITY_MARK, 1),
         IShow(INVERTIBILITY_MARK),
         IConst(INVERTIBILITY_MARK, -1),
-        IUncall("__main__", ["__mn_hist", "__mn_scratch"]),
+        IUncall("__main__", list(stacks)),
     ]
     wrapper = Function(
         name="main",
         params=[],
-        locals=[("stack", "__mn_hist"), ("stack", "__mn_scratch"), ("int", INVERTIBILITY_MARK)],
+        locals=[("stack", n) for n in stacks] + [("int", INVERTIBILITY_MARK)],
         blocks=[Block(bid="entry", instrs=wrapper_body)],
     )
     prog.functions[main_idx] = inner
