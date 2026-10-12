@@ -50,7 +50,10 @@ def _example_program() -> Program:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="mnemo", description="Mnemo IR → Kairos toolchain")
+    parser = argparse.ArgumentParser(
+        prog="mnemo",
+        description="Mnemo: C reversibile → Kairos. `mnemo file.c` compila ed esegue (come `mnemo run file.c`).",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_dump = sub.add_parser("dump-ir", help="stampa IR di esempio")
@@ -246,6 +249,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_r.set_defaults(handler=_cmd_run)
 
+    # Come `kairos file.kairos`: `mnemo file.c [opzioni]` equivale a `mnemo run file.c`.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] not in sub.choices and not argv[0].startswith("-"):
+        argv.insert(0, "run")
     args = parser.parse_args(argv)
     args.handler(args)
 

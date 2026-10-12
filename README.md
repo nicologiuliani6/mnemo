@@ -17,7 +17,7 @@ int main(void) {
 ```
 
 ```bash
-mnemo run example.c          # 30
+mnemo example.c              # 30
 ```
 
 ---
@@ -45,7 +45,7 @@ mnemo run example.c          # 30
 | Fedora / RHEL | `sudo dnf install ./kairos-<version>-1.<dist>.x86_64.rpm ./mnemo-<version>-1.<dist>.x86_64.rpm` |
 | Arch Linux | `sudo pacman -U ./kairos-<version>-1-x86_64.pkg.tar.zst ./mnemo-<version>-1-x86_64.pkg.tar.zst` |
 
-The package installs `/usr/local/bin/mnemo` (link to `/opt/mnemo/mnemo`); `mnemo run` uses the installed `kairos` and `mnemo compile` links against `/usr/local/lib/kairos/libvm.so`.
+The package installs `/usr/local/bin/mnemo` (link to `/opt/mnemo/mnemo`); `mnemo prog.c` uses the installed `kairos` and `mnemo compile` links against `/usr/local/lib/kairos/libvm.so`.
 
 **From source.** Clone the Kairos repository next to Mnemo (default `../kairos`, or `KAIROS_ROOT=/path`) and build it:
 
@@ -63,19 +63,19 @@ Requirements: Python ≥ 3.10, `gcc` (also used as the preprocessor), `make`.
 | Variable | Default | Effect |
 |---|---|---|
 | `KAIROS_ROOT` / `MNEMO_KAIROS_ROOT` | `../kairos` | Kairos repository used to run programs |
-| `MNEMO_KAIROS` | `kairos` | Kairos app used when there is no Kairos repository (`mnemo run --kairos PATH` overrides it) |
+| `MNEMO_KAIROS` | `kairos` | Kairos app used when there is no Kairos repository (`mnemo prog.c --kairos PATH` overrides it) |
 
 ---
 
 ## Usage
 
 ```bash
-mnemo run prog.c [options]                     # compile to .kairos and run
+mnemo prog.c [options]                         # compile to .kairos and run (same as `mnemo run prog.c`)
 mnemo dump-kairos prog.c [-o out.kairos] [--stdout]
 mnemo compile prog.c [-o exe] [--keep-kairos]   # native executable: bytecode + libvm.so, no Python
 ```
 
-`mnemo run` prints the program's output and exits with the value returned by `main`.
+`mnemo prog.c` (or `mnemo run prog.c`) prints the program's output and exits with the value returned by `main`, like `kairos prog.kairos`.
 
 | Option | Effect |
 |---|---|
