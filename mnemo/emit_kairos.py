@@ -93,7 +93,7 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     if isinstance(ins, ICopy):
         lines.append(
             f"{indent}// IR copy {ins.dst} <- {ins.src} "
-            f"(snap + add_eq o runtime; vedi mnemo/runtime)"
+            f"(snap + add_eq or runtime; see mnemo/runtime)"
         )
         return
     if isinstance(ins, IAddEq):
@@ -120,7 +120,7 @@ def _emit_instr(lines: list[str], ins: Instr, indent: str) -> None:
     if isinstance(ins, IStoreRev):
         lines.append(
             f"{indent}// IR store_rev {ins.dst} <- {ins.src} hist={ins.hist} "
-            f"(espansione: vedi examples/malloc.kairos mem_write)"
+            f"(expansion: see examples/malloc.kairos mem_write)"
         )
         return
     if isinstance(ins, ICall):

@@ -130,7 +130,7 @@ class _Fn:
         if k >= self.window:
             if not self.owns_right:
                 raise MnemoCompileError(
-                    f"arrayize: cella {k} fuori dalla finestra ({self.window}) fuori da main"
+                    f"arrayize: cell {k} outside the window ({self.window}) outside main"
                 )
             arr, base = MEM_R, k - self.window
         if not off:
@@ -218,12 +218,12 @@ def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[s
             # libreria = memoria non collassata nell'array (bug a monte), e
             # produrrebbe un annidamento enorme di temporanei.
             raise MnemoCompileError(
-                f"arrayize: {len(moved)} celle passate singolarmente a una call di libreria"
+                f"arrayize: {len(moved)} cells passed one by one to a library call"
             )
         return out, moved
     if len(mem_pos) != len(formal_mem):
         raise MnemoCompileError(
-            f"arrayize: call {callee.name}: {len(mem_pos)} celle per {len(formal_mem)} formali"
+            f"arrayize: call {callee.name}: {len(mem_pos)} cells for {len(formal_mem)} formals"
         )
     shifts = {
         _cell_idx(args[a]) - _cell_idx(callee.params[p][1])
@@ -238,7 +238,7 @@ def _call_args(f: _Fn, args: list[str], callee: Function | None) -> tuple[list[s
     elif shifts <= {0, f.window} and f.owns_right:
         arr = MEM_R  # finestra destra; le celle condivise sono copiate prima del par
     else:
-        raise MnemoCompileError(f"arrayize: call {callee.name}: celle non allineate {sorted(shifts)}")
+        raise MnemoCompileError(f"arrayize: call {callee.name}: misaligned cells {sorted(shifts)}")
     out = [a for i, a in enumerate(args) if i not in set(mem_pos)]
     out.insert(mem_pos[0], arr)
     return out, []
@@ -462,7 +462,7 @@ def arrayize_program(prog: Program, *, window: int, physical: int) -> None:
         pos = [i for i, (_t, n) in enumerate(fn.params) if _cell_idx(n) is not None]
         if pos:
             if owns:
-                raise MnemoCompileError(f"arrayize: {fn.name} ha celle sia param sia local")
+                raise MnemoCompileError(f"arrayize: {fn.name} has cells both as parameters and as locals")
             params = [p for i, p in enumerate(fn.params) if i not in set(pos)]
             params.insert(pos[0], ("int[]", MEM))
             fn.params = params

@@ -44,7 +44,7 @@ def lib_procedure_index() -> dict[str, str]:
             prev = index.get(name)
             if prev is not None and prev != path.name:
                 raise MnemoCompileError(
-                    f"procedura Kairos {name!r} definita due volte: {prev} e {path.name}"
+                    f"Kairos procedure {name!r} defined twice: {prev} and {path.name}"
                 )
             index[name] = path.name
     for name in _VPTR_PROCS:
@@ -78,6 +78,6 @@ def load_prelude_kairos(lib_filenames: list[str], *, mem_cap: int = 1) -> str:
             continue
         path = root / lf
         if not path.is_file():
-            raise FileNotFoundError(f"libreria Kairos non trovata: {path}")
+            raise FileNotFoundError(f"Kairos library not found: {path}")
         chunks.append(path.read_text(encoding="utf-8").rstrip())
     return "\n\n".join(chunks).strip() + "\n\n"

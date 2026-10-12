@@ -930,7 +930,7 @@ def compute_program_mem_layout(
         ut = _inline_union_tag or L._union_tag_for_decl_type(node.type, ctx)
         if ut is not None:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
-                raise MnemoCompileError("union: nome variabile mancante")
+                raise MnemoCompileError("union: missing variable name")
             varname = str(node.type.declname)
             logical = L._scope_declare(ctx, varname)
             if ut not in ctx.union_specs:
@@ -949,7 +949,7 @@ def compute_program_mem_layout(
         st_tag = _inline_struct_tag or L._struct_tag_for_decl_type(node.type, ctx)
         if st_tag is not None:
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
-                raise MnemoCompileError("struct: nome variabile mancante")
+                raise MnemoCompileError("struct: missing variable name")
             varname = str(node.type.declname)
             logical = L._scope_declare(ctx, varname)
             fields = ctx.struct_specs.get(st_tag)
@@ -1005,14 +1005,14 @@ def compute_program_mem_layout(
         imm_td = L._immediate_named_scalar_typedef(node)
         if imm_td == "pthread_mutex_t":
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
-                raise MnemoCompileError("pthread_mutex_t: nome variabile mancante")
+                raise MnemoCompileError("pthread_mutex_t: missing variable name")
             varname = str(node.type.declname)
             logical = L._scope_declare(ctx, varname)
             ctx.int_locals.add(logical)
             return
         if imm_td == "mnemo_kairos_channel_t":
             if not isinstance(node.type, c.TypeDecl) or node.type.declname is None:
-                raise MnemoCompileError("mnemo_kairos_channel_t: nome variabile mancante")
+                raise MnemoCompileError("mnemo_kairos_channel_t: missing variable name")
             varname = str(node.type.declname)
             logical = L._scope_declare(ctx, varname)
             ctx.int_locals.add(logical)
@@ -1043,7 +1043,7 @@ def compute_program_mem_layout(
                 return
             if pn is None:
                 raise MnemoCompileError(
-                    f"dichiarazione non supportata: {type(node.type).__name__}"
+                    f"unsupported declaration: {type(node.type).__name__}"
                 )
             name = pn
             ros = L._char_ptr_string_literal_meta(node, tdm, fn)
@@ -1119,7 +1119,7 @@ def compute_program_mem_layout(
             return
         if isinstance(node, c.Switch):
             if not isinstance(node.stmt, c.Compound):
-                raise MnemoCompileError("switch: il corpo deve essere { ... }")
+                raise MnemoCompileError("switch: the body must be { ... }")
             for it in node.stmt.block_items or []:
                 if isinstance(it, c.Case):
                     for s in it.stmts or []:
@@ -1217,7 +1217,7 @@ def compute_program_mem_layout(
         ut = L._union_tag_for_decl_type(ext.type, fs_ctx)
         if ut is not None:
             if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
-                raise MnemoCompileError("union: nome variabile mancante")
+                raise MnemoCompileError("union: missing variable name")
             varname = str(ext.type.declname)
             if varname in fs_ctx.int_locals:
                 raise MnemoCompileError(f"ridichiarazione: {varname}")
@@ -1226,7 +1226,7 @@ def compute_program_mem_layout(
             fs_ctx.union_tag_of_var[varname] = ut
             fs_ctx.int_locals.add(varname)
             if ("__file__", varname) in slot_of:
-                raise MnemoCompileError(f"variabile file-scope duplicata: {varname}")
+                raise MnemoCompileError(f"duplicate file-scope variable: {varname}")
             alloc("__file__", varname)
             if varname.startswith("__mn_p1_"):
                 file_par1.add(varname)
@@ -1235,7 +1235,7 @@ def compute_program_mem_layout(
         st_tag = L._struct_tag_for_decl_type(ext.type, fs_ctx)
         if st_tag is not None:
             if not isinstance(ext.type, c.TypeDecl) or ext.type.declname is None:
-                raise MnemoCompileError("struct: nome variabile mancante")
+                raise MnemoCompileError("struct: missing variable name")
             varname = str(ext.type.declname)
             if varname in fs_ctx.int_locals:
                 raise MnemoCompileError(f"ridichiarazione: {varname}")
@@ -1251,7 +1251,7 @@ def compute_program_mem_layout(
                     raise MnemoCompileError(f"ridichiarazione: {loc}")
                 fs_ctx.int_locals.add(loc)
                 if ("__file__", loc) in slot_of:
-                    raise MnemoCompileError(f"variabile file-scope duplicata: {loc}")
+                    raise MnemoCompileError(f"duplicate file-scope variable: {loc}")
                 alloc("__file__", loc)
                 if loc.startswith("__mn_p1_"):
                     file_par1.add(loc)
@@ -1283,7 +1283,7 @@ def compute_program_mem_layout(
                     fs_ctx.int_locals.add(cell_sa)
                     if ("__file__", cell_sa) in slot_of:
                         raise MnemoCompileError(
-                            f"variabile file-scope duplicata: {cell_sa}"
+                            f"duplicate file-scope variable: {cell_sa}"
                         )
                     alloc("__file__", cell_sa)
             continue
@@ -1316,8 +1316,8 @@ def compute_program_mem_layout(
                 or (_is_char and _ndim >= 2)  # `char arr[R][C]={"a"}`
             ):
                 raise MnemoCompileError(
-                    "array di stringhe-letterali a livello file non supportato "
-                    "(sposta la dichiarazione in main o in una funzione)"
+                    "file-scope array of string literals not supported "
+                    "(move the declaration into main or into a function)"
                 )
             tot = int(math.prod(dims))
             if name in fs_ctx.int_locals:
@@ -1332,7 +1332,7 @@ def compute_program_mem_layout(
                 fs_ctx.int_locals.add(cell)
                 if ("__file__", cell) in slot_of:
                     raise MnemoCompileError(
-                        f"variabile file-scope duplicata: {cell}"
+                        f"duplicate file-scope variable: {cell}"
                     )
                 alloc("__file__", cell)
                 if cell.startswith("__mn_p1_"):
@@ -1349,11 +1349,11 @@ def compute_program_mem_layout(
             name = pn
             if L._char_ptr_string_literal_meta(ext, tdm, "__file__") is not None:
                 raise MnemoCompileError(
-                    "char* = letterale a livello file non supportato "
-                    "(sposta la dichiarazione in main o in una funzione)"
+                    "file-scope char* = literal not supported "
+                    "(move the declaration into main or into a function)"
                 )
         if ("__file__", name) in slot_of:
-            raise MnemoCompileError(f"variabile file-scope duplicata: {name}")
+            raise MnemoCompileError(f"duplicate file-scope variable: {name}")
         alloc("__file__", name)
         if name.startswith("__mn_p1_"):
             file_par1.add(name)
@@ -1370,7 +1370,7 @@ def compute_program_mem_layout(
 
     main_ext = L._find_main(ast)
     if main_ext is None:
-        raise MnemoCompileError("nessuna funzione int main(...) trovata")
+        raise MnemoCompileError("no int main(...) function found")
     mfd = main_ext.decl.type
     if not isinstance(mfd, c.FuncDecl):
         raise MnemoCompileError("main malformato")

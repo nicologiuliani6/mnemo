@@ -52,206 +52,160 @@ def _example_program() -> Program:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="mnemo",
-        description="Mnemo: C reversibile → Kairos. `mnemo file.c` compila ed esegue (come `mnemo run file.c`).",
+        description="Mnemo: reversible C → Kairos. `mnemo file.c` compiles and runs (same as `mnemo run file.c`).",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_dump = sub.add_parser("dump-ir", help="stampa IR di esempio")
+    p_dump = sub.add_parser("dump-ir", help="print an example IR")
     p_dump.set_defaults(handler=_cmd_dump_ir)
 
-    p_k = sub.add_parser("emit-kairos", help="emette .kairos di esempio su stdout")
+    p_k = sub.add_parser("emit-kairos", help="print an example .kairos on stdout")
     p_k.set_defaults(handler=_cmd_emit_kairos)
 
     p_c = sub.add_parser(
         "compile",
-        help="compila .c → eseguibile nativo (bytecode in .rodata + libvm.so accanto; niente Python)",
+        help="compile .c → native executable (bytecode in .rodata + libvm.so next to it; no Python)",
     )
-    p_c.add_argument("input", help="file sorgente .c")
+    p_c.add_argument("input", help="C source file")
     p_c.add_argument(
         "-o",
         "--output",
-        help="path dell'eseguibile (default: stesso stem del .c, senza estensione, nella stessa cartella)",
+        help="executable path (default: the .c stem, without extension, in the same folder)",
         default=None,
     )
     p_c.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="stampa su stderr il comando gcc e i path generati",
+        help="print the gcc command and the generated paths on stderr",
     )
     p_c.add_argument(
         "--main-argc",
         type=int,
         default=None,
         metavar="N",
-        help="sovrascrive // mnemo-main-argc (default da sorgente: 0 se manca la direttiva; N>=0)",
-    )
-    p_c.add_argument(
-        "--ptr-pool-size",
-        type=int,
-        default=0,
-        metavar="N",
-        help="celle di heap per malloc/calloc in coda all'array __mn_mem; default 0 = auto (dalle malloc del sorgente, almeno 1024 se ce ne sono); N alza il minimo",
-    )
-    p_c.add_argument(
-        "--arr-max",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "limite elementi totali per array (prodotto delle dimensioni); "
-            "default: auto-inferito dal max array decl statico nel sorgente "
-            "(minimo 1024 per decay-array params). Flag = override solo verso "
-            "l'alto. NB: indicizzazione runtime emette O(N) op per accesso."
-        ),
+        help="overrides // mnemo-main-argc (default from the source: 0 if the directive is missing; N>=0)",
     )
     p_c.add_argument(
         "--keep-kairos",
         action="store_true",
-        help="scrive anche stem.kairos accanto al .c (il sorgente Kairos testuale)",
+        help="also write stem.kairos next to the .c (the Kairos source)",
     )
     p_c.add_argument(
         "--opt-uncall-user-calls",
         action="store_true",
         help=(
-            "su chiamate da main→f definite nello .c (f non ricorsiva): dopo call, "
-            "copia XOR del risultato (int) poi uncall; void → call + uncall"
+            "on calls main→f defined in the .c (f not recursive): after the call, "
+            "XOR-copy the result (int), then uncall; void → call + uncall"
         ),
     )
     p_c.add_argument(
         "--check-invertibility",
         action="store_true",
         help=(
-            "isola il corpo del main C in procedura `__main__` con stack hist+scratch; "
-            "in Kairos `main` fa `call __main__ ; uncall __main__` per verificare "
-            "che TUTTO il programma sia reversibile al 100%%"
+            "move the body of the C main into procedure `__main__` with hist+scratch stacks; "
+            "Kairos `main` does `call __main__ ; uncall __main__` to check "
+            "that the WHOLE program is 100%% reversible"
         ),
     )
     p_c.set_defaults(handler=_cmd_compile)
 
     p_dk = sub.add_parser(
         "dump-kairos",
-        help="emette solo il sorgente .kairos (testo) da un .c — senza linkare la VM",
+        help="only emit the .kairos source (text) from a .c, without linking the VM",
     )
-    p_dk.add_argument("input", help="file sorgente .c")
+    p_dk.add_argument("input", help="C source file")
     p_dk.add_argument(
         "-o",
         "--output",
-        help="file .kairos (default: stesso nome del .c nella stessa cartella)",
+        help=".kairos file (default: same name as the .c in the same folder)",
         default=None,
     )
     p_dk.add_argument(
         "--stdout",
         action="store_true",
-        help="stampa il .kairos su stdout invece di scrivere su disco",
+        help="print the .kairos on stdout instead of writing it to disk",
     )
     p_dk.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="stampa su stderr il path del file scritto",
+        help="print the path of the written file on stderr",
     )
     p_dk.add_argument(
         "--main-argc",
         type=int,
         default=None,
         metavar="N",
-        help="come per compile",
-    )
-    p_dk.add_argument(
-        "--ptr-pool-size",
-        type=int,
-        default=0,
-        metavar="N",
-        help="come per compile",
-    )
-    p_dk.add_argument(
-        "--arr-max",
-        type=int,
-        default=None,
-        metavar="N",
-        help="come per compile",
+        help="as for compile",
     )
     p_dk.add_argument(
         "--opt-uncall-user-calls",
         action="store_true",
-        help="come compile",
+        help="as for compile",
     )
     p_dk.add_argument(
         "--check-invertibility",
         action="store_true",
-        help="come compile",
+        help="as for compile",
     )
     p_dk.set_defaults(handler=_cmd_dump_kairos)
 
     p_r = sub.add_parser(
         "run",
-        help="compila .c → .kairos ed esegue la VM (preferisce ../kairos/venv come nel Makefile)",
+        help="compile .c → .kairos and run it in the VM (prefers ../kairos/venv, like the Makefile)",
     )
-    p_r.add_argument("input", help="file sorgente .c")
+    p_r.add_argument("input", help="C source file")
     p_r.add_argument(
         "--kairos",
         default=None,
-        help="eseguibile Kairos da usare (default: repo Kairos, poi env MNEMO_KAIROS, poi 'kairos')",
+        help="Kairos executable to use (default: Kairos repository, then env MNEMO_KAIROS, then 'kairos')",
     )
     p_r.add_argument(
         "--main-argc",
         type=int,
         default=None,
         metavar="N",
-        help="come per compile: sovrascrive argc (senza flag: 0 o valore // mnemo-main-argc)",
-    )
-    p_r.add_argument(
-        "--ptr-pool-size",
-        type=int,
-        default=0,
-        metavar="N",
-        help="come per compile: dimensione pool puntatori",
-    )
-    p_r.add_argument(
-        "--arr-max",
-        type=int,
-        default=None,
-        metavar="N",
-        help="come per compile: limite elementi totali per array",
+        help="as for compile: overrides argc (without the flag: 0 or the // mnemo-main-argc value)",
     )
     p_r.add_argument(
         "--opt-uncall-user-calls",
         action="store_true",
-        help="come compile",
+        help="as for compile",
     )
     p_r.add_argument(
         "--check-invertibility",
         action="store_true",
-        help="come compile",
+        help="as for compile",
     )
     p_r.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="stampa su stderr comando usato e codice di uscita della VM",
+        help="print the command used and the VM exit code on stderr",
     )
     p_r.add_argument(
         "--vm-dump",
         action="store_true",
-        help="stampa anche il blocco dump della VM (dopo «=== VM dump ===»); default: no",
+        help="also print the VM dump block (after «=== VM dump ===»); default: no",
     )
     p_r.add_argument(
         "--vm-stats",
         action="store_true",
-        help="dopo il dump VM stampa mean_abs e max_abs dei cell int rimasti (stats post-execution)",
+        help="after the VM dump print mean_abs and max_abs of the remaining int cells",
     )
     p_r.add_argument(
         "--auto",
         action="store_true",
-        help="sceglie automaticamente --opt-uncall-user-calls dal contenuto del .c "
-        "(celle, bitwise). Stampa la decisione su stderr. Il flag esplicito vince.",
+        help="choose --opt-uncall-user-calls automatically from the .c content "
+        "(cells, bitwise). Prints the decision on stderr. An explicit flag wins.",
     )
     p_r.set_defaults(handler=_cmd_run)
 
     # Come `kairos file.kairos`: `mnemo file.c [opzioni]` equivale a `mnemo run file.c`.
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] not in sub.choices and not argv[0].startswith("-"):
+    first = next((a for a in argv if not a.startswith("-")), None)
+    if first is not None and first not in sub.choices and "-h" not in argv and "--help" not in argv:
         argv.insert(0, "run")
     args = parser.parse_args(argv)
     args.handler(args)
@@ -270,10 +224,8 @@ def _cmd_compile(args: argparse.Namespace) -> None:
         out = compile_c_to_kairos(
             args.input,
             main_argc=args.main_argc,
-            ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
             check_invertibility=args.check_invertibility,
-            arr_max=getattr(args, "arr_max", None),
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -282,8 +234,8 @@ def _cmd_compile(args: argparse.Namespace) -> None:
     kexe = None if kroot else installed_kairos_exe()
     if not kroot and not kexe:
         print(
-            "mnemo: Kairos non trovato. Installa il pacchetto kairos, imposta KAIROS_ROOT "
-            "o clona kairos accanto a mnemo.",
+            "mnemo: Kairos not found. Install the kairos package, set KAIROS_ROOT "
+            "or clone kairos next to mnemo.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -306,10 +258,10 @@ def _cmd_compile(args: argparse.Namespace) -> None:
     if args.keep_kairos:
         written_k = write_kairos_next_to_c(args.input, out)
         if args.verbose:
-            print(f"mnemo: scritto anche {written_k}", file=sys.stderr)
+            print(f"mnemo: also written {written_k}", file=sys.stderr)
     if args.verbose:
         print(
-            f"mnemo: eseguibile {exe_path} (e libvm.so nella stessa directory)",
+            f"mnemo: executable {exe_path} (and libvm.so in the same directory)",
             file=sys.stderr,
         )
 
@@ -319,10 +271,8 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
         out = compile_c_to_kairos(
             args.input,
             main_argc=args.main_argc,
-            ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
             check_invertibility=args.check_invertibility,
-            arr_max=getattr(args, "arr_max", None),
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -338,7 +288,7 @@ def _cmd_dump_kairos(args: argparse.Namespace) -> None:
     else:
         written = write_kairos_next_to_c(args.input, out)
     if args.verbose:
-        print(f"mnemo: scritto {written}", file=sys.stderr)
+        print(f"mnemo: wrote {written}", file=sys.stderr)
 
 
 def _stdout_without_vm_dump(stdout: str, *, keep_stats: bool = False) -> str:
@@ -420,10 +370,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         out = compile_c_to_kairos(
             args.input,
             main_argc=args.main_argc,
-            ptr_pool_size=args.ptr_pool_size,
             opt_uncall_user_calls=args.opt_uncall_user_calls,
             check_invertibility=args.check_invertibility,
-            arr_max=getattr(args, "arr_max", None),
         )
     except MnemoCompileError as e:
         print(f"mnemo: {e}", file=sys.stderr)
@@ -484,11 +432,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
         )
     except FileNotFoundError:
         print(
-            "mnemo: Kairos non trovato. Opzioni:\n"
-            "  - installa il pacchetto kairos (release di Kairos)\n"
-            "  - oppure: clona kairos accanto a mnemo (../kairos con venv)\n"
-            "  - oppure: export KAIROS_ROOT=/percorso/repo/kairos\n"
-            "  - oppure: mnemo run --kairos /percorso/di/kairos file.c",
+            "mnemo: Kairos not found. Options:\n"
+            "  - install the kairos package (Kairos releases)\n"
+            "  - or: clone kairos next to mnemo (../kairos with venv)\n"
+            "  - or: export KAIROS_ROOT=/path/to/kairos/repo\n"
+            "  - or: mnemo run --kairos /path/to/kairos file.c",
             file=sys.stderr,
         )
         sys.exit(127)

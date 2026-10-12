@@ -47,7 +47,7 @@ def emit_ptr_pool_kairos(cap: int) -> str:
         ]
 
     lines = [
-        f"// Pool puntatori Mnemo: celle < {cap} nell'array __mn_mem, le altre sul nastro.",
+        f"// Mnemo pointer pool: cells < {cap} in the __mn_mem array, the others on the tape.",
         f"procedure __mn_pool_alloc(int ctr, int out_slot, int nblk, {h})",
         "    push(out_slot, __mn_hist)",
         "    out_slot += ctr",
@@ -70,7 +70,7 @@ def emit_ptr_pool_kairos(cap: int) -> str:
         "        push(ctr0, __mn_hist)",
         "    delocal int ctr0 = 0",
         "",
-        "// Cursore del nastro su r (0 <= r <= tn): celle 0..r-1 in tl, la r in cima a tr.",
+        "// Tape cursor on r (0 <= r <= tn): cells 0..r-1 in tl, cell r on top of tr.",
         f"procedure __mn_tape_move(int r, {TAPE_PARAMS}, {h})",
         "    local int dr = 0",
         "    dr += ((r - __mn_tc) * ((r - __mn_tc) > 0))",
@@ -105,7 +105,7 @@ def emit_ptr_pool_kairos(cap: int) -> str:
         "    push(dr, __mn_hist)",
         "    delocal int dr = 0",
         "",
-        "// Allunga il nastro con celle a zero finché contiene la cella r (tn > r).",
+        "// Grow the tape with zero cells until it contains cell r (tn > r).",
         f"procedure __mn_tape_reach(int r, {TAPE_PARAMS}, {h})",
         "    local int e = 0",
         "    e += (((r + 1) - __mn_tn) * (((r + 1) - __mn_tn) > 0))",

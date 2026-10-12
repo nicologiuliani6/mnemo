@@ -1,4 +1,4 @@
-"""Regression: malloc col modello header su un pool grande (--ptr-pool-size 1500).
+"""Regression: malloc col modello header su un pool grande (heap sized automatically).
 
 Storicamente forzava il pool bancato; ora la memoria è un array Kairos e il test
 verifica che blocchi multi-cella concorrenti in un heap grande restino corretti.
@@ -33,7 +33,7 @@ class TestPoolBankedMalloc(unittest.TestCase):
             path = f.name
         try:
             res = subprocess.run(
-                [".venv/bin/mnemo", "run", path, "--ptr-pool-size", "1500", *extra],
+                [".venv/bin/mnemo", "run", path, *extra],
                 capture_output=True, text=True, cwd=ROOT, timeout=120,
             )
             return res.returncode

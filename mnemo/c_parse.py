@@ -111,11 +111,11 @@ def _rewrite_generic(text: str) -> str:
                     break
             i += 1
         if depth != 0:
-            raise MnemoCompileError("_Generic: parentesi non bilanciate")
+            raise MnemoCompileError("_Generic: unbalanced parentheses")
         inner = text[m.end():i]
         parts = _split_top_level_commas(inner)
         if len(parts) < 2:
-            raise MnemoCompileError("_Generic: serve expr + almeno 1 clausola")
+            raise MnemoCompileError("_Generic: needs an expression and at least 1 clause")
         # parts[0] = expr, parts[1..] = "Type: value" o "default: value".
         # Riscrittura in un marker parsabile da pycparser; la *risoluzione del
         # tipo del selettore* avviene in c_lower (dove i tipi sono noti):
@@ -134,7 +134,7 @@ def _rewrite_generic(text: str) -> str:
                     colon_idx = j
                     break
             if colon_idx < 0:
-                raise MnemoCompileError(f"_Generic: clausola senza ':' '{clause}'")
+                raise MnemoCompileError(f"_Generic: clause without ':' '{clause}'")
             ty = clause[:colon_idx].strip()
             val = clause[colon_idx + 1:].strip()
             ty_norm = " ".join(ty.split())
@@ -157,7 +157,7 @@ def _split_outer_comma(s: str) -> tuple[str, str]:
             depth -= 1
         elif ch == "," and depth == 0:
             return s[:i].strip(), s[i + 1:].strip()
-    raise MnemoCompileError("__builtin_offsetof: virgola top-level non trovata")
+    raise MnemoCompileError("__builtin_offsetof: top-level comma not found")
 
 
 def _rewrite_builtin_offsetof(text: str) -> str:
@@ -188,7 +188,7 @@ def _rewrite_builtin_offsetof(text: str) -> str:
                     break
             i += 1
         if depth != 0:
-            raise MnemoCompileError("__builtin_offsetof: parentesi non bilanciate")
+            raise MnemoCompileError("__builtin_offsetof: unbalanced parentheses")
         inner = text[m.end():i]
         type_spec, member = _split_outer_comma(inner)
         # Normalize whitespace in type_spec / member.
@@ -219,7 +219,7 @@ def _match_delim(text: str, open_idx: int, opench: str, closech: str) -> int:
             if depth == 0:
                 return i
         i += 1
-    raise MnemoCompileError("try/rollback: delimitatori non bilanciati")
+    raise MnemoCompileError("try/rollback: unbalanced delimiters")
 
 
 def _rewrite_try_rollback(text: str) -> str:
@@ -289,11 +289,11 @@ def parse_c(path: str) -> c_ast.FileAST:
     ``#ifdef MNEMO`` / ``#if defined(MNEMO)`` per rami specifici della toolchain Mnemo.
     """
     if not os.path.isfile(path):
-        raise MnemoCompileError(f"file non trovato: {path}")
+        raise MnemoCompileError(f"file not found: {path}")
     if shutil.which("gcc") is None:
         raise MnemoCompileError(
-            "serve `gcc` nel PATH per il preprocessore (-E). "
-            "Installa build-essential (Debian/Ubuntu) o usa un ambiente con gcc."
+            "`gcc` is needed in PATH for the preprocessor (-E). "
+            "Install build-essential (Debian/Ubuntu) or use an environment with gcc."
         )
     # fake_libc_include (pycparser sorgente) non è sempre incluso nel wheel;
     # per file senza #include basta -E -std=c99. Con #include si può installare
@@ -336,4 +336,4 @@ def parse_c(path: str) -> c_ast.FileAST:
     except MnemoCompileError:
         raise
     except Exception as e:
-        raise MnemoCompileError(f"parse C fallito: {e}") from e
+        raise MnemoCompileError(f"C parse failed: {e}") from e

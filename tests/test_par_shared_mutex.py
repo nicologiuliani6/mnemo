@@ -43,7 +43,7 @@ class TestParSharedMutex(unittest.TestCase):
             if os.path.exists(k):
                 os.unlink(k)
         self.assertNotEqual(res.returncode, 0)
-        self.assertIn("non condividono", res.stdout + res.stderr)
+        self.assertIn("do not share", res.stdout + res.stderr)
 
 
 if __name__ == "__main__":

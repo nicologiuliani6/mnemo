@@ -86,8 +86,6 @@ mnemo compile prog.c [-o exe] [--keep-kairos]   # native executable: bytecode + 
 | Option | Effect |
 |---|---|
 | `--main-argc N` | value of `argc` (otherwise the `// mnemo-main-argc: N` directive, otherwise 0) |
-| `--ptr-pool-size N` | directly addressed heap cells, before the tape (see [Memory](#memory)) |
-| `--arr-max N` | element limit per array (inferred from the source by default, at least 1024) |
 | `--opt-uncall-user-calls` | after each eligible call, frees its history (see below) |
 | `--check-invertibility` | runs `main` and then inverts it: the VM reports every non-invertible step |
 | `--auto` (when running) | decides by itself whether to enable `--opt-uncall-user-calls` |
@@ -117,7 +115,7 @@ C destroys information (`x = 5` loses the old `x`); Kairos does not. Mnemo write
 
 All the program's named state (scalars, arrays, structs, globals) and the first part of the `malloc` heap live in a single Kairos array `int __mn_mem[N]`; a pointer is an index. Procedures receive the array by reference; `a[i]` with a run-time index becomes a direct access `__mn_mem[(base + i)]`, `*p` a direct access to the array or to the tape.
 
-The heap is unbounded. Its first part sits at the end of the array (size inferred from the source's `malloc`s, at least 1024 cells if the program uses any; `--ptr-pool-size N` raises it). Kairos arrays cannot grow, so past the end of the array the heap continues on a **tape** made of two Kairos stacks with a cursor between them: there an access costs the distance from the previous access (walking a block is O(1) per cell, long jumps cost more) and the tape grows by itself. `free` only reuses the most recently allocated block.
+The heap is unbounded. Its first part sits at the end of the array (size inferred from the source's `malloc`s, at least 1024 cells if the program uses any). Kairos arrays cannot grow, so past the end of the array the heap continues on a **tape** made of two Kairos stacks with a cursor between them: there an access costs the distance from the previous access (walking a block is O(1) per cell, long jumps cost more) and the tape grows by itself. `free` only reuses the most recently allocated block.
 
 ### `--opt-uncall-user-calls`
 

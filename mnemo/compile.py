@@ -1051,9 +1051,9 @@ def _transform_struct_array_pointer_alias(ast: c.FileAST) -> None:
                             continue
                         raise MnemoCompileError(
                             f"`{arg.name}` (alias struct-array) passato a "
-                            f"`{callee_name}` ma il parametro corrispondente "
-                            f"non è riconosciuto come alias struct-array. "
-                            f"Verifica che il param sia `T*` con T struct-array "
+                            f"`{callee_name}` but the matching parameter "
+                            f"is not recognized as a struct-array alias. "
+                            f"Check that the parameter is `T*` with T a struct-array "
                             f"file-scope unico."
                         )
 
@@ -1236,7 +1236,7 @@ def _transform_exit_in_main(ast: c.FileAST) -> None:
         exprs = call.args.exprs if call.args is not None else []
         if len(exprs) != 1:
             raise MnemoCompileError(
-                f"exit: serve esattamente 1 argomento (riga {call.coord})"
+                f"exit: exactly 1 argument needed (line {call.coord})"
             )
         return c.Return(exprs[0], call.coord)
 
@@ -1272,7 +1272,7 @@ def _transform_exit_in_main(ast: c.FileAST) -> None:
     def _scan(n: c.Node) -> None:
         if _is_exit_call(n):
             raise MnemoCompileError(
-                f"{n.name.name}: supportato solo dentro main (riga {n.coord})"
+                f"{n.name.name}: supported only inside main (line {n.coord})"
             )
         for _, child in n.children():
             _scan(child)
@@ -1939,9 +1939,9 @@ def auto_select_optimizations(path: str) -> tuple[bool, str]:
         return "ON " if b else "off"
 
     if opt_uncall:
-        ou_why = f"celle≈{named_cells}, bitwise={n_bitwise} — memoria alta, corpo leggero"
+        ou_why = f"cells≈{named_cells}, bitwise={n_bitwise}: high memory, light body"
     elif named_cells < 256:
-        ou_why = f"celle≈{named_cells} — poca memoria"
+        ou_why = f"cells≈{named_cells}: little memory"
     else:
         ou_why = f"bitwise={n_bitwise} — bitwise-heavy, opt = perdita di tempo"
 
@@ -2167,18 +2167,29 @@ def compile_c_to_kairos(
     arr_max: int | None = None,
 ) -> str:
     if arr_max is not None and arr_max < 1:
-        raise MnemoCompileError(f"arr_max deve essere >= 1: {arr_max}")
+        raise MnemoCompileError(f"arr_max must be >= 1: {arr_max}")
     try:
         with open(path, encoding="utf-8") as f:
             src = f.read()
     except OSError as e:
-        raise MnemoCompileError(f"file non trovato o non leggibile: {path}") from e
+        raise MnemoCompileError(f"file not found or not readable: {path}") from e
     ast = parse_c(path)
     # Auto-sizing ARR_MAX: walk AST per max array decl statico.
     # `--arr-max N` user override SOLO se > inferred (per array runtime / decay
     # ptr che non si possono dimensionare staticamente). Nessun hard cap.
     import mnemo.c_lower as _cl
     inferred_arr = _infer_arr_max(ast)
+    # Le stringhe letterali diventano array: anche la piu' lunga conta (il testo
+    # con gli escape e' lungo almeno quanto i byte che rappresenta).
+    longest = [0]
+
+    class _Str(c.NodeVisitor):
+        def visit_Constant(self, n):
+            if n.type == "string":
+                longest[0] = max(longest[0], len(n.value) + 1)
+
+    _Str().visit(ast)
+    inferred_arr = max(inferred_arr, longest[0])
     if arr_max is not None:
         eff_arr = max(arr_max, inferred_arr, 1)
     else:
@@ -2241,7 +2252,7 @@ def compile_c_to_kairos(
         lib_names = _merge_lib_lists(lib_names, ["helpers.kairos"])
     argc_use = parse_mnemo_main_argc(src) if main_argc is None else main_argc
     if argc_use < 0:
-        raise MnemoCompileError("main_argc deve essere >= 0")
+        raise MnemoCompileError("main_argc must be >= 0")
     # Heap di malloc = coda dell'array `__mn_mem` (dimensione fissa: Kairos non
     # ha array che crescono). Dimensione inferita dalle malloc a size/trip-count
     # costante; con malloc presenti almeno DEFAULT_HEAP_CELLS (malloc in loop a

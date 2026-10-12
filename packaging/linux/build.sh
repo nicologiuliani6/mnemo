@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Pacchetto Linux dell'app standalone `mnemo` (PyInstaller, niente Python
-# richiesto). Installa:
-#   /opt/mnemo/mnemo          l'app
-#   /usr/local/bin/mnemo      il link
-# Dipende dal pacchetto `kairos` (VM e app per eseguire i programmi) e da gcc
-# (preprocessore e link degli eseguibili di `mnemo compile`).
+# Linux package of the standalone `mnemo` app (PyInstaller, no Python needed).
+# Installs:
+#   /opt/mnemo/mnemo          the app
+#   /usr/local/bin/mnemo      the link
+# Depends on the `kairos` package (VM and app that run programs) and on gcc
+# (preprocessor, and linker for the executables of `mnemo compile`).
 #
 #   packaging/linux/build.sh deb|rpm|arch
 #
-# Versione: PKG_VERSION dall'ambiente (la CI la prende dal tag vX.Y.Z),
-# altrimenti quella di pyproject.toml.
+# Version: PKG_VERSION from the environment (CI takes it from the vX.Y.Z tag),
+# otherwise the one in pyproject.toml.
 set -euo pipefail
 
 FORMAT="${1:-}"
-case "${FORMAT}" in deb|rpm|arch) ;; *) echo "uso: $0 deb|rpm|arch"; exit 1;; esac
+case "${FORMAT}" in deb|rpm|arch) ;; *) echo "usage: $0 deb|rpm|arch"; exit 1;; esac
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
 PKG_NAME=mnemo
-KAIROS_MIN=1.2.0   # primo pacchetto chiamato `kairos` (prima: kairosapp)
+KAIROS_MIN=1.2.0   # first package named `kairos` (formerly kairosapp)
 MAINTAINER="${MAINTAINER:-Nicolo Giuliani <nicolo.giuliani6@studio.unibo.it>}"
 DESCRIPTION="Mnemo: compiler from a reversible C subset to Kairos"
 PKG_VERSION="${PKG_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "${PROJECT_ROOT}/pyproject.toml")}"
 BUILD_DIR="${ROOT_DIR}/.build"
 PY="${PROJECT_ROOT}/.venv/bin/python"
 
-[[ -x "${PY}" ]] || { echo "Manca ${PROJECT_ROOT}/.venv: esegui make venv"; exit 1; }
+[[ -x "${PY}" ]] || { echo "Missing ${PROJECT_ROOT}/.venv: run make venv"; exit 1; }
 "${PY}" -m pip install -q pyinstaller
 
-# App standalone: il codice di mnemo, le librerie Kairos (mnemo/lib), gli
-# header finti e lo stub C degli eseguibili nativi.
+# Standalone app: the mnemo code, the Kairos libraries (mnemo/lib), the fake
+# headers and the C stub of native executables.
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 (cd "${PROJECT_ROOT}" && "${PY}" -m PyInstaller --onefile --log-level ERROR \
@@ -40,7 +40,7 @@ mkdir -p "${BUILD_DIR}"
     --add-data "${PROJECT_ROOT}/mnemo/mnemo_bundle_main.c:mnemo" \
     packaging/mnemo_main.py)
 APP="${BUILD_DIR}/dist/mnemo"
-[[ -x "${APP}" ]] || { echo "PyInstaller non ha prodotto ${APP}"; exit 1; }
+[[ -x "${APP}" ]] || { echo "PyInstaller did not produce ${APP}"; exit 1; }
 
 case "${FORMAT}" in
 deb)
@@ -109,4 +109,4 @@ PKG
   (cd "${BUILD_DIR}/arch" && PKGDEST="${ROOT_DIR}" makepkg -f --nodeps --cleanbuild)
   ;;
 esac
-echo "Pacchetto in ${ROOT_DIR}"
+echo "Package written to ${ROOT_DIR}"

@@ -24,7 +24,7 @@ source = sys.stdin.read()
 try:
     ast = parser.parse(source, lexer=lexer)
     if ast is None:
-        raise KairosCompileError("PARSER", "compilazione interrotta: AST non generato")
+        raise KairosCompileError("PARSER", "compilation stopped: no AST produced")
     ast = desugar_try(ast)
     run_static_checks(ast)
     c = ByteCode_Compiler()
@@ -99,7 +99,7 @@ def kairos_source_to_bytecode_via_app(source: str, kairos_exe: str) -> str:
     if r.returncode != 0 or begin not in out or end not in out:
         err = (out + (r.stderr or "")).strip()
         raise MnemoCompileError(
-            f"compilazione Kairos → bytecode fallita:\n{err or '(nessun messaggio)'}"
+            f"Kairos → bytecode compilation failed:\n{err or '(no message)'}"
         )
     return out.split(begin, 1)[1].split(end, 1)[0]
 
@@ -108,8 +108,8 @@ def kairos_source_to_bytecode(source: str, kairos_root: Path) -> str:
     py = kairos_venv_python(kairos_root)
     if not py:
         raise MnemoCompileError(
-            "repo Kairos senza venv Python (atteso venv/bin/python). "
-            "Crea il venv nel repo Kairos o imposta KAIROS_ROOT."
+            "Kairos repository without a Python venv (expected venv/bin/python). "
+            "Create the venv in the Kairos repository or set KAIROS_ROOT."
         )
     env = {**os.environ, "PYTHONPATH": str(kairos_root)}
     r = subprocess.run(
@@ -124,7 +124,7 @@ def kairos_source_to_bytecode(source: str, kairos_root: Path) -> str:
     if r.returncode != 0:
         err = (r.stderr or r.stdout or "").strip()
         raise MnemoCompileError(
-            f"compilazione Kairos → bytecode fallita:\n{err or '(nessun messaggio)'}"
+            f"Kairos → bytecode compilation failed:\n{err or '(no message)'}"
         )
     return r.stdout
 
@@ -177,7 +177,7 @@ def _find_cc() -> str:
         if found:
             return found
     raise MnemoCompileError(
-        "nessun compilatore C trovato (imposta CC o installa gcc/clang nel PATH)."
+        "no C compiler found (set CC or install gcc/clang in PATH)."
     )
 
 
@@ -197,11 +197,11 @@ def build_native_standalone(
     vm = libvm_path(kairos_root) if kairos_root else INSTALLED_LIBVM
     if not vm.is_file():
         raise MnemoCompileError(
-            f"manca {vm}: nel repo Kairos esegui `make build-release`, "
-            f"oppure installa il pacchetto kairos."
+            f"missing {vm}: run `make build-release` in the Kairos repository, "
+            f"or install the kairos package."
         )
     if not _BUNDLE_MAIN_C.is_file():
-        raise MnemoCompileError(f"manca stub C: {_BUNDLE_MAIN_C}")
+        raise MnemoCompileError(f"missing C stub: {_BUNDLE_MAIN_C}")
 
     if kairos_root:
         bytecode = kairos_source_to_bytecode(kairos_source, kairos_root)
@@ -237,7 +237,7 @@ def build_native_standalone(
         if r.returncode != 0:
             err = (r.stderr or r.stdout or "").strip()
             raise MnemoCompileError(
-                f"link dell'eseguibile fallito:\n{err or '(nessun output)'}"
+                f"linking the executable failed:\n{err or '(no output)'}"
             )
 
     lib_dest = output_exe.parent / "libvm.so"
