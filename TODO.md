@@ -1,99 +1,103 @@
 # TODO
 
-## Stato
+## Status
 
-Mnemo genera solo Kairos puro (nessuna estensione VM): memoria come array
-Kairos `__mn_mem`, `* / %` nativi, mutex no-op, `par` su finestre di memoria
-disgiunte. Gate: `make test-gcc-compat` 190/190, `make test` 36/36,
-`make test-unit` verde, corpus `tests/c/probe` (vedi il conteggio in `run.sh`).
+Mnemo emits pure Kairos only (no VM extensions): memory as the Kairos array
+`__mn_mem`, native `* / %`, no-op mutexes, `par` over disjoint memory windows.
+Gates: `make test-gcc-compat` 190/190, `make test` 37/37, `make test-unit`
+green, the `tests/c/probe` corpus (see the count in `run.sh`).
 
-## Limiti noti (trovati a corpus, fix non banale)
+## Known limits (found by the corpus, non-trivial fix)
 
-- **`printf("%s", buf)` con `buf` puntatore a buffer su HEAP** (`malloc`):
-  il dispatch `%s` matcha solo stringhe statiche note (ROS/char[]); per un
-  buffer heap servirebbe un loop reversibile che legge `pool[buf+i]` fino al
-  NUL e fa show. Le stringhe statiche/letterali e `char[]` locali funzionano.
+- **`printf("%s", buf)` with `buf` pointing to a HEAP buffer** (`malloc`):
+  the `%s` dispatch only matches known static strings (ROS/char[]); a heap
+  buffer would need a reversible loop that reads `pool[buf+i]` up to the NUL
+  and shows each byte. Static/literal strings and local `char[]` work.
   (repro `tests/c/probe/cases/p6_string_dup.c`).
-- **`realloc` manuale in loop** (`malloc` nuovo + copia + `free` + riassegna il
-  puntatore, dentro un ciclo): semantica re-alloc difficile da invertire (vedi
-  anche `realloc` in "Non fattibile"). Il caso fuori-loop funziona.
+- **Manual `realloc` in a loop** (new `malloc` + copy + `free` + reassigning the
+  pointer, inside a loop): re-allocation semantics are hard to invert (see also
+  `realloc` under "Not feasible"). The case outside a loop works.
   (repro `tests/c/probe/cases/p6_dyn_grow.c`).
-- **`printf` da due rami `par`**: i mutex sono no-op (nessuna memoria
-  condivisa fra rami; un canale rendez-vous non fa da mutex simmetrico), quindi
-  le stampe dei due rami possono mescolarsi carattere per carattere
-  (`tests/c/examples_advanced/PC.c`). Servirebbe una stampa atomica di riga.
-- **Heap oltre l'array**: oltre `__mn_mem` l'heap sta su un nastro di stack
-  (illimitato, accesso O(distanza)); una malloc dentro un ramo `par` non è
-  supportata (errore esplicito: l'heap appartiene al chiamante).
-- **union type-punning int↔byte** (`union{int i;unsigned char b[4];}; u.i=…;
-  u.b[k]`): il word-model (1 cella = 1 word a 4 byte) non aliasa i sotto-byte;
-  scrivere `u.i` non popola `u.b[]`. Union "tagged" (un membro alla volta dello
-  stesso width) funziona; il reinterpret byte-wise no. (repro
+- **`printf` from two `par` branches**: mutexes are no-ops (branches share no
+  memory; a rendezvous channel is not a symmetric mutex). Each Kairos `show`
+  prints its whole line, but a C `printf` becomes several `show`s, so the
+  output of two branches can still interleave
+  (`tests/c/examples_advanced/PC.c`).
+- **Heap beyond the array**: past `__mn_mem` the heap lives on a tape of stacks
+  (unbounded, access O(distance)); a malloc inside a `par` branch is not
+  supported (explicit error: the heap belongs to the caller).
+- **Slow access through array parameters**: summing a 1500-element array passed
+  to a function is correct but takes minutes. To investigate.
+- **union type punning int↔byte** (`union{int i;unsigned char b[4];}; u.i=…;
+  u.b[k]`): the word model (1 cell = one 4-byte word) does not alias the
+  sub-bytes; writing `u.i` does not fill `u.b[]`. "Tagged" unions (one member
+  at a time, same width) work; byte-wise reinterpretation does not. (repro
   `tests/c/probe/cases/p8_union.c`).
 
-## Divergenze per design / comportamento non-definito (non bug)
+## Divergences by design / undefined behaviour (not bugs)
 
-- **`int` è 64-bit**: l'overflow `int` signed (UB in C) non wrappa a 32-bit.
-  L'`unsigned` invece wrappa correttamente mod 2^32.
-- **`sizeof(T*)` = 4** (modello a word: puntatore = 1 cella).
-- **Ordine di valutazione degli argomenti** L-to-R (gcc x86-64 R-to-L) —
-  unspecified in C; rileva solo con argomenti che hanno side-effect.
+- **`int` is 64-bit**: signed `int` overflow (UB in C) does not wrap at 32
+  bits. `unsigned` does wrap correctly modulo 2^32.
+- **`sizeof(T*)` = 4** (word model: a pointer is one cell).
+- **Argument evaluation order** left to right (gcc x86-64: right to left);
+  unspecified in C, it only shows with arguments that have side effects.
 
-## Non fattibile per modello reversibile / VM Kairos
+## Not feasible for a reversible model / the Kairos VM
 
-Features escluse strutturalmente — non saranno implementate finché Mnemo target una VM reversibile a interi.
+Structurally excluded features: they will not be implemented while Mnemo
+targets a reversible integer VM.
 
-### Rompono reversibilità
+### They break reversibility
 
-- **`goto`** — controllo di flusso non-strutturato, no inverse walk.
-- **`setjmp` / `longjmp`** — stack unwinding non reversibile.
-- **`exit(n)` fuori da main** — terminazione non reversibile dalla profondità di stack arbitraria. (`exit(n)` DENTRO main è supportato via AST rewrite a `return n`.)
-- **`abort()` fuori da main** — terminazione asincrona non reversibile. (Dentro main supportato come `return 134`.)
-- **`signal` / signal handlers** — interruzioni asincrone.
-- **Inline asm** (`__asm__`, `asm volatile`) — no IR.
+- **`goto`**: unstructured control flow, no inverse walk.
+- **`setjmp` / `longjmp`**: stack unwinding is not reversible.
+- **`exit(n)` outside main**: termination from an arbitrary stack depth is not reversible. (`exit(n)` INSIDE main is supported by rewriting it to `return n`.)
+- **`abort()` outside main**: asynchronous termination is not reversible. (Inside main it is supported as `return 134`.)
+- **`signal` / signal handlers**: asynchronous interrupts.
+- **Inline asm** (`__asm__`, `asm volatile`): no IR.
 
-### Niente floating-point
+### No floating point
 
-VM Kairos opera solo su interi. Esclusi:
+The Kairos VM only works on integers. Excluded:
 
 - **`float`, `double`, `long double`**.
 - **`_Complex`** (C99 complex).
 - **`<math.h>`** (sin, cos, sqrt, …).
 
-### Niente I/O reale / syscalls
+### No real I/O / syscalls
 
-VM non ha syscalls oltre `printf`/`putchar`/`puts` (output testuale gestita dal frontend Python).
+The VM has no syscalls besides `printf`/`putchar`/`puts` (text output).
 
-- **`scanf`, `getchar`, `fgets`** — niente input.
-- **`fopen`, `fprintf`, `fclose`, `fread`/`fwrite`** — niente filesystem. (`fflush`/`feof`/`ferror`/`clearerr`/`setvbuf`/`fileno` ritornano 0 via AST rewrite per compatibilità sintattica.)
-- **`<time.h>`** — niente clock/timer reali. (`time()`/`clock()` ritornano 0 via AST rewrite per compatibilità sintattica.)
-- **`<unistd.h>`, `<sys/*>`** — niente syscalls POSIX.
-- **`<stdlib.h>` `system`** — exec di processo esterno. Solo `malloc`/`calloc`/`free` via ptr_pool. (atoi e getenv supportati: atoi compile-time, getenv ritorna NULL.)
-- **`realloc`** — semantica re-alloc difficile da invertire.
-- **`errno` set/mutate** — global mutabile non-modellata. Solo *lettura* di errno supportata: `<errno.h>` fake_include espone `errno` come int 0 (no syscall ⇒ nessun errore mai). Costanti E* definite.
-- **`argv` POSIX reali** — stringhe da OS non disponibili (stub sintattico).
+- **`scanf`, `getchar`, `fgets`**: no input.
+- **`fopen`, `fprintf`, `fclose`, `fread`/`fwrite`**: no filesystem. (`fflush`/`feof`/`ferror`/`clearerr`/`setvbuf`/`fileno` return 0 through an AST rewrite, for syntactic compatibility.)
+- **`<time.h>`**: no real clock/timer. (`time()`/`clock()` return 0 through an AST rewrite.)
+- **`<unistd.h>`, `<sys/*>`**: no POSIX syscalls.
+- **`<stdlib.h>` `system`**: running external processes. Only `malloc`/`calloc`/`free` (ptr pool). (atoi and getenv are supported: atoi at compile time, getenv returns NULL.)
+- **`realloc`**: re-allocation semantics are hard to invert.
+- **Setting/mutating `errno`**: unmodelled mutable global. Only *reading* errno is supported: the fake `<errno.h>` exposes `errno` as the int 0 (no syscalls, so never an error). E* constants are defined.
+- **Real POSIX `argv`**: strings from the OS are not available (syntactic stub).
 
-### Concorrenza non-π
+### Non-π concurrency
 
-VM usa solo channel π-calcolo come primitiva di sync. Esclusi:
+The VM only has π-calculus channels as a synchronization primitive. Excluded:
 
-- **`_Atomic`** — semantica memory-order LL/SC non modellata.
-- **`pthread_*`** generale — solo `mnemo_pthread_parallel2`/`_with`/`_with1` (→ `par`) e `pthread_mutex_*` (no-op).
+- **`_Atomic`**: LL/SC memory-order semantics are not modelled.
+- **`pthread_*`** in general: only `mnemo_pthread_parallel2`/`_with`/`_with1` (→ `par`) and `pthread_mutex_*` (no-op).
 
-### Multi-TU / linker
+### Multiple translation units / linker
 
-Mnemo è single-file compiler. Esclusi:
+Mnemo is a single-file compiler. Excluded:
 
-- **Translation unit multipli** (`gcc a.c b.c -o`).
-- **`extern` cross-TU** (linker globale assente).
-- **`#include` di header utente con definizioni** — `gcc -E -DMNEMO` espande tutto in un blob, ma typedef/struct cross-file possono confondere il layout.
+- **Multiple translation units** (`gcc a.c b.c -o`).
+- **Cross-TU `extern`** (no global linker).
+- **`#include` of user headers with definitions**: `gcc -E -DMNEMO` expands everything into one blob, but cross-file typedefs/structs can confuse the layout.
 
 ### GCC-specific
 
-- **`__attribute__((…))`** — packed, aligned, used, weak, etc.
-- **`__builtin_*`** — `__builtin_expect`, `__builtin_unreachable`, etc.
-- **Nested function definitions** (estensione GCC).
+- **`__attribute__((…))`**: packed, aligned, used, weak, etc.
+- **`__builtin_*`**: `__builtin_expect`, `__builtin_unreachable`, etc.
+- **Nested function definitions** (GCC extension).
 
 ### VLAs
 
-- **`int a[n]` con `n` runtime** — layout cells deve essere compile-time per partition PAR e ptr-pool.
+- **`int a[n]` with a runtime `n`**: the cell layout must be known at compile time for the PAR partition and the pointer pool.

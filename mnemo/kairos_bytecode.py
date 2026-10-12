@@ -33,7 +33,7 @@ except KairosCompileError as exc:
     print(exc, file=sys.stderr)
     sys.exit(1)
 except Exception as exc:
-    print(f"[COMPILER] errore interno: {exc}", file=sys.stderr)
+    print(f"[COMPILER] internal error: {exc}", file=sys.stderr)
     sys.exit(1)
 
 lines = []

@@ -46,7 +46,7 @@ def _extract_procs(path: str, names: set[str]) -> str:
             i += 1
     missing = names - found
     if missing:
-        raise AssertionError(f"{path}: procedure non trovate: {sorted(missing)}")
+        raise AssertionError(f"{path}: procedures not found: {sorted(missing)}")
     return "\n\n".join(out)
 
 

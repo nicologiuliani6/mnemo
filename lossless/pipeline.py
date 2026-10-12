@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """File -> C -> Kairos VM -> file.
 
-Legge un file qualunque, genera un sorgente C nel subset Mnemo che ne contiene
-i byte, lo esegue sulla VM reversibile, e ricostruisce il file dai byte
-decompressi che il programma stampa. Il confronto finale e' byte a byte.
+Reads any file, generates a C source in the Mnemo subset holding its bytes,
+runs it on the reversible VM, and rebuilds the file from the decompressed bytes
+the program prints. The final comparison is byte by byte.
 
     python3 lossless/pipeline.py img.pgm
 
-La compressione e' RLE: coppie (lunghezza corsa, valore). Compressione e
-decompressione stanno nello stesso programma; la decompressione legge solo
-l'array compresso.
+The compression is RLE: (run length, value) pairs. Compression and
+decompression are in the same program; decompression reads only the
+compressed array.
 """
 
 import argparse
@@ -93,32 +93,32 @@ def leggi_blocco(righe, etichetta):
     """Consuma '<etichetta> <k>' seguito da k interi. Ritorna (bytes, resto)."""
     testa = righe[0].split()
     if len(testa) != 2 or testa[0] != etichetta:
-        raise SystemExit(f"atteso '{etichetta} <n>', trovato: {righe[0]!r}")
+        raise SystemExit(f"expected '{etichetta} <n>', found: {righe[0]!r}")
     k = int(testa[1])
     valori = [int(r) for r in righe[1 : 1 + k]]
     if len(valori) != k:
-        raise SystemExit(f"{etichetta}: attesi {k} valori, letti {len(valori)}")
+        raise SystemExit(f"{etichetta}: expected {k} values, read {len(valori)}")
     return bytes(valori), righe[1 + k :]
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("file", help="file da comprimere (es. un'immagine)")
-    ap.add_argument("-o", "--out", help="dove riscrivere il file ricostruito")
-    ap.add_argument("--comp", help="dove scrivere il flusso compresso")
-    ap.add_argument("-c", "--csrc", help="dove tenere il .c generato")
+    ap.add_argument("file", help="file to compress (e.g. an image)")
+    ap.add_argument("-o", "--out", help="where to write the rebuilt file")
+    ap.add_argument("--comp", help="where to write the compressed stream")
+    ap.add_argument("-c", "--csrc", help="where to keep the generated .c")
     ap.add_argument("--timeout", type=int, default=1800)
     args = ap.parse_args()
 
     src_path = pathlib.Path(args.file)
     dati = src_path.read_bytes()
     if not dati:
-        raise SystemExit("file vuoto")
+        raise SystemExit("empty file")
 
     csrc = pathlib.Path(args.csrc or (ROOT / "generato_rle.c"))
     csrc.write_text(genera(dati))
-    print(f"ingresso   {src_path}  {len(dati)} byte")
-    print(f"sorgente   {csrc}")
+    print(f"input      {src_path}  {len(dati)} bytes")
+    print(f"source     {csrc}")
 
     t0 = time.time()
     proc = subprocess.run(
@@ -130,7 +130,7 @@ def main():
     dt = time.time() - t0
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
-        raise SystemExit(f"mnemo run fallito ({proc.returncode})")
+        raise SystemExit(f"mnemo run failed ({proc.returncode})")
 
     righe = [r for r in proc.stdout.splitlines() if r.strip()]
     compresso, righe = leggi_blocco(righe, "COMP")
@@ -142,10 +142,10 @@ def main():
         pathlib.Path(args.comp).write_bytes(compresso)
 
     ok = ricostruito == dati
-    print(f"tempo VM   {dt:.1f} s")
-    print(f"compresso  {len(compresso)} byte  ({len(compresso) / len(dati):.2%} dell'originale)")
-    print(f"ricostr.   {out_path}  {len(ricostruito)} byte")
-    print("round trip " + ("identico" if ok else "DIVERSO"))
+    print(f"VM time    {dt:.1f} s")
+    print(f"compressed {len(compresso)} bytes  ({len(compresso) / len(dati):.2%} of the original)")
+    print(f"rebuilt    {out_path}  {len(ricostruito)} bytes")
+    print("round trip " + ("identical" if ok else "DIFFERENT"))
     return 0 if ok else 1
 
 
