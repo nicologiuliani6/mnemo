@@ -37,7 +37,13 @@ mnemo example.c              # 30
 
 ## Installation
 
-**Standalone app.** Every [Mnemo release](https://github.com/nicologiuliani6/mnemo/releases) ships Linux packages of the `mnemo` app (no Python needed). It needs the `kairos` package from the [Kairos releases](https://github.com/nicologiuliani6/kairos/releases), which provides the VM, and `gcc`:
+**Packages (recommended).** Every [Mnemo release](https://github.com/nicologiuliani6/mnemo/releases) ships Linux packages of the standalone `mnemo` app (no Python needed). It needs the `kairos` package from the [Kairos releases](https://github.com/nicologiuliani6/kairos/releases), which provides the VM, and `gcc`. One line installs both, Kairos first if it is missing (asks for the sudo password):
+
+```bash
+curl -fsSL https://github.com/nicologiuliani6/mnemo/releases/latest/download/install.sh | bash
+```
+
+Or by hand:
 
 | Distribution | Install |
 |---|---|
@@ -84,8 +90,9 @@ mnemo compile prog.c [-o exe] [--keep-kairos]   # native executable: bytecode + 
 | `--arr-max N` | element limit per array (inferred from the source by default, at least 1024) |
 | `--opt-uncall-user-calls` | after each eligible call, frees its history (see below) |
 | `--check-invertibility` | runs `main` and then inverts it: the VM reports every non-invertible step |
-| `--auto` (`run` only) | decides by itself whether to enable `--opt-uncall-user-calls` |
-| `--vm-dump`, `--vm-stats` (`run` only) | print the final VM dump / how many cells are still alive |
+| `--auto` (when running) | decides by itself whether to enable `--opt-uncall-user-calls` |
+| `--vm-dump`, `--vm-stats` (when running) | print the final VM dump / how many cells are still alive |
+| `--kairos PATH` (when running) | Kairos executable to use |
 | `-v` | commands and exit codes on stderr |
 
 ---
