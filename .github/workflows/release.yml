@@ -1,5 +1,6 @@
-# Builds the Mnemo wheel and source archive and attaches them to a GitHub
-# release. Runs when a tag vX.Y.Z is pushed (or by hand, giving the tag).
+# Builds the Mnemo wheel, the source archive and the Linux packages of the
+# standalone app, and attaches them to a GitHub release. Runs when a tag vX.Y.Z
+# is pushed (or by hand, giving the tag).
 name: release
 
 on:
@@ -18,7 +19,7 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  publish:
+  wheel:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -34,10 +35,80 @@ jobs:
           # The wheel must carry the Kairos libraries and the fake headers.
           python -m zipfile -l dist/*.whl | grep -q 'mnemo/lib/putd.kairos'
           python -m zipfile -l dist/*.whl | grep -q 'mnemo/fake_include/stdio.h'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*
+
+  deb:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y python3 python3-venv dpkg-dev
+      - name: Build .deb
+        run: |
+          make venv
+          PKG_VERSION="${TAG#v}" packaging/linux/build.sh deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: packaging/linux/*.deb
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:41
+    steps:
+      - name: System packages
+        run: dnf install -y gcc make python3 rpm-build git findutils binutils
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build .rpm
+        run: |
+          make venv
+          PKG_VERSION="${TAG#v}" packaging/linux/build.sh rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: packaging/linux/*.rpm
+
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: System packages
+        run: |
+          pacman -Syu --noconfirm base-devel python git
+          useradd -m builder
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build .pkg.tar.zst
+        # makepkg refuses to run as root.
+        run: |
+          chown -R builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE' && make venv && PKG_VERSION='${TAG#v}' packaging/linux/build.sh arch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: packaging/linux/*.pkg.tar.zst
+
+  publish:
+    needs: [wheel, deb, rpm, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls -l dist
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "Mnemo $TAG" --generate-notes
           gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber

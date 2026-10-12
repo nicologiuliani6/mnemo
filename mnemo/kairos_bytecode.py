@@ -74,6 +74,36 @@ def libvm_path(kairos_root: Path) -> Path:
     return kairos_root / "build" / "libvm.so"
 
 
+# Kairos installato dai pacchetti (deb/rpm/arch): l'app standalone `kairos` e la
+# VM in /usr/local/lib/kairos. Si usa quando il repo Kairos non c'e'.
+INSTALLED_LIBVM = Path("/usr/local/lib/kairos/libvm.so")
+
+
+def installed_kairos_exe() -> str | None:
+    """Eseguibile `kairos` installato: env MNEMO_KAIROS, poi il PATH."""
+    exe = os.environ.get("MNEMO_KAIROS") or "kairos"
+    if os.path.isabs(exe):
+        return exe if os.access(exe, os.X_OK) else None
+    return shutil.which(exe)
+
+
+def kairos_source_to_bytecode_via_app(source: str, kairos_exe: str) -> str:
+    """Bytecode con l'app standalone: `kairos file --dap` lo stampa fra due marcatori."""
+    with tempfile.TemporaryDirectory(prefix="mnemo-kairos-") as td:
+        src = Path(td) / "prog.kairos"
+        src.write_text(source, encoding="utf-8")
+        r = subprocess.run([kairos_exe, str(src), "--dap"], capture_output=True,
+                           text=True, cwd=td, check=False)
+    out = r.stdout or ""
+    begin, end = "<<<KAIROS_BYTECODE_BEGIN>>>\n", "<<<KAIROS_BYTECODE_END>>>"
+    if r.returncode != 0 or begin not in out or end not in out:
+        err = (out + (r.stderr or "")).strip()
+        raise MnemoCompileError(
+            f"compilazione Kairos → bytecode fallita:\n{err or '(nessun messaggio)'}"
+        )
+    return out.split(begin, 1)[1].split(end, 1)[0]
+
+
 def kairos_source_to_bytecode(source: str, kairos_root: Path) -> str:
     py = kairos_venv_python(kairos_root)
     if not py:
@@ -155,23 +185,28 @@ def build_native_standalone(
     *,
     kairos_source: str,
     output_exe: Path,
-    kairos_root: Path,
+    kairos_root: Path | None,
+    kairos_exe: str | None = None,
     verbose: bool = False,
 ) -> None:
     """
     Eseguibile nativo che incorpora il bytecode e chiama vm_run_from_string_quiet.
     Copia ``libvm.so`` accanto all'eseguibile; serve ``-Wl,-rpath,$ORIGIN``.
+    Usa il repo Kairos (`kairos_root`) oppure Kairos installato (`kairos_exe`).
     """
-    vm = libvm_path(kairos_root)
+    vm = libvm_path(kairos_root) if kairos_root else INSTALLED_LIBVM
     if not vm.is_file():
         raise MnemoCompileError(
-            f"manca {vm}: nel repo Kairos esegui `make build-release` "
-            f"(serve anche vm_run_from_string_quiet in questa versione di libvm)."
+            f"manca {vm}: nel repo Kairos esegui `make build-release`, "
+            f"oppure installa il pacchetto kairos."
         )
     if not _BUNDLE_MAIN_C.is_file():
         raise MnemoCompileError(f"manca stub C: {_BUNDLE_MAIN_C}")
 
-    bytecode = kairos_source_to_bytecode(kairos_source, kairos_root)
+    if kairos_root:
+        bytecode = kairos_source_to_bytecode(kairos_source, kairos_root)
+    else:
+        bytecode = kairos_source_to_bytecode_via_app(kairos_source, kairos_exe or "kairos")
     output_exe = output_exe.resolve()
     output_exe.parent.mkdir(parents=True, exist_ok=True)
 
@@ -180,7 +215,7 @@ def build_native_standalone(
         td = Path(td_raw)
         embedded_path = td / "mnemo_embedded_bytecode.c"
         embedded_path.write_text(bytecode_as_c_translation_unit(bytecode), encoding="utf-8")
-        lib_dir = str((kairos_root / "build").resolve())
+        lib_dir = str(vm.parent.resolve())
         # $ORIGIN è interpretato dal dynamic linker, non dalla shell.
         cmd = [
             cc,

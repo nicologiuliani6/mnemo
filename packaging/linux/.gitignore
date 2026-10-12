@@ -1,0 +1,4 @@
+.build/
+mnemo_*.deb
+mnemo-*.rpm
+mnemo-*.pkg.tar.zst

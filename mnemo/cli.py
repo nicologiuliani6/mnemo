@@ -24,7 +24,7 @@ from mnemo.errors import MnemoCompileError
 from mnemo.ir_dump import dump_program
 from mnemo.emit_kairos import emit_program
 from mnemo.compile import INVERTIBILITY_MARK, compile_c_to_kairos, write_kairos_next_to_c
-from mnemo.kairos_bytecode import build_native_standalone, resolve_kairos_root
+from mnemo.kairos_bytecode import build_native_standalone, installed_kairos_exe, resolve_kairos_root
 
 
 def _example_program() -> Program:
@@ -187,9 +187,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_r.add_argument("input", help="file sorgente .c")
     p_r.add_argument(
-        "--kairosapp",
+        "--kairos",
         default=None,
-        help="path o nome eseguibile (default: env MNEMO_KAIROSAPP o 'kairosapp')",
+        help="eseguibile Kairos da usare (default: repo Kairos, poi env MNEMO_KAIROS, poi 'kairos')",
     )
     p_r.add_argument(
         "--main-argc",
@@ -272,9 +272,11 @@ def _cmd_compile(args: argparse.Namespace) -> None:
         print(f"mnemo: {e}", file=sys.stderr)
         sys.exit(1)
     kroot = resolve_kairos_root()
-    if not kroot:
+    kexe = None if kroot else installed_kairos_exe()
+    if not kroot and not kexe:
         print(
-            "mnemo: repo Kairos non trovato. Imposta KAIROS_ROOT o clona kairos accanto a mnemo.",
+            "mnemo: Kairos non trovato. Installa il pacchetto kairos, imposta KAIROS_ROOT "
+            "o clona kairos accanto a mnemo.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -288,6 +290,7 @@ def _cmd_compile(args: argparse.Namespace) -> None:
             kairos_source=out,
             output_exe=exe_path,
             kairos_root=kroot,
+            kairos_exe=kexe,
             verbose=args.verbose,
         )
     except MnemoCompileError as e:
@@ -376,7 +379,7 @@ def _parse_main_exit_from_kairos_stdout(stdout: str) -> int | None:
 def _resolve_kairos_python_runner(out_kairos_abs: str) -> tuple[list[str], str | None]:
     """
     Preferisce il runner del repo Kairos (`venv/bin/python -m src.kairos`), che stampa
-    il dump della VM — come `make run` nel Makefile. Altrimenti `kairosapp` (spesso muto).
+    il dump della VM — come `make run` nel Makefile. Altrimenti l'app installata `kairos`.
     """
     roots: list[Path] = []
     for key in ("KAIROS_ROOT", "MNEMO_KAIROS_ROOT"):
@@ -424,15 +427,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
     cmd: list[str]
     cwd: str | None = None
 
-    if args.kairosapp is not None:
-        exe = args.kairosapp
-        if not os.path.isabs(exe):
-            found = shutil.which(exe)
-            if found:
-                exe = found
-        cmd = [exe, out_abs]
-    elif os.environ.get("MNEMO_KAIROSAPP"):
-        exe = os.environ["MNEMO_KAIROSAPP"]
+    if args.kairos is not None:
+        exe = args.kairos
         if not os.path.isabs(exe):
             found = shutil.which(exe)
             if found:
@@ -443,11 +439,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         if py_cmd:
             cmd = py_cmd
         else:
-            exe = "kairosapp"
-            found = shutil.which(exe)
-            if found:
-                exe = found
-            cmd = [exe, out_abs]
+            cmd = [installed_kairos_exe() or "kairos", out_abs]
 
     run_env = os.environ.copy()
     if getattr(args, "vm_stats", False):
@@ -485,10 +477,11 @@ def _cmd_run(args: argparse.Namespace) -> None:
         )
     except FileNotFoundError:
         print(
-            "mnemo: runner Kairos non trovato. Opzioni:\n"
-            "  - clone kairos accanto a mnemo (../kairos con venv)\n"
+            "mnemo: Kairos non trovato. Opzioni:\n"
+            "  - installa il pacchetto kairos (release di Kairos)\n"
+            "  - oppure: clona kairos accanto a mnemo (../kairos con venv)\n"
             "  - oppure: export KAIROS_ROOT=/percorso/repo/kairos\n"
-            "  - oppure: mnemo run --kairosapp /path/to/kairosapp file.c",
+            "  - oppure: mnemo run --kairos /percorso/di/kairos file.c",
             file=sys.stderr,
         )
         sys.exit(127)

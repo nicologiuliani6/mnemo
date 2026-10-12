@@ -37,7 +37,17 @@ mnemo run example.c          # 30
 
 ## Installation
 
-Mnemo does not bundle Kairos. Either install the KairosApp package from the [Kairos releases](https://github.com/nicologiuliani6/kairos/releases) (`.deb`, `.rpm`, Arch), or clone the Kairos repository next to Mnemo (default `../kairos`, or `KAIROS_ROOT=/path`) and build it:
+**Standalone app.** Every [Mnemo release](https://github.com/nicologiuliani6/mnemo/releases) ships Linux packages of the `mnemo` app (no Python needed). It needs the `kairos` package from the [Kairos releases](https://github.com/nicologiuliani6/kairos/releases), which provides the VM, and `gcc`:
+
+| Distribution | Install |
+|---|---|
+| Debian / Ubuntu | `sudo apt install ./kairos_<version>_amd64.deb ./mnemo_<version>_amd64.deb` |
+| Fedora / RHEL | `sudo dnf install ./kairos-<version>-1.<dist>.x86_64.rpm ./mnemo-<version>-1.<dist>.x86_64.rpm` |
+| Arch Linux | `sudo pacman -U ./kairos-<version>-1-x86_64.pkg.tar.zst ./mnemo-<version>-1-x86_64.pkg.tar.zst` |
+
+The package installs `/usr/local/bin/mnemo` (link to `/opt/mnemo/mnemo`); `mnemo run` uses the installed `kairos` and `mnemo compile` links against `/usr/local/lib/kairos/libvm.so`.
+
+**From source.** Clone the Kairos repository next to Mnemo (default `../kairos`, or `KAIROS_ROOT=/path`) and build it:
 
 ```bash
 git clone https://github.com/nicologiuliani6/kairos.git
@@ -46,14 +56,14 @@ git clone https://github.com/nicologiuliani6/mnemo.git
 cd mnemo && make venv          # .venv + pip install -e .
 ```
 
-Each [Mnemo release](https://github.com/nicologiuliani6/mnemo/releases) also ships a wheel: `pip install mnemo-<version>-py3-none-any.whl`.
+Each release also ships a wheel: `pip install mnemo-<version>-py3-none-any.whl`. `packaging/linux/build.sh deb|rpm|arch` builds the Linux packages locally.
 
 Requirements: Python ≥ 3.10, `gcc` (also used as the preprocessor), `make`.
 
 | Variable | Default | Effect |
 |---|---|---|
 | `KAIROS_ROOT` / `MNEMO_KAIROS_ROOT` | `../kairos` | Kairos repository used to run programs |
-| `MNEMO_KAIROSAPP` | `kairosapp` | alternative runner for `mnemo run` |
+| `MNEMO_KAIROS` | `kairos` | Kairos app used when there is no Kairos repository (`mnemo run --kairos PATH` overrides it) |
 
 ---
 
