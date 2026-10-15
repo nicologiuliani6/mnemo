@@ -1,5 +1,7 @@
 # Mnemo
 
+**Try it now:** [nicologiuliani.site/docs/mnemo](https://nicologiuliani.site/docs/mnemo/#playground) — compile and run C with Mnemo in your browser, nothing to install.
+
 Mnemo compiles a **subset of C** to [Kairos](https://github.com/nicologiuliani6/kairos), a reversible concurrent language. The C program becomes a Kairos program that can run forwards and **backwards**: every destructive assignment saves the lost value on a history stack, so the whole run stays invertible.
 
 Mnemo emits pure Kairos only (no VM extensions) and aims to produce the same output and the same exit code as `gcc` on programs in the subset.
